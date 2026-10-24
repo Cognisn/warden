@@ -69,7 +69,7 @@ These are enforced in code and tests, not left to configuration or documentation
 - No AI attribution anywhere: no `Co-Authored-By` trailers, no "generated with" footers, no session links in commits, code or documents.
 - Branching: `main` is production. Feature and fix branches (`feat/<slug>`, `fix/<slug>`, `docs/<slug>`, `refactor/<slug>`) are cut from `main`. Release branches are `release/vX.Y.Z`, and pre-release suffixes (`0.1.0a1`, `0.1.0b1`, `0.1.0rc1`) appear only on release branches.
 - Initial build (until `0.1.0` is released): `release/v0.1.0` is the integration line. Scope branches are named `feat/0.1.0-<slug>`, cut from `release/v0.1.0` and merged back into it by the integration session, which alone re-chains migrations and stamps pre-release versions. `release/v0.1.0` reaches `main` as a squash merge at `0.1.0`.
-- Conventional Commits: `type(scope): lower-case imperative summary`. Expected scopes: `audit`, `identity`, `sso`, `syslog`, `keys`, `db`, `config`, `cli`, `docs`, `ci`.
+- Conventional Commits: `type(scope): lower-case imperative summary`. Expected scopes: `audit`, `identity`, `sso`, `syslog`, `keys`, `db`, `config`, `cli`, `docs`, `ci`. A release stamp commit takes no scope: `chore: stamp 0.1.0a2`.
 - Keep a Changelog: update `CHANGELOG.md` under `[Unreleased]` in the same commit as the change.
 - Versioning follows Semantic Versioning. Before 1.0 a minor version may break the public API, but every break is named in the changelog with an upgrade note.
 - The public API is whatever is importable from `warden` without a leading underscore, plus the HTTP contract and the database schema. Anything else is internal.
