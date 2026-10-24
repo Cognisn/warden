@@ -1,10 +1,13 @@
-"""The minimal audit recorder: one insert, inside the caller's transaction."""
+"""The minimal audit recorder: one insert and its notification, inside one transaction."""
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any
 
+import psycopg
 import pytest
+from psycopg import sql
 
 from warden.audit import (
     ActionRegistry,
@@ -14,7 +17,7 @@ from warden.audit import (
     record_audit,
     set_recorder,
 )
-from warden.db import Database
+from warden.db import AUDIT_CHANNEL, Database
 
 pytestmark = pytest.mark.db
 
@@ -94,6 +97,93 @@ async def test_unregistered_action_is_refused(pool: Any, registry: ActionRegistr
     with pytest.raises(KeyError):
         await recorder.record(AuditEvent(action="product.unknown", outcome="success"))
     assert await _rows(pool) == []
+
+
+@pytest.fixture
+async def listener(migrated_dsn: str) -> AsyncIterator[psycopg.AsyncConnection[Any]]:
+    conn = await psycopg.AsyncConnection.connect(migrated_dsn, autocommit=True)
+    await conn.execute(sql.SQL("LISTEN {}").format(sql.Identifier(AUDIT_CHANNEL)))
+    try:
+        yield conn
+    finally:
+        await conn.close()
+
+
+async def _notifications(
+    listener: psycopg.AsyncConnection[Any], timeout: float = 0.5
+) -> list[tuple[str, str]]:
+    return [(n.channel, n.payload) async for n in listener.notifies(timeout=timeout)]
+
+
+async def test_a_committed_record_notifies_its_row_id(
+    pool: Any, registry: ActionRegistry, listener: psycopg.AsyncConnection[Any]
+) -> None:
+    recorder = AuditRecorder(Database(pool), registry)
+    row_id = await recorder.record(_event())
+    assert await _notifications(listener) == [(AUDIT_CHANNEL, str(row_id))]
+
+
+async def test_a_rolled_back_record_sends_no_notification(
+    pool: Any, registry: ActionRegistry, listener: psycopg.AsyncConnection[Any]
+) -> None:
+    recorder = AuditRecorder(Database(pool), registry)
+    async with pool.connection() as conn:
+        with pytest.raises(RuntimeError):
+            async with conn.transaction():
+                await recorder.record(_event(), conn=conn)
+                raise RuntimeError("product write failed")
+    committed = await recorder.record(_event())
+    # Only the committed row signals; the rolled-back one never does.
+    assert await _notifications(listener) == [(AUDIT_CHANNEL, str(committed))]
+
+
+async def test_the_notification_waits_for_the_callers_commit(
+    pool: Any, registry: ActionRegistry, listener: psycopg.AsyncConnection[Any]
+) -> None:
+    recorder = AuditRecorder(Database(pool), registry)
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            row_id = await recorder.record(_event(), conn=conn)
+            assert await _notifications(listener, timeout=0.3) == []
+        assert await _notifications(listener) == [(AUDIT_CHANNEL, str(row_id))]
+
+
+class CommitCheckingSink:
+    """Records, at offer time, whether the event's row is visible to another session."""
+
+    def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+        self.visible_rows: list[int] = []
+
+    def offer(self, event: AuditEvent) -> None:
+        with psycopg.connect(self._dsn) as conn:
+            row = conn.execute("SELECT count(*) FROM warden.audit_events").fetchone()
+        self.visible_rows.append(row[0] if row else 0)
+
+
+async def test_sinks_are_offered_only_after_commit(
+    pool: Any, registry: ActionRegistry, migrated_dsn: str
+) -> None:
+    sink = CommitCheckingSink(migrated_dsn)
+    recorder = AuditRecorder(Database(pool), registry, sinks=[sink])
+    await recorder.record(_event())
+    assert sink.visible_rows == [1]
+
+
+async def test_sinks_are_not_offered_for_a_callers_transaction(
+    pool: Any, registry: ActionRegistry
+) -> None:
+    sink = RecordingSink()
+    recorder = AuditRecorder(Database(pool), registry, sinks=[sink])
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            await recorder.record(_event(), conn=conn)
+        with pytest.raises(RuntimeError):
+            async with conn.transaction():
+                await recorder.record(_event(), conn=conn)
+                raise RuntimeError("product write failed")
+    assert len(await _rows(pool)) == 1
+    assert sink.offered == []
 
 
 async def test_sinks_are_offered_each_recorded_event(pool: Any, registry: ActionRegistry) -> None:

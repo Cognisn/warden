@@ -3,6 +3,11 @@
 A tripwire test fails if any other module inserts into the audit table.
 Foundation ships a plain insert; the audit core arc adds hash chaining
 behind the same ``record`` and ``record_audit`` signatures.
+
+Each insert issues ``pg_notify`` on ``AUDIT_CHANNEL`` in the same
+transaction. Postgres delivers a notification only when its transaction
+commits, so the syslog forwarder, which listens on the channel and reads
+committed rows, never sees an event whose transaction rolled back.
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ from psycopg.types.json import Jsonb
 from warden.audit.events import AuditEvent
 from warden.audit.registry import ActionRegistry
 from warden.audit.sink import AuditSink
-from warden.db import AUDIT_EVENTS, Database, table
+from warden.db import AUDIT_CHANNEL, AUDIT_EVENTS, Database, table
 
 __all__ = ["AuditRecorder", "get_recorder", "record_audit", "set_recorder"]
 
@@ -27,6 +32,8 @@ _INSERT = sql.SQL(
     "INSERT INTO {} (occurred_at, actor, action, resource_type, resource_id,"
     " outcome, source_ip, details) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id"
 ).format(table(AUDIT_EVENTS))
+
+_NOTIFY = sql.SQL("SELECT pg_notify(%s, %s)")
 
 
 class AuditRecorder:
@@ -48,6 +55,11 @@ class AuditRecorder:
 
         With ``conn``, the row is written inside the caller's transaction and
         commits or rolls back with it. The action must be registered.
+
+        Sinks are offered the event only when warden owns the transaction
+        (no ``conn``), and only after it commits. warden cannot see when a
+        caller's transaction commits, so a caller-owned record is never
+        offered; the syslog forwarder picks it up from the table instead.
         """
         self._registry.get(event.action)
         async with self._db.transaction(conn) as tx:
@@ -65,10 +77,12 @@ class AuditRecorder:
                 ),
             )
             row = await cur.fetchone()
-        if row is None:
-            raise RuntimeError("audit insert returned no row")
-        # Foundation offers at once, even inside a caller's transaction that may
-        # still roll back; the audit core arc decides whether to defer to commit.
+            if row is None:
+                raise RuntimeError("audit insert returned no row")
+            row_id = int(row[0])
+            await tx.execute(_NOTIFY, (AUDIT_CHANNEL, str(row_id)))
+        if conn is not None:
+            return row_id
         for sink in self._sinks:
             try:
                 sink.offer(event)
@@ -76,7 +90,7 @@ class AuditRecorder:
                 logger.exception(
                     "audit sink %s raised on offer for action %s", type(sink).__name__, event.action
                 )
-        return int(row[0])
+        return row_id
 
 
 _recorder: AuditRecorder | None = None
