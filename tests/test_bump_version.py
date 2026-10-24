@@ -25,7 +25,7 @@ bump = _load()
 @pytest.fixture
 def init_file(tmp_path: Path) -> Path:
     path = tmp_path / "__init__.py"
-    path.write_text('"""Doc."""\n\n__version__ = "0.1.0.dev0"\n\n__all__ = ["__version__"]\n')
+    path.write_bytes(b'"""Doc."""\n\n__version__ = "0.1.0.dev0"\n\n__all__ = ["__version__"]\n')
     return path
 
 
@@ -33,6 +33,14 @@ def test_stamps_prerelease_on_release_branch(init_file: Path) -> None:
     bump.stamp("0.1.0a1", branch="release/v0.1.0", init_path=init_file)
     assert '__version__ = "0.1.0a1"\n' in init_file.read_text()
     assert init_file.read_text().count("__version__ =") == 1
+
+
+def test_stamp_writes_lf_line_endings(init_file: Path) -> None:
+    # The repository is eol=lf; a text-mode write on Windows would emit CRLF.
+    bump.stamp("0.1.0a1", branch="release/v0.1.0", init_path=init_file)
+    assert init_file.read_bytes() == (
+        b'"""Doc."""\n\n__version__ = "0.1.0a1"\n\n__all__ = ["__version__"]\n'
+    )
 
 
 @pytest.mark.parametrize("branch", ["main", "feat/0.1.0-foundation", "HEAD", "release/v0.1.0x"])

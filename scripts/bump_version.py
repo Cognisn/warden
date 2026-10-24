@@ -41,7 +41,10 @@ def stamp(version: str, *, branch: str, init_path: Path = INIT_PATH) -> None:
     text = init_path.read_text(encoding="utf-8")
     if len(_VERSION_LINE.findall(text)) != 1:
         raise StampRefused(f"{init_path} must hold exactly one __version__ line")
-    init_path.write_text(_VERSION_LINE.sub(f'__version__ = "{version}"', text), encoding="utf-8")
+    # newline="\n": the repository is eol=lf, and a text-mode write on Windows emits CRLF.
+    init_path.write_text(
+        _VERSION_LINE.sub(f'__version__ = "{version}"', text), encoding="utf-8", newline="\n"
+    )
 
 
 def _current_branch() -> str:
