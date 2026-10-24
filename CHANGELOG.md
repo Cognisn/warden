@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- `warden migrate` no longer prints a traceback when it cannot reach the database. It prints a fixed message, without the host, database or user, and exits with code 1.
+
 - `scripts/bump_version.py` now writes LF line endings on Windows, matching the repository's `eol=lf` rule.
 
 ## [0.1.0a1] - 2026-10-25

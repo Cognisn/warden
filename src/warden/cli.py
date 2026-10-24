@@ -19,6 +19,8 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
+import psycopg
+import sqlalchemy.exc
 from psycopg import AsyncConnection
 
 from warden import __version__
@@ -31,6 +33,9 @@ __all__ = ["main"]
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_CONFIG = 2
+
+# Fixed wording: the driver's own message can carry the host, database and user.
+MIGRATE_CONNECTION_FAILED = "warden migrate: could not connect to the database"
 
 
 class _OneConnection:
@@ -132,8 +137,13 @@ def main(
         return EXIT_CONFIG
 
     if args.command == "migrate":
-        migrate(dsn, args.revision)
-        print(f"warden schema at revision {current_revision(dsn)}")
+        try:
+            migrate(dsn, args.revision)
+            revision = current_revision(dsn)
+        except (psycopg.OperationalError, sqlalchemy.exc.OperationalError):
+            print(MIGRATE_CONNECTION_FAILED, file=sys.stderr)
+            return EXIT_FAILED
+        print(f"warden schema at revision {revision}")
         return EXIT_OK
 
     try:
