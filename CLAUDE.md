@@ -72,6 +72,7 @@ These are enforced in code and tests, not left to configuration or documentation
 - Keep a Changelog: update `CHANGELOG.md` under `[Unreleased]` in the same commit as the change.
 - Versioning follows Semantic Versioning. Before 1.0 a minor version may break the public API, but every break is named in the changelog with an upgrade note.
 - The public API is whatever is importable from `warden` without a leading underscore, plus the HTTP contract and the database schema. Anything else is internal.
+- Python 3.12 or later (`requires-python = ">=3.12"`). Do not add compatibility code for older versions.
 - Type hints on every function; `mypy --strict` passes on `src/`.
 - A new runtime dependency needs the user's agreement in the session and a licence check. No copyleft licences in runtime dependencies.
 

@@ -30,7 +30,7 @@ The audit half works on its own, so an application with its own authentication c
 
 ## Requirements (planned)
 
-- Python 3.11 or later (to be confirmed).
+- Python 3.12 or later.
 - PostgreSQL. warden keeps its tables in a dedicated `warden` schema with its own migration history.
 - FastAPI and psycopg 3.
 - [`cognisn-konfig`](https://pypi.org/project/cognisn-konfig/) for configuration and secrets.

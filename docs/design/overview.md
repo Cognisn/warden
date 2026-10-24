@@ -31,6 +31,7 @@ It is written from scratch. The design draws on the identity and audit implement
 | D14 | Signing | Ed25519 keys held in konfig's secrets store, identified by key id, rotatable without signing users out. One key family signs session tokens and audit checkpoints. Public keys are published so other components can verify without being able to sign. |
 | D15 | Passwords | Argon2id (`argon2-cffi`) for new hashes. Legacy `pbkdf2:sha256` hashes are verified and transparently rehashed on the next successful sign-in, so migrating users need no forced reset. |
 | D16 | Database | warden's tables live in a dedicated `warden` Postgres schema with its own Alembic chain and version table (`warden.alembic_version`), applied by `warden migrate` or a single call from the product's migration step. At runtime the product passes in its existing psycopg 3 async pool, so a product write and its audit event can share a transaction. |
+| D17 | Python | Python 3.12 or later. Python 3.10 reached end of life in October 2026, and 3.12 is what VOR targets and what Termograph's CI already tests against. |
 
 ## 3. Scope
 
@@ -165,15 +166,15 @@ Each behaviour below is written as a failing test before the code that satisfies
 - Migrate users, TOTP credentials and SSO subject pins into the `warden` schema. Existing PBKDF2 hashes carry over and are rehashed on sign-in.
 - Migrate its audit events into warden's audit table, starting a new hash chain with a checkpoint recording the import.
 - Move syslog forwarding to warden, switching the structured-data identifier to the registered PEN, and tell clients to update their SIEM rules.
+- Move its container images from `python:3.10-slim` to `python:3.12-slim` (D17), aligning the shipped runtime with the version its CI already tests.
 - Retire its own identity, SSO and syslog modules once parity is proven by its live suites.
 
 ## 8. Open items
 
 1. Register Cognisn's IANA Private Enterprise Number before the first release (D12).
 2. Licence choice pending legal confirmation (D8).
-3. Minimum Python version. Termograph declares 3.10+ and VOR 3.12+. Proposed: 3.11+, after checking the consuming products' runtime images.
-4. Default retention period and minimum for the audit trail.
-5. Whether checkpoint signatures should also be anchored outside the database (for example, emitted to syslog), so a database administrator cannot replace both the chain and its checkpoints.
+3. Default retention period and minimum for the audit trail.
+4. Whether checkpoint signatures should also be anchored outside the database (for example, emitted to syslog), so a database administrator cannot replace both the chain and its checkpoints.
 
 ## References
 

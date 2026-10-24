@@ -9,3 +9,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - Repository scaffolding: working agreement, design overview, licence, notice, security policy and changelog.
+- Minimum supported Python version set to 3.12.
