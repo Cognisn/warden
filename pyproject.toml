@@ -1,0 +1,97 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cognisn-warden"
+dynamic = ["version"]
+description = "Identity and audit for Python web applications: users, sign-in, single sign-on, roles, API keys and a tamper-evident audit trail."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Cognisn Pty Ltd" }]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Typing :: Typed",
+]
+# Runtime dependencies are limited to the agreed set in the development plan.
+# A new one needs agreement and a licence check (see scripts/licence_audit.py).
+dependencies = [
+    "cognisn-konfig>=0.4",
+    "pydantic>=2.7",
+    "psycopg>=3.2",
+    "alembic>=1.13",
+    "sqlalchemy>=2.0",
+    "cryptography>=42",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "testcontainers[postgres]>=4.15",
+    "psycopg[binary]>=3.2",
+    "psycopg-pool>=3.2",
+    "mypy>=1.11",
+    "ruff>=0.6",
+    "packaging>=24",
+]
+
+[project.scripts]
+warden = "warden.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Cognisn/warden"
+Issues = "https://github.com/Cognisn/warden/issues"
+Changelog = "https://github.com/Cognisn/warden/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "src/warden/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/warden"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/warden", "tests", "scripts", "docs", "CHANGELOG.md", "README.md", "LICENSE", "NOTICE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "db: needs a real Postgres (testcontainers)",
+    "integration: needs a live service on the slot's own ports",
+]
+addopts = "-m 'not integration'"
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+mypy_path = "src"
+packages = ["warden"]
+
+[[tool.mypy.overrides]]
+# konfig ships no type information; warden types it through its own protocols.
+module = ["konfig", "konfig.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "S", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S603", "S607"]
+"scripts/**" = ["S603", "S607"]
