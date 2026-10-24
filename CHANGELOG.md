@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- CI runs the test suite on Windows (Python 3.12 and 3.13), excluding the database tests, which need Linux containers and stay on the Linux job.
+
 ### Fixed
 
 - `scripts/bump_version.py` now writes LF line endings on Windows, matching the repository's `eol=lf` rule.
