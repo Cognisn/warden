@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a1] - 2026-10-25
+
+First pre-release of the initial build: the foundation (configuration, database access, key store and audit recorder contract).
+
 ### Added
 
 - Repository scaffolding: working agreement, design overview, licence, notice, security policy and changelog.
