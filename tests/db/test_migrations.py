@@ -16,6 +16,7 @@ from warden.db import SCHEMA, current_revision, downgrade, heads, migrate
 pytestmark = pytest.mark.db
 
 WORKER = Path(__file__).with_name("migrate_worker.py")
+BASELINE = "5c2f9a1e7b04"
 BASELINE_TABLES = {"alembic_version", "audit_events", "signing_keys", "settings"}
 
 
@@ -143,3 +144,41 @@ def test_baseline_signing_key_constraints(migrated_dsn: str) -> None:
                 " VALUES ('k', 'HS256', %s)",
                 (b"\0" * 32,),
             )
+
+
+def _columns(dsn: str, table: str) -> set[str]:
+    with psycopg.connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT column_name FROM information_schema.columns"
+            " WHERE table_schema = %s AND table_name = %s",
+            (SCHEMA, table),
+        ).fetchall()
+    return {r[0] for r in rows}
+
+
+def test_signing_keys_carry_a_revocation_time(migrated_dsn: str) -> None:
+    assert "revoked_at" in _columns(migrated_dsn, "signing_keys")
+    with psycopg.connect(migrated_dsn) as conn, pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO warden.signing_keys (key_id, public_key, created_at, revoked_at)"
+            " VALUES ('k', %s, now(), now() - interval '1 second')",
+            (b"\0" * 32,),
+        )
+
+
+def test_a_revoked_key_must_also_be_retired(migrated_dsn: str) -> None:
+    # verify() relies on retired_at alone being enough to refuse a revoked key.
+    with psycopg.connect(migrated_dsn) as conn, pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO warden.signing_keys (key_id, public_key, revoked_at)"
+            " VALUES ('k', %s, now())",
+            (b"\0" * 32,),
+        )
+
+
+def test_revocation_migration_downgrades_to_the_baseline(migrated_dsn: str) -> None:
+    downgrade(migrated_dsn, BASELINE)
+    assert current_revision(migrated_dsn) == BASELINE
+    assert "revoked_at" not in _columns(migrated_dsn, "signing_keys")
+    migrate(migrated_dsn)
+    assert "revoked_at" in _columns(migrated_dsn, "signing_keys")

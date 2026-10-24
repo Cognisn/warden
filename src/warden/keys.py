@@ -9,6 +9,14 @@ Rotation adds a key, which becomes the signing key at once; earlier keys
 keep verifying until they are retired, so rotating signs nobody out. The
 last unretired key cannot be retired.
 
+A key leaves service in one of two ways:
+
+- **Retired** (routine): it stops signing and stops verifying live
+  credentials (``verify``), but what it signed before stays valid for
+  historical artefacts such as audit checkpoints (``verify_historical``).
+- **Revoked** (compromised): nothing it signed is trusted, by either check,
+  and it is never published again. Revoking also retires.
+
 This module is shared: after the Foundation arc only the integration session
 edits it.
 """
@@ -141,11 +149,11 @@ class KeyStore:
         return _row_to_key(row)
 
     async def active_key(self) -> PublicKey:
-        """The key that signs now: the newest unretired key."""
+        """The key that signs now: the newest unretired, unrevoked key."""
         async with self._db.connection() as conn:
             cur = await conn.execute(
                 sql.SQL(
-                    "SELECT {} FROM {} WHERE retired_at IS NULL"
+                    "SELECT {} FROM {} WHERE retired_at IS NULL AND revoked_at IS NULL"
                     " ORDER BY created_at DESC, key_id DESC LIMIT 1"
                 ).format(_COLUMNS, _SIGNING_KEYS)
             )
@@ -155,8 +163,12 @@ class KeyStore:
         return _row_to_key(row)
 
     async def public_keys(self, *, include_retired: bool = False) -> list[PublicKey]:
-        """Published keys, newest first."""
-        where = sql.SQL("") if include_retired else sql.SQL(" WHERE retired_at IS NULL")
+        """Published keys, newest first. A revoked key is never included."""
+        where = (
+            sql.SQL(" WHERE revoked_at IS NULL")
+            if include_retired
+            else sql.SQL(" WHERE retired_at IS NULL AND revoked_at IS NULL")
+        )
         async with self._db.connection() as conn:
             cur = await conn.execute(
                 sql.SQL("SELECT {} FROM {}{} ORDER BY created_at DESC, key_id DESC").format(
@@ -193,12 +205,34 @@ class KeyStore:
         return Signature(key_id=key.key_id, signature=private.sign(message))
 
     async def verify(self, message: bytes, signature: bytes, key_id: str) -> bool:
-        """True only if ``signature`` is valid for ``message`` under an unretired ``key_id``."""
+        """For live credentials such as session tokens.
+
+        True only if ``signature`` is valid for ``message`` under ``key_id``
+        and that key is neither retired nor revoked.
+        """
+        return await self._verify(
+            message,
+            signature,
+            key_id,
+            sql.SQL("retired_at IS NULL AND revoked_at IS NULL"),
+        )
+
+    async def verify_historical(self, message: bytes, signature: bytes, key_id: str) -> bool:
+        """For historical artefacts such as audit checkpoints, and nothing else.
+
+        Like ``verify``, but a retired key still counts: a checkpoint signed
+        before routine rotation stays valid. A revoked key never does.
+        """
+        return await self._verify(message, signature, key_id, sql.SQL("revoked_at IS NULL"))
+
+    async def _verify(
+        self, message: bytes, signature: bytes, key_id: str, usable: sql.Composable
+    ) -> bool:
         async with self._db.connection() as conn:
             cur = await conn.execute(
-                sql.SQL(
-                    "SELECT public_key FROM {} WHERE key_id = %s AND retired_at IS NULL"
-                ).format(_SIGNING_KEYS),
+                sql.SQL("SELECT public_key FROM {} WHERE key_id = %s AND {}").format(
+                    _SIGNING_KEYS, usable
+                ),
                 (key_id,),
             )
             row = await cur.fetchone()
@@ -218,9 +252,9 @@ class KeyStore:
         """
         async with self._db.transaction(conn) as tx:
             cur = await tx.execute(
-                sql.SQL("SELECT key_id FROM {} WHERE retired_at IS NULL FOR UPDATE").format(
-                    _SIGNING_KEYS
-                )
+                sql.SQL(
+                    "SELECT key_id FROM {} WHERE retired_at IS NULL ORDER BY key_id FOR UPDATE"
+                ).format(_SIGNING_KEYS)
             )
             live = {row[0] for row in await cur.fetchall()}
             if key_id not in live:
@@ -231,6 +265,40 @@ class KeyStore:
                 sql.SQL("UPDATE {} SET retired_at = clock_timestamp() WHERE key_id = %s").format(
                     _SIGNING_KEYS
                 ),
+                (key_id,),
+            )
+        self._private.pop(key_id, None)
+
+    async def revoke(self, key_id: str, *, conn: AsyncConnection[Any] | None = None) -> None:
+        """Mark a compromised key so nothing it signed is trusted. Also retires it.
+
+        A retired key may still be revoked. Refuses the last unretired key,
+        so rotate in a replacement first. The same rows ``retire`` locks are
+        locked here, so a revocation racing a retirement cannot leave no key.
+        The caller records the revocation in the audit trail.
+        """
+        async with self._db.transaction(conn) as tx:
+            cur = await tx.execute(
+                sql.SQL(
+                    "SELECT key_id, retired_at IS NULL FROM {}"
+                    " WHERE revoked_at IS NULL AND (retired_at IS NULL OR key_id = %s)"
+                    " ORDER BY key_id FOR UPDATE"
+                ).format(_SIGNING_KEYS),
+                (key_id,),
+            )
+            rows = await cur.fetchall()
+            candidates = {row[0] for row in rows}
+            live = {row[0] for row in rows if row[1]}
+            if key_id not in candidates:
+                raise KeyStoreError(f"key {key_id} is unknown or already revoked")
+            if live == {key_id}:
+                raise KeyStoreError("refusing to revoke the last unretired signing key")
+            await tx.execute(
+                sql.SQL(
+                    "WITH t AS (SELECT clock_timestamp() AS at)"
+                    " UPDATE {} SET revoked_at = t.at, retired_at = coalesce(retired_at, t.at)"
+                    " FROM t WHERE key_id = %s"
+                ).format(_SIGNING_KEYS),
                 (key_id,),
             )
         self._private.pop(key_id, None)

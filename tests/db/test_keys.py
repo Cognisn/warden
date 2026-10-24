@@ -213,3 +213,146 @@ async def test_custom_secret_prefix_is_used(pool: Any, secrets: FakeSecrets) -> 
     store = KeyStore(Database(pool), secrets, KeysConfig(secret_prefix="product/warden/"))
     key = await store.rotate()
     assert list(secrets.values) == ["product/warden/" + key.key_id]
+
+
+async def test_retired_key_verifies_historical_signatures_only(store: KeyStore) -> None:
+    old = await store.rotate()
+    checkpoint = await store.sign(MESSAGE)
+    await store.rotate()
+    await store.retire(old.key_id)
+    assert not await store.verify(MESSAGE, checkpoint.signature, old.key_id)
+    assert await store.verify_historical(MESSAGE, checkpoint.signature, old.key_id)
+
+
+async def test_verify_historical_still_checks_the_signature(store: KeyStore) -> None:
+    old = await store.rotate()
+    checkpoint = await store.sign(MESSAGE)
+    await store.rotate()
+    await store.retire(old.key_id)
+    tampered = bytes([checkpoint.signature[0] ^ 0x01]) + checkpoint.signature[1:]
+    assert not await store.verify_historical(MESSAGE, tampered, old.key_id)
+    assert not await store.verify_historical(MESSAGE + b"!", checkpoint.signature, old.key_id)
+    assert not await store.verify_historical(MESSAGE, b"\0" * 63, old.key_id)
+    assert not await store.verify_historical(MESSAGE, checkpoint.signature, "no-such-key")
+
+
+async def test_revoked_key_fails_live_and_historical_verification(store: KeyStore) -> None:
+    old = await store.rotate()
+    signature = await store.sign(MESSAGE)
+    await store.rotate()
+    await store.revoke(old.key_id)
+    assert not await store.verify(MESSAGE, signature.signature, old.key_id)
+    assert not await store.verify_historical(MESSAGE, signature.signature, old.key_id)
+
+
+async def test_a_retired_key_can_still_be_revoked(store: KeyStore) -> None:
+    old = await store.rotate()
+    signature = await store.sign(MESSAGE)
+    await store.rotate()
+    await store.retire(old.key_id)
+    await store.revoke(old.key_id)
+    assert not await store.verify_historical(MESSAGE, signature.signature, old.key_id)
+
+
+async def test_revoked_keys_are_never_published(store: KeyStore) -> None:
+    revoked = await store.rotate()
+    retired = await store.rotate()
+    live = await store.rotate()
+    await store.retire(retired.key_id)
+    await store.revoke(revoked.key_id)
+    assert [k.key_id for k in await store.public_keys()] == [live.key_id]
+    listed = {k.key_id for k in await store.public_keys(include_retired=True)}
+    assert listed == {live.key_id, retired.key_id}
+
+
+async def test_revoking_the_active_key_hands_signing_to_the_next(store: KeyStore) -> None:
+    old = await store.rotate()
+    new = await store.rotate()
+    await store.revoke(new.key_id)
+    assert (await store.sign(MESSAGE)).key_id == old.key_id
+
+
+async def test_revoke_also_retires_the_key(store: KeyStore, pool: Any) -> None:
+    old = await store.rotate()
+    await store.rotate()
+    await store.revoke(old.key_id)
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT retired_at IS NOT NULL, revoked_at IS NOT NULL"
+            " FROM warden.signing_keys WHERE key_id = %s",
+            (old.key_id,),
+        )
+        assert await cur.fetchone() == (True, True)
+
+
+async def test_the_last_usable_key_cannot_be_revoked(store: KeyStore) -> None:
+    key = await store.rotate()
+    with pytest.raises(KeyStoreError):
+        await store.revoke(key.key_id)
+    assert (await store.active_key()).key_id == key.key_id
+
+
+async def test_revoking_an_unknown_or_revoked_key_fails(store: KeyStore) -> None:
+    old = await store.rotate()
+    await store.rotate()
+    await store.revoke(old.key_id)
+    with pytest.raises(KeyStoreError):
+        await store.revoke(old.key_id)
+    with pytest.raises(KeyStoreError):
+        await store.revoke("no-such-key")
+
+
+async def test_a_revoked_key_cannot_be_retired(store: KeyStore) -> None:
+    old = await store.rotate()
+    await store.rotate()
+    await store.revoke(old.key_id)
+    with pytest.raises(KeyStoreError):
+        await store.retire(old.key_id)
+
+
+async def test_concurrent_revocations_never_leave_no_signing_key(
+    pool: Any, secrets: FakeSecrets
+) -> None:
+    store = KeyStore(Database(pool), secrets)
+    await store.rotate()
+    barrier = asyncio.Barrier(2)
+
+    async def revoke(key_id: str) -> bool:
+        await barrier.wait()
+        try:
+            await store.revoke(key_id)
+        except KeyStoreError:
+            return False
+        return True
+
+    for _ in range(5):
+        await store.rotate()
+        first, second = await store.public_keys()
+        outcomes = await asyncio.gather(revoke(first.key_id), revoke(second.key_id))
+        assert sorted(outcomes) == [False, True]
+        assert len(await store.public_keys()) == 1
+
+
+async def test_a_revocation_racing_a_retirement_never_leaves_no_signing_key(
+    pool: Any, secrets: FakeSecrets
+) -> None:
+    store = KeyStore(Database(pool), secrets)
+    await store.rotate()
+    barrier = asyncio.Barrier(2)
+
+    async def attempt(operation: Any, key_id: str) -> bool:
+        await barrier.wait()
+        try:
+            await operation(key_id)
+        except KeyStoreError:
+            return False
+        return True
+
+    for _ in range(5):
+        await store.rotate()
+        first, second = await store.public_keys()
+        outcomes = await asyncio.gather(
+            attempt(store.revoke, first.key_id), attempt(store.retire, second.key_id)
+        )
+        assert sorted(outcomes) == [False, True]
+        assert len(await store.public_keys()) == 1
