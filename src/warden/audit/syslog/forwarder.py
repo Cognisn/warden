@@ -35,6 +35,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+import psycopg
 from psycopg import AsyncConnection, sql
 from pydantic import BaseModel, ConfigDict
 
@@ -213,10 +214,14 @@ class SyslogForwarder:
         while not self._stopping.is_set():
             try:
                 led = await self._compete()
-            except Exception as exc:
+            except psycopg.Error as exc:
                 led = False
                 self._record_error("database error")
                 logger.warning("syslog forwarder database error: %s", type(exc).__name__)
+            except Exception:
+                led = False
+                self._record_error("internal error")
+                logger.exception("syslog forwarder failed")
             if self._stopping.is_set():
                 break
             if not led:
