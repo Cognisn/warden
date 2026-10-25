@@ -9,6 +9,7 @@ MFA_CHALLENGES = "mfa_challenges"
 SESSIONS = "sessions"
 REFRESH_TOKENS = "refresh_tokens"
 ROLE_ASSIGNMENTS = "role_assignments"
+SIGN_IN_ATTEMPTS = "sign_in_attempts"
 
 IDENTITY_TABLES = frozenset(
     {
@@ -19,5 +20,6 @@ IDENTITY_TABLES = frozenset(
         SESSIONS,
         REFRESH_TOKENS,
         ROLE_ASSIGNMENTS,
+        SIGN_IN_ATTEMPTS,
     }
 )

@@ -11,9 +11,12 @@ issued, a credential used up), both are written in one transaction.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import logging
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, NoReturn
 from urllib.parse import urlsplit
@@ -26,6 +29,7 @@ from warden.config import WardenConfig
 from warden.db import Database, table
 from warden.identity import schema
 from warden.identity.actions import register_actions
+from warden.identity.crypto import SecretBox, SecretStore
 from warden.identity.dependencies import APP_STATE_KEY, Principal, ResourceScopeHook
 from warden.identity.errors import AuthenticationRefused, MfaError
 from warden.identity.http import SourceIp
@@ -33,14 +37,17 @@ from warden.identity.mfa import CHALLENGE_TTL_SECONDS, Challenge, ChallengePurpo
 from warden.identity.passwords import MAX_PASSWORD_LENGTH, PasswordHasher
 from warden.identity.policy import PolicyStore, SessionPolicy
 from warden.identity.roles import PermissionRegistry, Roles
+from warden.identity.throttle import SignInThrottle
 from warden.identity.tokens import NewSession, Sessions, TokenPair
-from warden.identity.users import SignInMethod, Users, UserStatus
+from warden.identity.users import SignInMethod, Users, UserStatus, is_email
 from warden.keys import KeyStore
 
 __all__ = ["ChallengeIssued", "Identity", "SignInResult"]
 
+logger = logging.getLogger(__name__)
+
 _USERS = table(schema.USERS)
-# Longest identifier recorded in the audit trail for a refused sign-in.
+# Longest identifier looked up; nothing longer can be an email address.
 _MAX_IDENTIFIER = 320
 
 
@@ -80,11 +87,18 @@ class Identity:
         keys: KeyStore,
         permissions: PermissionRegistry,
         *,
+        secrets: SecretStore,
         hasher: PasswordHasher | None = None,
         resource_scope: ResourceScopeHook | None = None,
         policy_max_age: float = 30.0,
+        sign_in_attempt_limit: int = 10,
+        sign_in_window_seconds: int = 900,
         clock: Callable[[], float] = time.time,
     ) -> None:
+        """``secrets`` is konfig's secrets store. It must hold the TOTP encryption
+        key (``warden.identity.crypto.TOTP_KEY_SECRET``) or construction fails.
+        """
+        box = SecretBox.from_secrets(secrets)
         register_actions(get_recorder().registry)
         self.config = config
         self.db = db
@@ -102,7 +116,10 @@ class Identity:
             db, SessionPolicy.from_config(config.identity), max_age=policy_max_age
         )
         issuer = config.http.public_base_url
-        self.mfa = Mfa(db, issuer=urlsplit(issuer).hostname or issuer, clock=clock)
+        self.mfa = Mfa(db, issuer=urlsplit(issuer).hostname or issuer, box=box, clock=clock)
+        self.throttle = SignInThrottle(
+            db, limit=sign_in_attempt_limit, window_seconds=sign_in_window_seconds
+        )
         self.sessions = Sessions(db, keys, self.policy, issuer=issuer, clock=clock)
 
     @property
@@ -119,6 +136,34 @@ class Identity:
 
         return build_auth_router(self)
 
+    @contextlib.asynccontextmanager
+    async def running(self) -> AsyncIterator[None]:
+        """Run identity's background work (the session-policy listener) for a block.
+
+        Wrap the product's FastAPI lifespan in it::
+
+            @asynccontextmanager
+            async def lifespan(app):
+                async with identity.running():
+                    yield
+        """
+        ready = asyncio.Event()
+        task = asyncio.create_task(self.policy.listen(ready=ready))
+        try:
+            try:
+                await asyncio.wait_for(ready.wait(), timeout=10)
+            except TimeoutError:
+                logger.warning("session policy listener not ready; it keeps retrying")
+            yield
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    async def prune_sign_in_attempts(self) -> int:
+        """Delete sign-in throttle records whose window has ended."""
+        return await self.throttle.prune()
+
     # Sign-in
 
     async def sign_in(
@@ -132,6 +177,8 @@ class Identity:
         """
         if not isinstance(email, str) or not isinstance(password, str):
             await self._refuse_sign_in("malformed", None, None, source_ip)
+        if not await self.throttle.reserve(email, source_ip):
+            await self._refuse_sign_in("throttled", None, email, source_ip)
         account = await self._account(email)
         if account is None or account.password_hash is None:
             await self.passwords.dummy_verify(password)
@@ -178,6 +225,7 @@ class Identity:
                 )
             else:
                 new = await self.sessions.start(tx, account.id, ["pwd"], policy)
+                await self.throttle.clear(tx, email, source_ip)
                 await self._audit(
                     tx, "identity.sign_in", account.id, source_ip, amr=["pwd"], **details
                 )
@@ -229,6 +277,7 @@ class Identity:
                         raise _Rollback
                     else:
                         new = await self.sessions.start(tx, opened.user_id, amr, policy)
+                        await self._clear_throttle(tx, opened.user_id, source_ip)
                         await self._audit(
                             tx, "identity.sign_in", opened.user_id, source_ip, amr=amr
                         )
@@ -275,7 +324,11 @@ class Identity:
         if principal is not None:
             codes = await self.mfa.confirm_enrolment(principal.user_id, code)
             if codes is None:
-                await self._refuse_second_factor("wrong_code", None, "enrolment", source_ip)
+                # Signed in: say the code was wrong, not that authentication failed.
+                await self._audit_second_factor_failure(
+                    "wrong_code", str(principal.user_id), "enrolment", source_ip
+                )
+                raise MfaError("code not accepted")
             return codes, None
         policy = await self.policy.current()
         reason: str | None = None
@@ -299,6 +352,7 @@ class Identity:
                     else:
                         amr = ["pwd", "otp"]
                         new = await self.sessions.start(tx, opened.user_id, amr, policy)
+                        await self._clear_throttle(tx, opened.user_id, source_ip)
                         await self._audit(
                             tx, "identity.sign_in", opened.user_id, source_ip, amr=amr
                         )
@@ -506,7 +560,12 @@ class Identity:
     ) -> NoReturn:
         details: dict[str, Any] = {"reason": reason}
         if identifier is not None:
-            details["identifier"] = identifier[:_MAX_IDENTIFIER]
+            # Only an email-shaped identifier is recorded: anything else may be a
+            # password typed into the wrong field.
+            if is_email(identifier):
+                details["identifier"] = identifier
+            else:
+                details["identifier_recorded"] = False
         await record_audit(
             AuditEvent(
                 action="identity.sign_in",
@@ -524,6 +583,12 @@ class Identity:
         self, reason: str, challenge: Challenge | None, method: str, source_ip: SourceIp
     ) -> NoReturn:
         user = None if challenge is None else str(challenge.user_id)
+        await self._audit_second_factor_failure(reason, user, method, source_ip)
+        raise AuthenticationRefused(reason)
+
+    async def _audit_second_factor_failure(
+        self, reason: str, user: str | None, method: str, source_ip: SourceIp
+    ) -> None:
         await record_audit(
             AuditEvent(
                 action="identity.mfa.verify",
@@ -535,7 +600,16 @@ class Identity:
                 details={"reason": reason, "method": method},
             )
         )
-        raise AuthenticationRefused(reason)
+
+    async def _clear_throttle(
+        self, conn: AsyncConnection[Any], user_id: uuid.UUID, source_ip: SourceIp
+    ) -> None:
+        cur = await conn.execute(
+            sql.SQL("SELECT email FROM {} WHERE id = %s").format(_USERS), (user_id,)
+        )
+        row = await cur.fetchone()
+        if row is not None:
+            await self.throttle.clear(conn, row[0], source_ip)
 
 
 class _Rollback(Exception):

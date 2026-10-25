@@ -6,6 +6,7 @@ mounts ``identity.auth_router()``; routes then depend on ``require_user`` or
 ``warden.audit.record_audit``; it never writes the audit table itself.
 """
 
+from warden.identity.crypto import TOTP_KEY_SECRET, SecretKeyError, new_totp_key
 from warden.identity.dependencies import (
     Principal,
     ResourceScopeHook,
@@ -29,6 +30,7 @@ from warden.identity.tokens import TokenPair
 from warden.identity.users import SignInMethod, User, UserError, Users, UserStatus
 
 __all__ = [
+    "TOTP_KEY_SECRET",
     "AuthenticationRefused",
     "ChallengeIssued",
     "Enrolment",
@@ -45,6 +47,7 @@ __all__ = [
     "RoleAssignment",
     "RoleError",
     "Roles",
+    "SecretKeyError",
     "SessionPolicy",
     "SignInMethod",
     "SignInResult",
@@ -53,6 +56,7 @@ __all__ = [
     "UserError",
     "UserStatus",
     "Users",
+    "new_totp_key",
     "require_permission",
     "require_user",
 ]

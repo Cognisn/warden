@@ -78,6 +78,11 @@ def _row_to_user(row: tuple[Any, ...]) -> User:
     )
 
 
+def is_email(text: str) -> bool:
+    """Whether ``text`` is shaped like an email address (and short enough to be one)."""
+    return len(text) <= _MAX_EMAIL and _EMAIL.fullmatch(text) is not None
+
+
 def check_email(email: str) -> str:
     if len(email) > _MAX_EMAIL or _EMAIL.fullmatch(email) is None:
         raise UserError("email address is not valid")

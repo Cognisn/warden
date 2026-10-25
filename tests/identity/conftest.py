@@ -15,6 +15,7 @@ from warden.audit import ActionRegistry, AuditRecorder, set_recorder
 from warden.config import WardenConfig
 from warden.db import Database
 from warden.identity import Identity, PermissionRegistry, User
+from warden.identity.crypto import TOTP_KEY_SECRET, new_totp_key
 from warden.keys import KeyStore
 
 
@@ -46,8 +47,16 @@ async def db(pool: Any, audit_registry: ActionRegistry) -> AsyncIterator[Databas
 
 
 @pytest.fixture
-async def keys(db: Database) -> KeyStore:
-    store = KeyStore(db, MemorySecrets())
+def secrets() -> MemorySecrets:
+    """konfig's secrets store, holding the TOTP encryption key."""
+    store = MemorySecrets()
+    store.set(TOTP_KEY_SECRET, new_totp_key())
+    return store
+
+
+@pytest.fixture
+async def keys(db: Database, secrets: MemorySecrets) -> KeyStore:
+    store = KeyStore(db, secrets)
     await store.rotate()
     return store
 
@@ -59,9 +68,13 @@ def config() -> WardenConfig:
 
 @pytest.fixture
 def identity(
-    config: WardenConfig, db: Database, keys: KeyStore, permissions: PermissionRegistry
+    config: WardenConfig,
+    db: Database,
+    keys: KeyStore,
+    permissions: PermissionRegistry,
+    secrets: MemorySecrets,
 ) -> Identity:
-    return Identity(config, db, keys, permissions, hasher=FAST_HASHER)
+    return Identity(config, db, keys, permissions, secrets=secrets, hasher=FAST_HASHER)
 
 
 @pytest.fixture

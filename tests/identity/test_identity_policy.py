@@ -112,3 +112,38 @@ async def test_reset_returns_to_configuration(db: Database, config: WardenConfig
     await store.update(actor="t", require_mfa=True)
     assert (await store.reset(actor="t")) == SessionPolicy.from_config(config.identity)
     assert await _store(db, config).current() == SessionPolicy.from_config(config.identity)
+
+
+async def test_running_starts_and_stops_the_listener(
+    db: Database,
+    config: WardenConfig,
+    keys: object,
+    permissions: object,
+    secrets: object,
+) -> None:
+    """The product wraps its app's lifespan in ``identity.running()``."""
+    from identity_support import FAST_HASHER
+
+    from warden.identity import Identity
+
+    identity = Identity(
+        config,
+        db,
+        keys,  # type: ignore[arg-type]
+        permissions,  # type: ignore[arg-type]
+        secrets=secrets,  # type: ignore[arg-type]
+        hasher=FAST_HASHER,
+        policy_max_age=3600,
+    )
+    other = _store(db, config)
+    assert not identity.policy.listening
+    async with identity.running():
+        assert identity.policy.listening
+        assert (await identity.policy.current()).require_mfa is False
+        await other.update(actor="t", require_mfa=True)
+        for _ in range(100):
+            if (await identity.policy.current()).require_mfa:
+                break
+            await asyncio.sleep(0.05)
+        assert (await identity.policy.current()).require_mfa
+    assert not identity.policy.listening

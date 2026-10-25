@@ -10,7 +10,14 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI
-from identity_support import PASSWORD, UserFactory, audit_rows, enrol_totp, make_config
+from identity_support import (
+    PASSWORD,
+    MemorySecrets,
+    UserFactory,
+    audit_rows,
+    enrol_totp,
+    make_config,
+)
 
 from warden.config import WardenConfig
 from warden.db import Database
@@ -79,11 +86,13 @@ async def test_an_unconfirmed_enrolment_is_not_mfa(
 
 
 async def test_require_mfa_without_confirmed_totp_forces_enrolment(
-    db: Database, keys: KeyStore, permissions: PermissionRegistry
+    db: Database, keys: KeyStore, permissions: PermissionRegistry, secrets: MemorySecrets
 ) -> None:
     from identity_support import FAST_HASHER
 
-    identity = Identity(make_config(require_mfa=True), db, keys, permissions, hasher=FAST_HASHER)
+    identity = Identity(
+        make_config(require_mfa=True), db, keys, permissions, secrets=secrets, hasher=FAST_HASHER
+    )
     app = FastAPI()
     identity.install(app)
     app.include_router(identity.auth_router(), prefix="/auth")
@@ -149,6 +158,7 @@ async def test_sign_in_timing_does_not_reveal_a_username(
     db: Database,
     keys: KeyStore,
     permissions: PermissionRegistry,
+    secrets: MemorySecrets,
 ) -> None:
     """#133: unknown user, wrong password and SSO-only take indistinguishable time.
 
@@ -157,7 +167,15 @@ async def test_sign_in_timing_does_not_reveal_a_username(
     equally. A missing dummy verification for unknown users makes that path
     an order of magnitude faster and fails this test.
     """
-    identity = Identity(config, db, keys, permissions, hasher=PasswordHasher())
+    identity = Identity(
+        config,
+        db,
+        keys,
+        permissions,
+        secrets=secrets,
+        hasher=PasswordHasher(),
+        sign_in_attempt_limit=1000,
+    )
     app = FastAPI()
     identity.install(app)
     app.include_router(identity.auth_router(), prefix="/auth")
@@ -234,3 +252,17 @@ async def test_a_failed_legacy_sign_in_keeps_the_legacy_hash(
         cur = await conn.execute("SELECT password_hash FROM warden.users WHERE id = %s", (user.id,))
         row = await cur.fetchone()
     assert row is not None and row[0] == legacy
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    ["hunter2-not-an-email", "correct horse battery staple", "x" * 400, "a@b"],
+)
+async def test_an_identifier_that_is_not_an_email_address_is_not_audited(
+    client: httpx.AsyncClient, db: Database, identifier: str
+) -> None:
+    """Someone who types their password into the email field must not have it recorded."""
+    _assert_refusal(await _sign_in(client, identifier, PASSWORD))
+    rows = await audit_rows(db, "identity.sign_in")
+    assert rows[-1]["details"] == {"reason": "unknown_user", "identifier_recorded": False}
+    assert identifier not in str(rows)

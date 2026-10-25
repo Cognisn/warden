@@ -8,7 +8,7 @@ from typing import Annotated
 import httpx
 import pytest
 from fastapi import Depends, FastAPI, Request
-from identity_support import FAST_HASHER, PASSWORD, UserFactory
+from identity_support import FAST_HASHER, PASSWORD, MemorySecrets, UserFactory
 
 from warden.config import WardenConfig
 from warden.db import Database
@@ -75,8 +75,17 @@ async def scoped_client(
     keys: KeyStore,
     permissions: PermissionRegistry,
     scope: CaseScope,
+    secrets: MemorySecrets,
 ) -> AsyncIterator[tuple[Identity, httpx.AsyncClient]]:
-    identity = Identity(config, db, keys, permissions, hasher=FAST_HASHER, resource_scope=scope)
+    identity = Identity(
+        config,
+        db,
+        keys,
+        permissions,
+        secrets=secrets,
+        hasher=FAST_HASHER,
+        resource_scope=scope,
+    )
     transport = httpx.ASGITransport(app=_app(identity))
     async with httpx.AsyncClient(transport=transport, base_url="https://app.example.com") as c:
         yield identity, c

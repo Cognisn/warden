@@ -8,6 +8,7 @@ import httpx
 import pytest
 from identity_support import (
     PASSWORD,
+    MemorySecrets,
     UserFactory,
     audit_rows,
     current_code,
@@ -356,12 +357,14 @@ async def test_confirmation_is_audited(
 
 
 async def test_forced_enrolment_over_http(
-    db: Database, keys: KeyStore, permissions: PermissionRegistry
+    db: Database, keys: KeyStore, permissions: PermissionRegistry, secrets: MemorySecrets
 ) -> None:
     from fastapi import FastAPI
     from identity_support import FAST_HASHER
 
-    identity = Identity(make_config(require_mfa=True), db, keys, permissions, hasher=FAST_HASHER)
+    identity = Identity(
+        make_config(require_mfa=True), db, keys, permissions, secrets=secrets, hasher=FAST_HASHER
+    )
     app = FastAPI()
     identity.install(app)
     app.include_router(identity.auth_router(), prefix="/auth")
@@ -414,3 +417,23 @@ async def test_voluntary_enrolment_with_an_access_token(
     assert confirmed.status_code == 200
     body = confirmed.json()
     assert len(body["recovery_codes"]) == 10 and "access_token" not in body
+
+
+async def test_a_signed_in_users_wrong_enrolment_code_is_a_400_not_a_sign_out(
+    client: httpx.AsyncClient, make_user: UserFactory, db: Database
+) -> None:
+    """A 401 would tell the client its session ended; it has not."""
+    user = await make_user()
+    tokens = (
+        await client.post("/auth/sign-in", json={"email": user.email, "password": PASSWORD})
+    ).json()
+    auth = {"authorization": f"Bearer {tokens['access_token']}"}
+    await client.post("/auth/totp/enrolment", headers=auth, json={})
+    for code in ("000000x", 123456, None):
+        response = await client.post(
+            "/auth/totp/enrolment/confirm", headers=auth, json={"code": code}
+        )
+        assert response.status_code == 400
+        assert response.content == b'{"detail":"code not accepted"}'
+    rows = await audit_rows(db, "identity.mfa.verify")
+    assert rows[-1]["details"] == {"reason": "wrong_code", "method": "enrolment"}

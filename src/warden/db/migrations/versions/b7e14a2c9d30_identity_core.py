@@ -1,4 +1,4 @@
-"""Identity core: users, TOTP, recovery codes, MFA challenges, sessions, roles.
+"""Identity core: users, TOTP, recovery codes, MFA challenges, sessions, roles, throttling.
 
 Revision ID: b7e14a2c9d30
 Revises: 8d41b7c3a9f2
@@ -37,8 +37,10 @@ _UPGRADE = [
     """
     CREATE TABLE warden.totp_credentials (
         user_id uuid PRIMARY KEY REFERENCES warden.users (id) ON DELETE CASCADE,
-        secret bytea NOT NULL CONSTRAINT totp_secret_length
-            CHECK (octet_length(secret) BETWEEN 16 AND 64),
+        secret_sealed bytea NOT NULL CONSTRAINT totp_secret_sealed_length
+            CHECK (octet_length(secret_sealed) BETWEEN 44 AND 92),
+        key_id text NOT NULL CONSTRAINT totp_key_id_length
+            CHECK (char_length(key_id) BETWEEN 1 AND 64),
         created_at timestamptz NOT NULL DEFAULT now(),
         confirmed_at timestamptz,
         last_used_step bigint,
@@ -114,9 +116,18 @@ _UPGRADE = [
     )
     """,
     "CREATE INDEX role_assignments_role_idx ON warden.role_assignments (role)",
+    """
+    CREATE TABLE warden.sign_in_attempts (
+        key_hash bytea PRIMARY KEY CONSTRAINT sign_in_attempts_key_length
+            CHECK (octet_length(key_hash) = 32),
+        window_started_at timestamptz NOT NULL DEFAULT now(),
+        attempts integer NOT NULL CONSTRAINT sign_in_attempts_positive CHECK (attempts > 0)
+    )
+    """,
 ]
 
 _DOWNGRADE = [
+    "DROP TABLE warden.sign_in_attempts",
     "DROP TABLE warden.role_assignments",
     "DROP TABLE warden.refresh_tokens",
     "DROP TABLE warden.sessions",

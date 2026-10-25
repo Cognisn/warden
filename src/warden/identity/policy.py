@@ -118,8 +118,14 @@ class PolicyStore:
         self._max_age = max_age
         self._clock = clock
         self._cached: SessionPolicy | None = None
+        self._listening = False
         self._loaded_at = 0.0
         self._generation = 0
+
+    @property
+    def listening(self) -> bool:
+        """Whether ``listen()`` currently holds a LISTEN on the policy channel."""
+        return self._listening
 
     @property
     def defaults(self) -> SessionPolicy:
@@ -208,6 +214,7 @@ class PolicyStore:
                     await conn.set_autocommit(True)
                     await conn.execute(sql.SQL("LISTEN {}").format(sql.Identifier(POLICY_CHANNEL)))
                     self.invalidate()
+                    self._listening = True
                     if ready is not None:
                         ready.set()
                     async for _notify in conn.notifies():
@@ -216,6 +223,8 @@ class PolicyStore:
                 logger.warning("session policy listener lost its connection; reconnecting")
                 self.invalidate()
                 await asyncio.sleep(1.0)
+            finally:
+                self._listening = False
 
     async def _read(self, conn: AsyncConnection[Any]) -> dict[str, Any]:
         cur = await conn.execute(

@@ -179,6 +179,8 @@ def build_auth_router(identity: Identity) -> APIRouter:
             )
         except AuthenticationRefused:
             return refusal()
+        except MfaError:
+            return json_response({"detail": "code not accepted"}, 400)
         if pair is None:
             return json_response({"recovery_codes": codes})
         return json_response(_tokens(pair, recovery_codes=codes))

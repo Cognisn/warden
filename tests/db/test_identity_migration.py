@@ -60,13 +60,15 @@ def test_user_constraints(migrated_dsn: str, columns: dict[str, str]) -> None:
         _user(conn, email, **columns)
 
 
-def test_totp_secret_length_is_checked(migrated_dsn: str) -> None:
+def test_sealed_totp_secret_length_is_checked(migrated_dsn: str) -> None:
+    """A sealed secret is nonce + ciphertext + tag; anything as short as a raw secret is not."""
     with psycopg.connect(migrated_dsn) as conn:
         user = _user(conn, "carol@example.com")
         with pytest.raises(psycopg.errors.CheckViolation):
             conn.execute(
-                "INSERT INTO warden.totp_credentials (user_id, secret) VALUES (%s, %s)",
-                (user, b"short"),
+                "INSERT INTO warden.totp_credentials (user_id, secret_sealed, key_id)"
+                " VALUES (%s, %s, 'k')",
+                (user, b"\0" * 20),
             )
 
 
@@ -76,9 +78,9 @@ def test_a_used_step_requires_a_confirmed_enrolment(migrated_dsn: str) -> None:
         user = _user(conn, "dave@example.com")
         with pytest.raises(psycopg.errors.CheckViolation):
             conn.execute(
-                "INSERT INTO warden.totp_credentials (user_id, secret, last_used_step)"
-                " VALUES (%s, %s, 1)",
-                (user, b"\0" * 20),
+                "INSERT INTO warden.totp_credentials"
+                " (user_id, secret_sealed, key_id, last_used_step) VALUES (%s, %s, 'k', 1)",
+                (user, b"\0" * 48),
             )
 
 

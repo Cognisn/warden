@@ -10,12 +10,16 @@ Every single-use credential here is consumed by one guarded ``UPDATE``:
 Concurrent attempts block on the row and re-check the condition when the
 first commits, so exactly one succeeds. Only a confirmed TOTP enrolment is
 MFA: an unconfirmed credential never verifies.
+
+TOTP secrets are stored sealed (``warden.identity.crypto``), bound to their
+user; a secret that does not open is treated as no secret.
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import re
 import secrets
 import time
@@ -29,6 +33,7 @@ from psycopg import AsyncConnection, sql
 from warden.audit import AuditEvent, record_audit
 from warden.db import Database, table
 from warden.identity import schema, totp
+from warden.identity.crypto import SecretBox
 from warden.identity.errors import MfaError
 
 __all__ = ["CHALLENGE_TTL_SECONDS", "MAX_CHALLENGE_FAILURES", "Challenge", "Enrolment", "Mfa"]
@@ -37,6 +42,8 @@ CHALLENGE_TTL_SECONDS = 300
 MAX_CHALLENGE_FAILURES = 5
 
 ChallengePurpose = Literal["verify", "enrol"]
+
+logger = logging.getLogger(__name__)
 
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{16,128}")
 
@@ -74,11 +81,51 @@ def _hash_token(token: str) -> bytes:
 
 class Mfa:
     def __init__(
-        self, db: Database, *, issuer: str, clock: Callable[[], float] = time.time
+        self,
+        db: Database,
+        *,
+        issuer: str,
+        box: SecretBox,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         self._db = db
         self._issuer = issuer
+        self._box = box
         self._clock = clock
+
+    def _open(self, user_id: uuid.UUID, sealed: bytes, key_id: str) -> bytes | None:
+        secret = self._box.open(key_id, bytes(sealed), context=user_id.bytes)
+        if secret is None:
+            logger.warning("TOTP secret for user %s does not open (key %s)", user_id, key_id)
+        return secret
+
+    async def reseal_all(self) -> int:
+        """Re-seal every secret not sealed with the current key; returns how many.
+
+        Run after rotating the TOTP key, before removing the previous key.
+        """
+        resealed = 0
+        current = self._box.current_key_id
+        async with self._db.transaction() as tx:
+            cur = await tx.execute(
+                sql.SQL(
+                    "SELECT user_id, secret_sealed, key_id FROM {} WHERE key_id <> %s FOR UPDATE"
+                ).format(_TOTP),
+                (current,),
+            )
+            for user_id, sealed, key_id in await cur.fetchall():
+                secret = self._open(user_id, sealed, key_id)
+                if secret is None:
+                    continue
+                new_key_id, new_sealed = self._box.seal(secret, context=user_id.bytes)
+                await tx.execute(
+                    sql.SQL(
+                        "UPDATE {} SET secret_sealed = %s, key_id = %s WHERE user_id = %s"
+                    ).format(_TOTP),
+                    (new_sealed, new_key_id, user_id),
+                )
+                resealed += 1
+        return resealed
 
     # TOTP enrolment
 
@@ -104,14 +151,16 @@ class Mfa:
     ) -> Enrolment:
         """Start (or restart) an enrolment. Refused once an enrolment is confirmed."""
         secret = totp.generate_secret()
+        key_id, sealed = self._box.seal(secret, context=user_id.bytes)
         async with self._db.transaction(conn) as tx:
             cur = await tx.execute(
                 sql.SQL(
-                    "INSERT INTO {} (user_id, secret) VALUES (%s, %s)"
-                    " ON CONFLICT (user_id) DO UPDATE SET secret = EXCLUDED.secret,"
-                    " created_at = now() WHERE {}.confirmed_at IS NULL RETURNING 1"
+                    "INSERT INTO {} (user_id, secret_sealed, key_id) VALUES (%s, %s, %s)"
+                    " ON CONFLICT (user_id) DO UPDATE SET secret_sealed = EXCLUDED.secret_sealed,"
+                    " key_id = EXCLUDED.key_id, created_at = now()"
+                    " WHERE {}.confirmed_at IS NULL RETURNING 1"
                 ).format(_TOTP, _TOTP),
-                (user_id, secret),
+                (user_id, sealed, key_id),
             )
             if await cur.fetchone() is None:
                 raise MfaError(f"user {user_id} already has a confirmed TOTP enrolment")
@@ -145,14 +194,16 @@ class Mfa:
         async with self._db.transaction(conn) as tx:
             cur = await tx.execute(
                 sql.SQL(
-                    "SELECT secret FROM {} WHERE user_id = %s AND confirmed_at IS NULL FOR UPDATE"
+                    "SELECT secret_sealed, key_id FROM {}"
+                    " WHERE user_id = %s AND confirmed_at IS NULL FOR UPDATE"
                 ).format(_TOTP),
                 (user_id,),
             )
             row = await cur.fetchone()
-            if row is None:
+            secret = None if row is None else self._open(user_id, row[0], row[1])
+            if secret is None:
                 return None
-            step = totp.matching_step(bytes(row[0]), code, totp.step_for(self._clock()))
+            step = totp.matching_step(secret, code, totp.step_for(self._clock()))
             if step is None:
                 return None
             cur = await tx.execute(
@@ -199,15 +250,17 @@ class Mfa:
     ) -> bool:
         """Accept ``code`` for a confirmed enrolment, at most once per step."""
         cur = await conn.execute(
-            sql.SQL("SELECT secret FROM {} WHERE user_id = %s AND confirmed_at IS NOT NULL").format(
-                _TOTP
-            ),
+            sql.SQL(
+                "SELECT secret_sealed, key_id FROM {} WHERE user_id = %s"
+                " AND confirmed_at IS NOT NULL"
+            ).format(_TOTP),
             (user_id,),
         )
         row = await cur.fetchone()
-        if row is None:
+        secret = None if row is None else self._open(user_id, row[0], row[1])
+        if secret is None:
             return False
-        step = totp.matching_step(bytes(row[0]), code, totp.step_for(self._clock()))
+        step = totp.matching_step(secret, code, totp.step_for(self._clock()))
         if step is None:
             return False
         cur = await conn.execute(
