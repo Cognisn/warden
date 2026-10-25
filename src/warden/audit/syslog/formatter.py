@@ -23,7 +23,7 @@ from warden.audit.events import AuditEvent, Severity
 from warden.audit.registry import ActionRegistry
 from warden.audit.syslog.settings import SyslogSettings
 
-__all__ = ["AuditRecord", "format_message", "neutralise"]
+__all__ = ["AuditRecord", "format_message", "format_test_message", "neutralise"]
 
 NILVALUE = "-"
 BOM = "\N{ZERO WIDTH NO-BREAK SPACE}"
@@ -203,3 +203,19 @@ def format_message(
     # Unreachable while the header is bounded and the cap is at least 1024
     # bytes, but the cap holds regardless: drop the structured data entirely.
     return f"{header} {NILVALUE}".encode()[:cap]
+
+
+def format_test_message(settings: SyslogSettings, moment: datetime | None = None) -> bytes:
+    """A NOTICE message with MSGID ``test``, for checking the path to the collector."""
+    pri = settings.facility * 8 + int(Severity.NOTICE)
+    header = " ".join(
+        (
+            f"<{pri}>1",
+            _timestamp(moment or datetime.now(UTC)),
+            _header_field(settings.hostname, 255),
+            _header_field(settings.app_name, 48),
+            NILVALUE,
+            "test",
+        )
+    )
+    return f'{header} [{settings.sd_id} test="true"] {BOM}warden syslog test message'.encode()

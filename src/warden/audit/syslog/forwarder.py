@@ -129,6 +129,10 @@ class SyslogForwarder:
     def settings(self) -> SyslogSettings:
         return self._settings
 
+    @property
+    def transport_factory(self) -> TransportFactory:
+        return self._factory
+
     async def start(self) -> None:
         """Begin competing for the forwarder lock and, once held, forwarding."""
         if self._task is not None:
