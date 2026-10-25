@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `warden.audit.syslog`: RFC 5424 formatting of committed audit rows. `format_message()` puts the row id in MSGID, the event in structured data under the configured SD-ID, and the action's summary in MSG; it replaces every control character (C0, DEL, C1 and the Unicode line separators) in every value, including MSG, before RFC 5424 escaping, and holds the whole message at or under `max_message_bytes`, cutting details first and marking the message `truncated="true"`. `SyslogSettings` carries the forwarder's settings, built from `SyslogConfig` with `SyslogSettings.from_config()`; the SD-ID has no default and refuses the documentation number 32473.
+
 ## [0.1.0a2] - 2026-10-25
 
 Second pre-release: the contract changes wave 1 builds on (audit forwarding from committed rows, retired and revoked signing keys), plus CI and CLI hardening.
