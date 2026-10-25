@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A live check of syslog forwarding against a real rsyslog collector over UDP, TCP and TLS, in both framings, including a hostile value under LF framing and a TLS refusal with the wrong CA (`tests/syslogfwd/test_syslog_live.py`, marked `integration`; the collector's image, configuration and compose file are in `tests/syslogfwd/live`).
 - Runtime dependency `fastapi` (agreed in the development plan); development dependency `httpx` for route tests.
 
+### Changed
+
+- The design overview describes syslog forwarding from committed rows, replacing the earlier in-process queue that dropped a copy when full.
+
 ## [0.1.0a2] - 2026-10-25
 
 Second pre-release: the contract changes wave 1 builds on (audit forwarding from committed rows, retired and revoked signing keys), plus CI and CLI hardening.

@@ -72,7 +72,7 @@ It is written from scratch. The design draws on the identity and audit implement
 - Syslog forwarding:
   - RFC 5424 over UDP, TCP or TLS, with octet-counting or LF framing
   - control characters neutralised in every value
-  - a bounded queue that drops a copy rather than ever blocking a request
+  - forwarding from committed rows: one elected forwarder per deployment tails the audit table from a stored cursor, so a rolled-back event is never sent, a slow or stopped collector never blocks a request, and rows committed during an outage are delivered when it ends (at-least-once, with the row id as MSGID)
   - TLS that fails closed, with no plaintext fallback
   - secrets read through konfig
   - status and test-send routes
@@ -105,7 +105,7 @@ src/warden/
   proxy.py             trusted-proxy middleware
   cli.py               warden migrate, keys rotate, audit verify, audit purge
   db/                  pool adapter, schema helpers, Alembic environment (schema "warden")
-  audit/               recorder, event registry, hash chain, syslog emitter,
+  audit/               recorder, event registry, hash chain, syslog forwarder,
                        query and export, retention and checkpoints, routers
   identity/
     users.py           user model and lifecycle
@@ -150,7 +150,7 @@ Each behaviour below is written as a failing test before the code that satisfies
 |---|---|---|
 | M0 Groundwork | Package skeleton, CI (tests, type checking, lint, licence audit), konfig binding, `warden` Postgres schema and Alembic chain, key store. | `warden migrate` creates an empty schema; CI green. |
 | M1 Audit core | Recorder, event registry, hash chain and verification, query and export routes, retention with checkpoints, trusted-proxy middleware. | Single-writer and independence tripwires green; chain verification detects an altered row. |
-| M2 Syslog | Emitter, transports, formatter with control-character neutralisation, status and test routes. | Live check against a real collector over UDP, TCP and TLS; a forced-drop run shows no change in request latency. |
+| M2 Syslog | Forwarder, transports, formatter with control-character neutralisation, status and test routes. | Live check against a real collector over UDP, TCP and TLS; a collector-outage run shows no change in request latency and delivers every committed row once the collector returns. |
 | M3 Identity core | Users, passwords, TOTP, sessions and refresh families, permissions and roles, dependencies, public sign-in routes. | Acceptance tests #124, #125, #126, #130, #131, #132 and #133 green. |
 | M4 Lifecycle | Invitations, password reset, mail protocol and templates, administration routes, API keys, pruning. | #127, #128, #129, #134 and #154 green. |
 | M5 Single sign-on | OIDC client, discovery and JWKS caching, account matching, settings and test-configuration routes. | Live round trip against a stub identity provider, including break-glass sign-in with the provider stopped. |
