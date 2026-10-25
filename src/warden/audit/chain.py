@@ -38,9 +38,11 @@ __all__ = [
     "GENESIS_HASH",
     "TRUNCATION_MARKER",
     "ChainRow",
+    "address_text",
     "canonical_json",
     "cap_details",
     "row_hash",
+    "timestamp_text",
 ]
 
 # Transaction-scoped advisory lock serialising appends to the chain. It is
@@ -76,7 +78,8 @@ class ChainRow:
     key_id: str | None
 
 
-def _timestamp(value: datetime) -> str:
+def timestamp_text(value: datetime) -> str:
+    """A timestamp as hashed and exported: UTC, microseconds, ``Z`` suffix."""
     if value.tzinfo is None:
         raise ValueError("audit timestamps must be timezone-aware")
     return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -145,8 +148,8 @@ def _fields(row: ChainRow) -> dict[str, Any]:
     return {
         "id": row.id,
         "prev_hash": row.prev_hash.hex(),
-        "recorded_at": _timestamp(row.recorded_at),
-        "occurred_at": _timestamp(row.occurred_at),
+        "recorded_at": timestamp_text(row.recorded_at),
+        "occurred_at": timestamp_text(row.occurred_at),
         "actor": row.actor,
         "action": row.action,
         "resource_type": row.resource_type,

@@ -6,6 +6,7 @@ alone. A tripwire test enforces this.
 """
 
 from warden.audit.events import AuditEvent, Outcome, Severity
+from warden.audit.query import AuditPage, AuditQuery, iter_events, list_events
 from warden.audit.recorder import (
     AuditChainConflict,
     AuditRecorder,
@@ -25,6 +26,8 @@ __all__ = [
     "ActionSpec",
     "AuditChainConflict",
     "AuditEvent",
+    "AuditPage",
+    "AuditQuery",
     "AuditRecorder",
     "AuditSink",
     "BrokenLink",
@@ -34,6 +37,8 @@ __all__ = [
     "Severity",
     "VerificationReport",
     "get_recorder",
+    "iter_events",
+    "list_events",
     "purge",
     "record_audit",
     "set_recorder",
