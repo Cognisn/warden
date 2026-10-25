@@ -6,6 +6,7 @@ alone. A tripwire test enforces this.
 """
 
 from warden.audit.events import AuditEvent, Outcome, Severity
+from warden.audit.grants import append_only_grants, grants_sql
 from warden.audit.query import AuditPage, AuditQuery, iter_events, list_events
 from warden.audit.recorder import (
     AuditChainConflict,
@@ -36,7 +37,9 @@ __all__ = [
     "RetentionError",
     "Severity",
     "VerificationReport",
+    "append_only_grants",
     "get_recorder",
+    "grants_sql",
     "iter_events",
     "list_events",
     "purge",
