@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `warden.identity`, the identity core. A product constructs one `Identity` with its configuration, database, key store and `PermissionRegistry`, calls `identity.install(app)`, and mounts `identity.auth_router()` under its auth prefix.
+- Users (`identity.users`) with the statuses `invited`, `active`, `suspended` and `deactivated`, and a sign-in method of `password_and_sso` or `sso_only`. Email addresses are unique regardless of case. Every change is audited.
+- Passwords hashed with Argon2id. A legacy `pbkdf2:sha256` hash is verified and replaced with an Argon2id hash on the next successful sign-in.
+- TOTP (RFC 6238) and recovery codes. A code is accepted at most once per time step and a recovery code at most once, even under concurrent requests. Codes must be six ASCII digits, so other scripts' digits are refused cleanly. An unconfirmed enrolment is never treated as MFA. With `identity.require_mfa`, a user without a confirmed enrolment must enrol before a session is issued.
+- Sessions: short-lived EdDSA access tokens signed through the key store with the key id in the header, and verified only with `KeyStore.verify`, so retired and revoked keys refuse live tokens. Refresh tokens rotate in families. Reusing a refresh token revokes its family, with the reason in the audit trail; the immediate predecessor presented within the configurable grace window is refused without revoking. Sessions have an absolute lifespan, and shortening it ends existing sessions that are already older than the new limit.
+- Session policy (token lifetimes, lifespan, reuse grace and MFA requirement) that an administrator can change at run time. Every replica caches it and drops the cache on a Postgres `NOTIFY` when it changes.
+- Roles and permissions. The product registers permissions and defines roles as named sets of them. Users hold several roles, each optionally expiring. The last active administrator cannot be demoted, suspended or deactivated, even by concurrent requests. Every change is audited.
+- FastAPI dependencies `require_user` and `require_permission`, with an optional resource-scope hook the product implements; a scoped check without a hook refuses.
+- Public routes: sign in, TOTP verify, recovery code, refresh, sign out, change password, and TOTP enrolment. Every authentication failure returns the same 401 response, and sign-in takes the same time for an unknown user, a wrong password and an SSO-only user. The specific reason is recorded only in the audit trail.
+- Migration `b7e14a2c9d30` creates `warden.users`, `totp_credentials`, `recovery_codes`, `mfa_challenges`, `sessions`, `refresh_tokens` and `role_assignments`. Reversible.
+- Runtime dependencies `argon2-cffi` and `fastapi`, both from the agreed set; `httpx` for tests only.
+
 ## [0.1.0a2] - 2026-10-25
 
 Second pre-release: the contract changes wave 1 builds on (audit forwarding from committed rows, retired and revoked signing keys), plus CI and CLI hardening.

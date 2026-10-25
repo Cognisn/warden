@@ -110,6 +110,8 @@ def test_the_scan_sees_the_patterns_it_guards() -> None:
     """The scan must actually find compiled patterns, or it guards nothing."""
     compiled = set().union(*(_compiled_names(m.tree) for m in modules()))
     assert {"_MOUNT_PREFIX", "_SD_ID", "_ACTION"} <= compiled
+    identity = {"_EMAIL", "_LEGACY", "_CODE", "_RECOVERY", "_PERMISSION", "_ROLE", "_TOKEN"}
+    assert identity | {"_B64URL", "_REFRESH"} <= compiled
 
 
 def test_dollar_detection() -> None:

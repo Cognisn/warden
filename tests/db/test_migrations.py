@@ -12,12 +12,14 @@ import psycopg
 import pytest
 
 from warden.db import SCHEMA, current_revision, downgrade, heads, migrate
+from warden.identity.schema import IDENTITY_TABLES
 
 pytestmark = pytest.mark.db
 
 WORKER = Path(__file__).with_name("migrate_worker.py")
 BASELINE = "5c2f9a1e7b04"
 BASELINE_TABLES = {"alembic_version", "audit_events", "signing_keys", "settings"}
+HEAD_TABLES = BASELINE_TABLES | IDENTITY_TABLES
 
 
 def _tables(dsn: str, schema: str) -> set[str]:
@@ -46,7 +48,7 @@ def test_chain_has_a_single_head() -> None:
 
 def test_migrate_creates_the_schema_and_reaches_head(dsn: str) -> None:
     migrate(dsn)
-    assert _tables(dsn, SCHEMA) == BASELINE_TABLES
+    assert _tables(dsn, SCHEMA) == HEAD_TABLES
     assert current_revision(dsn) == heads()[0]
 
 
@@ -70,7 +72,7 @@ def test_downgrade_to_base_and_upgrade_again(migrated_dsn: str) -> None:
     assert _tables(migrated_dsn, SCHEMA) == {"alembic_version"}
     assert current_revision(migrated_dsn) is None
     migrate(migrated_dsn)
-    assert _tables(migrated_dsn, SCHEMA) == BASELINE_TABLES
+    assert _tables(migrated_dsn, SCHEMA) == HEAD_TABLES
     assert current_revision(migrated_dsn) == heads()[0]
 
 

@@ -1,0 +1,542 @@
+"""``Identity``: the object a product constructs once and mounts.
+
+It ties together users, passwords, second factors, sessions, roles and the
+session policy, and implements the sign-in flows the public routes expose.
+
+Every refusal raises ``AuthenticationRefused`` after recording its reason in
+the audit trail; the routes turn every refusal into the same response.
+Where an outcome and its audit event must stand or fall together (a session
+issued, a credential used up), both are written in one transaction.
+"""
+
+from __future__ import annotations
+
+import time
+import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any, NoReturn
+from urllib.parse import urlsplit
+
+from fastapi import APIRouter, FastAPI
+from psycopg import AsyncConnection, sql
+
+from warden.audit import AuditEvent, get_recorder, record_audit
+from warden.config import WardenConfig
+from warden.db import Database, table
+from warden.identity import schema
+from warden.identity.actions import register_actions
+from warden.identity.dependencies import APP_STATE_KEY, Principal, ResourceScopeHook
+from warden.identity.errors import AuthenticationRefused, MfaError
+from warden.identity.http import SourceIp
+from warden.identity.mfa import CHALLENGE_TTL_SECONDS, Challenge, ChallengePurpose, Enrolment, Mfa
+from warden.identity.passwords import MAX_PASSWORD_LENGTH, PasswordHasher
+from warden.identity.policy import PolicyStore, SessionPolicy
+from warden.identity.roles import PermissionRegistry, Roles
+from warden.identity.tokens import NewSession, Sessions, TokenPair
+from warden.identity.users import SignInMethod, Users, UserStatus
+from warden.keys import KeyStore
+
+__all__ = ["ChallengeIssued", "Identity", "SignInResult"]
+
+_USERS = table(schema.USERS)
+# Longest identifier recorded in the audit trail for a refused sign-in.
+_MAX_IDENTIFIER = 320
+
+
+@dataclass(frozen=True, slots=True)
+class ChallengeIssued:
+    """The password was right; a second factor (or enrolment) is needed next."""
+
+    token: str
+    purpose: ChallengePurpose
+    expires_in: int
+
+
+@dataclass(frozen=True, slots=True)
+class SignInResult:
+    """Exactly one of ``tokens`` and ``challenge`` is set."""
+
+    tokens: TokenPair | None = None
+    challenge: ChallengeIssued | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _Account:
+    id: uuid.UUID
+    email: str
+    status: str
+    sign_in_method: str
+    password_hash: str | None
+
+
+class Identity:
+    """warden's identity subsystem for one deployment."""
+
+    def __init__(
+        self,
+        config: WardenConfig,
+        db: Database,
+        keys: KeyStore,
+        permissions: PermissionRegistry,
+        *,
+        hasher: PasswordHasher | None = None,
+        resource_scope: ResourceScopeHook | None = None,
+        policy_max_age: float = 30.0,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        register_actions(get_recorder().registry)
+        self.config = config
+        self.db = db
+        self.keys = keys
+        self.resource_scope = resource_scope
+        self.passwords = hasher or PasswordHasher()
+        self.roles = Roles(db, permissions)
+        self.users = Users(
+            db,
+            self.passwords,
+            self.roles,
+            password_min_length=config.identity.password_min_length,
+        )
+        self.policy = PolicyStore(
+            db, SessionPolicy.from_config(config.identity), max_age=policy_max_age
+        )
+        issuer = config.http.public_base_url
+        self.mfa = Mfa(db, issuer=urlsplit(issuer).hostname or issuer, clock=clock)
+        self.sessions = Sessions(db, keys, self.policy, issuer=issuer, clock=clock)
+
+    @property
+    def permissions(self) -> PermissionRegistry:
+        return self.roles.registry
+
+    def install(self, app: FastAPI) -> None:
+        """Make this Identity the one ``require_user`` and ``require_permission`` use."""
+        setattr(app.state, APP_STATE_KEY, self)
+
+    def auth_router(self) -> APIRouter:
+        """The public sign-in routes; mount under ``config.http.auth_prefix``."""
+        from warden.identity.routers.auth import build_auth_router
+
+        return build_auth_router(self)
+
+    # Sign-in
+
+    async def sign_in(
+        self, email: object, password: object, *, source_ip: SourceIp = None
+    ) -> SignInResult:
+        """Check a password. Every failure costs one password verification.
+
+        Unknown users, wrong passwords, SSO-only users and inactive users all
+        take the same path and get the same refusal; only the audit trail
+        records which it was.
+        """
+        if not isinstance(email, str) or not isinstance(password, str):
+            await self._refuse_sign_in("malformed", None, None, source_ip)
+        account = await self._account(email)
+        if account is None or account.password_hash is None:
+            await self.passwords.dummy_verify(password)
+            verification = None
+        else:
+            verification = await self.passwords.verify(account.password_hash, password)
+        if account is None:
+            await self._refuse_sign_in("unknown_user", None, email, source_ip)
+        if verification is None or not verification.ok:
+            await self._refuse_sign_in("wrong_password", account.id, email, source_ip)
+        if account.sign_in_method != SignInMethod.PASSWORD_AND_SSO:
+            await self._refuse_sign_in("sso_only", account.id, email, source_ip)
+        if account.status != UserStatus.ACTIVE:
+            await self._refuse_sign_in("user_inactive", account.id, email, source_ip)
+
+        new_hash = None
+        if verification.needs_rehash:
+            new_hash = await self.passwords.hash(password)
+        policy = await self.policy.current()
+        challenge: ChallengeIssued | None = None
+        new: NewSession | None = None
+        async with self.db.transaction() as tx:
+            rehashed = False
+            if new_hash is not None:
+                cur = await tx.execute(
+                    sql.SQL(
+                        "UPDATE {} SET password_hash = %s, updated_at = now()"
+                        " WHERE id = %s AND password_hash = %s"
+                    ).format(_USERS),
+                    (new_hash, account.id, account.password_hash),
+                )
+                rehashed = cur.rowcount == 1
+            purpose: ChallengePurpose | None = None
+            if await self.mfa.has_confirmed_totp(account.id, conn=tx):
+                purpose = "verify"
+            elif policy.require_mfa:
+                purpose = "enrol"
+            details: dict[str, Any] = {"rehashed": True} if rehashed else {}
+            if purpose is not None:
+                token = await self.mfa.create_challenge(tx, account.id, purpose)
+                challenge = ChallengeIssued(token, purpose, CHALLENGE_TTL_SECONDS)
+                await self._audit(
+                    tx, "identity.mfa.challenge", account.id, source_ip, purpose=purpose, **details
+                )
+            else:
+                new = await self.sessions.start(tx, account.id, ["pwd"], policy)
+                await self._audit(
+                    tx, "identity.sign_in", account.id, source_ip, amr=["pwd"], **details
+                )
+        if challenge is not None:
+            return SignInResult(challenge=challenge)
+        if new is None:
+            raise RuntimeError("sign-in produced neither a session nor a challenge")
+        return SignInResult(tokens=await self.sessions.finish(new))
+
+    async def verify_totp(
+        self, challenge: object, code: object, *, source_ip: SourceIp = None
+    ) -> TokenPair:
+        """Complete a sign-in with a TOTP code. A code is accepted once per step."""
+        return await self._second_factor(challenge, code, "totp", source_ip)
+
+    async def use_recovery_code(
+        self, challenge: object, code: object, *, source_ip: SourceIp = None
+    ) -> TokenPair:
+        """Complete a sign-in with a recovery code, using it up."""
+        return await self._second_factor(challenge, code, "recovery_code", source_ip)
+
+    async def _second_factor(
+        self, token: object, code: object, method: str, source_ip: SourceIp
+    ) -> TokenPair:
+        policy = await self.policy.current()
+        reason: str | None = None
+        opened: Challenge | None = None
+        new: NewSession | None = None
+        try:
+            async with self.db.transaction() as tx:
+                opened = await self.mfa.open_challenge(tx, token, "verify")
+                if opened is None:
+                    reason = "unknown_challenge"
+                else:
+                    reason = await self._account_refusal(tx, opened.user_id)
+                if reason is None and opened is not None:
+                    if method == "totp":
+                        ok = await self.mfa.claim_totp(tx, opened.user_id, code)
+                        amr = ["pwd", "otp"]
+                    else:
+                        ok = await self.mfa.consume_recovery_code(tx, opened.user_id, code)
+                        amr = ["pwd", "recovery_code"]
+                    if not ok:
+                        reason = "wrong_code"
+                    elif not await self.mfa.consume_challenge(tx, opened):
+                        # Another request completed this challenge first: undo the
+                        # claim, so a recovery code is not used up for nothing.
+                        reason = "challenge_used"
+                        raise _Rollback
+                    else:
+                        new = await self.sessions.start(tx, opened.user_id, amr, policy)
+                        await self._audit(
+                            tx, "identity.sign_in", opened.user_id, source_ip, amr=amr
+                        )
+        except _Rollback:
+            pass
+        if reason is not None or new is None:
+            if reason == "wrong_code" and opened is not None:
+                await self.mfa.record_failure(opened)
+            await self._refuse_second_factor(
+                reason or "unknown_challenge", opened, method, source_ip
+            )
+        return await self.sessions.finish(new)
+
+    # Enrolment
+
+    async def begin_enrolment(
+        self,
+        *,
+        challenge: object = None,
+        principal: Principal | None = None,
+        source_ip: SourceIp = None,
+    ) -> Enrolment:
+        """Start TOTP enrolment, for a signed-in user or under an enrolment challenge."""
+        user_id = await self._enrolling_user(challenge, principal, source_ip)
+        user = await self.users.get(user_id)
+        if user is None:
+            raise AuthenticationRefused("user_missing")
+        try:
+            return await self.mfa.begin_enrolment(user_id, account=user.email)
+        except MfaError:
+            if principal is not None:
+                raise  # a signed-in user is told; the routes answer 409
+            raise AuthenticationRefused("already_enrolled") from None
+
+    async def confirm_enrolment(
+        self,
+        code: object,
+        *,
+        challenge: object = None,
+        principal: Principal | None = None,
+        source_ip: SourceIp = None,
+    ) -> tuple[list[str], TokenPair | None]:
+        """Confirm enrolment. Under a challenge, also completes the sign-in."""
+        if principal is not None:
+            codes = await self.mfa.confirm_enrolment(principal.user_id, code)
+            if codes is None:
+                await self._refuse_second_factor("wrong_code", None, "enrolment", source_ip)
+            return codes, None
+        policy = await self.policy.current()
+        reason: str | None = None
+        opened: Challenge | None = None
+        new: NewSession | None = None
+        codes = None
+        try:
+            async with self.db.transaction() as tx:
+                opened = await self.mfa.open_challenge(tx, challenge, "enrol")
+                if opened is None:
+                    reason = "unknown_challenge"
+                else:
+                    reason = await self._account_refusal(tx, opened.user_id)
+                if reason is None and opened is not None:
+                    codes = await self.mfa.confirm_enrolment(opened.user_id, code, conn=tx)
+                    if codes is None:
+                        reason = "wrong_code"
+                    elif not await self.mfa.consume_challenge(tx, opened):
+                        reason = "challenge_used"
+                        raise _Rollback
+                    else:
+                        amr = ["pwd", "otp"]
+                        new = await self.sessions.start(tx, opened.user_id, amr, policy)
+                        await self._audit(
+                            tx, "identity.sign_in", opened.user_id, source_ip, amr=amr
+                        )
+        except _Rollback:
+            pass
+        if reason is not None or new is None or codes is None:
+            if reason == "wrong_code" and opened is not None:
+                await self.mfa.record_failure(opened)
+            await self._refuse_second_factor(
+                reason or "unknown_challenge", opened, "enrolment", source_ip
+            )
+        return codes, await self.sessions.finish(new)
+
+    async def _enrolling_user(
+        self, challenge: object, principal: Principal | None, source_ip: SourceIp
+    ) -> uuid.UUID:
+        if principal is not None:
+            return principal.user_id
+        async with self.db.transaction() as tx:
+            opened = await self.mfa.open_challenge(tx, challenge, "enrol")
+            reason = (
+                "unknown_challenge"
+                if opened is None
+                else await self._account_refusal(tx, opened.user_id)
+            )
+        if reason is not None or opened is None:
+            await self._refuse_second_factor(
+                reason or "unknown_challenge", opened, "enrolment", source_ip
+            )
+        return opened.user_id
+
+    # Sessions
+
+    async def refresh(self, refresh_token: object, *, source_ip: SourceIp = None) -> TokenPair:
+        return await self.sessions.rotate(refresh_token, source_ip=source_ip)
+
+    async def authenticate(self, access_token: object) -> Principal:
+        """The principal behind a live access token, or ``AuthenticationRefused``.
+
+        Checks the signature with a live key, then that the session is live
+        and the user active, then loads the user's current roles.
+        """
+        claims = await self.sessions.verify_access_token(access_token)
+        if claims is None:
+            raise AuthenticationRefused("invalid_token")
+        async with self.db.connection() as conn:
+            email = await self.sessions.live_email(conn, claims.user_id, claims.session_id)
+            if email is None:
+                raise AuthenticationRefused("session_not_live")
+            roles = await self.roles.roles_of(claims.user_id, conn=conn)
+        return Principal(
+            user_id=claims.user_id,
+            session_id=claims.session_id,
+            email=email,
+            roles=frozenset(roles),
+            permissions=self.permissions.permissions_for(roles),
+            amr=claims.amr,
+        )
+
+    async def sign_out(self, principal: Principal, *, source_ip: SourceIp = None) -> None:
+        async with self.db.transaction() as tx:
+            await self.sessions.revoke(principal.session_id, reason="sign_out", conn=tx)
+            await self._audit(
+                tx,
+                "identity.sign_out",
+                principal.user_id,
+                source_ip,
+                resource=("session", str(principal.session_id)),
+            )
+
+    async def change_password(
+        self,
+        principal: Principal,
+        current: object,
+        new_password: object,
+        *,
+        source_ip: SourceIp = None,
+    ) -> str | None:
+        """Change the signed-in user's password; None on success, else a refusal reason.
+
+        Ends the user's other sessions.
+        """
+        account = await self._account_by_id(principal.user_id)
+        reason: str | None = None
+        if (
+            account is None
+            or not isinstance(current, str)
+            or not isinstance(new_password, str)
+            or account.sign_in_method != SignInMethod.PASSWORD_AND_SSO
+            or account.password_hash is None
+        ):
+            if isinstance(current, str):
+                await self.passwords.dummy_verify(current)
+            reason = "not_permitted"
+        elif not (await self.passwords.verify(account.password_hash, current)).ok:
+            reason = "wrong_password"
+        elif not (
+            self.config.identity.password_min_length <= len(new_password) <= MAX_PASSWORD_LENGTH
+        ):
+            reason = "weak_password"
+        if reason is not None:
+            await record_audit(
+                AuditEvent(
+                    action="identity.password.changed",
+                    outcome="failure",
+                    actor=str(principal.user_id),
+                    resource_type="user",
+                    resource_id=str(principal.user_id),
+                    source_ip=source_ip,
+                    details={"reason": reason},
+                )
+            )
+            return reason
+        if account is None or not isinstance(new_password, str):  # narrowed above
+            return "not_permitted"
+        new_hash = await self.passwords.hash(new_password)
+        async with self.db.transaction() as tx:
+            await tx.execute(
+                sql.SQL(
+                    "UPDATE {} SET password_hash = %s, updated_at = now() WHERE id = %s"
+                ).format(_USERS),
+                (new_hash, account.id),
+            )
+            ended = await self.sessions.revoke_all(
+                account.id, reason="password_changed", keep=principal.session_id, conn=tx
+            )
+            await self._audit(
+                tx, "identity.password.changed", account.id, source_ip, other_sessions_ended=ended
+            )
+        return None
+
+    async def permissions_of(self, user_id: uuid.UUID) -> frozenset[str]:
+        return self.permissions.permissions_for(await self.roles.roles_of(user_id))
+
+    # Internals
+
+    async def _account(self, email: str) -> _Account | None:
+        if len(email) > _MAX_IDENTIFIER:
+            return None
+        async with self.db.connection() as conn:
+            cur = await conn.execute(
+                sql.SQL(
+                    "SELECT id, email, status, sign_in_method, password_hash FROM {}"
+                    " WHERE lower(email) = lower(%s)"
+                ).format(_USERS),
+                (email,),
+            )
+            row = await cur.fetchone()
+        return None if row is None else _Account(*row)
+
+    async def _account_by_id(self, user_id: uuid.UUID) -> _Account | None:
+        async with self.db.connection() as conn:
+            cur = await conn.execute(
+                sql.SQL(
+                    "SELECT id, email, status, sign_in_method, password_hash FROM {} WHERE id = %s"
+                ).format(_USERS),
+                (user_id,),
+            )
+            row = await cur.fetchone()
+        return None if row is None else _Account(*row)
+
+    async def _account_refusal(self, conn: AsyncConnection[Any], user_id: uuid.UUID) -> str | None:
+        """Why this user may not complete a password sign-in now, or None."""
+        cur = await conn.execute(
+            sql.SQL("SELECT status, sign_in_method FROM {} WHERE id = %s").format(_USERS),
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if row is None or row[0] != UserStatus.ACTIVE:
+            return "user_inactive"
+        if row[1] != SignInMethod.PASSWORD_AND_SSO:
+            return "sso_only"
+        return None
+
+    async def _audit(
+        self,
+        conn: AsyncConnection[Any],
+        action: str,
+        user_id: uuid.UUID,
+        source_ip: SourceIp,
+        *,
+        resource: tuple[str, str] | None = None,
+        **details: Any,
+    ) -> None:
+        resource_type, resource_id = resource or ("user", str(user_id))
+        await record_audit(
+            AuditEvent(
+                action=action,
+                outcome="success",
+                actor=str(user_id),
+                resource_type=resource_type,
+                resource_id=resource_id,
+                source_ip=source_ip,
+                details=details,
+            ),
+            conn=conn,
+        )
+
+    async def _refuse_sign_in(
+        self,
+        reason: str,
+        user_id: uuid.UUID | None,
+        identifier: str | None,
+        source_ip: SourceIp,
+    ) -> NoReturn:
+        details: dict[str, Any] = {"reason": reason}
+        if identifier is not None:
+            details["identifier"] = identifier[:_MAX_IDENTIFIER]
+        await record_audit(
+            AuditEvent(
+                action="identity.sign_in",
+                outcome="failure",
+                actor=None if user_id is None else str(user_id),
+                resource_type="user" if user_id is not None else None,
+                resource_id=None if user_id is None else str(user_id),
+                source_ip=source_ip,
+                details=details,
+            )
+        )
+        raise AuthenticationRefused(reason)
+
+    async def _refuse_second_factor(
+        self, reason: str, challenge: Challenge | None, method: str, source_ip: SourceIp
+    ) -> NoReturn:
+        user = None if challenge is None else str(challenge.user_id)
+        await record_audit(
+            AuditEvent(
+                action="identity.mfa.verify",
+                outcome="failure",
+                actor=user,
+                resource_type="user" if user else None,
+                resource_id=user,
+                source_ip=source_ip,
+                details={"reason": reason, "method": method},
+            )
+        )
+        raise AuthenticationRefused(reason)
+
+
+class _Rollback(Exception):
+    """Abandons a transaction whose refusal must also undo earlier writes."""
