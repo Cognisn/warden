@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Hash-chained audit rows. Each row stores `prev_hash` and a SHA-256 `row_hash` over a canonical serialisation of every stored column, specified in `docs/design/audit-chain.md`. `record_audit()` and `AuditRecorder.record()` keep their signatures. Appends take a transaction-scoped chain lock before the row's id is drawn and hold it until the transaction ends, so the chain never forks and row id order equals commit order. A record written inside a caller's transaction holds the lock until the caller commits, so keep such transactions short.
+- `warden.audit.AuditChainConflict`, raised instead of forking the chain when a REPEATABLE READ or SERIALIZABLE transaction's snapshot predates the chain head; retry the transaction.
+- `AuditRecorder(details_max_bytes=...)` enforces the details cap (default 8192 bytes, `audit.details_max_bytes`). Oversized details are replaced whole by the declared marker `{"warden.truncated": {"original_bytes": N}}`, and the key `warden.truncated` is reserved. Details holding a non-finite number or a NUL character are refused.
+- Migration `3f7a2c9d1b6e` adds `audit_events.recorded_at`, server time defaulting to `clock_timestamp()`, which chain order and retention follow instead of the caller-supplied `occurred_at`. It also makes the chain hashes required and 32 bytes long, adds a unique index on `prev_hash` so two rows cannot claim one predecessor, and constrains `outcome` to `success` or `failure`. Reversible. Upgrade note: the upgrade refuses to run while unchained rows written by 0.1.0a1 or 0.1.0a2 exist.
+
 ## [0.1.0a2] - 2026-10-25
 
 Second pre-release: the contract changes wave 1 builds on (audit forwarding from committed rows, retired and revoked signing keys), plus CI and CLI hardening.
