@@ -15,6 +15,7 @@ from warden.audit.recorder import (
 )
 from warden.audit.registry import SUMMARY_FIELDS, ActionRegistry, ActionSpec
 from warden.audit.sink import AuditSink
+from warden.audit.verify import BrokenLink, VerificationReport, verify_chain
 
 __all__ = [
     "SUMMARY_FIELDS",
@@ -24,9 +25,12 @@ __all__ = [
     "AuditEvent",
     "AuditRecorder",
     "AuditSink",
+    "BrokenLink",
     "Outcome",
     "Severity",
+    "VerificationReport",
     "get_recorder",
     "record_audit",
     "set_recorder",
+    "verify_chain",
 ]

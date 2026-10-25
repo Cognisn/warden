@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `warden.audit.AuditChainConflict`, raised instead of forking the chain when a REPEATABLE READ or SERIALIZABLE transaction's snapshot predates the chain head; retry the transaction.
 - `AuditRecorder(details_max_bytes=...)` enforces the details cap (default 8192 bytes, `audit.details_max_bytes`). Oversized details are replaced whole by the declared marker `{"warden.truncated": {"original_bytes": N}}`, and the key `warden.truncated` is reserved. Details holding a non-finite number or a NUL character are refused.
 - Migration `3f7a2c9d1b6e` adds `audit_events.recorded_at`, server time defaulting to `clock_timestamp()`, which chain order and retention follow instead of the caller-supplied `occurred_at`. It also makes the chain hashes required and 32 bytes long, adds a unique index on `prev_hash` so two rows cannot claim one predecessor, and constrains `outcome` to `success` or `failure`. Reversible. Upgrade note: the upgrade refuses to run while unchained rows written by 0.1.0a1 or 0.1.0a2 exist.
+- `warden.audit.verify_chain()` verifies the audit trail from one consistent snapshot. It returns a `VerificationReport` whose `broken` names the first broken link by row id and reason: altered contents, a broken link to the previous row, an unanchored first row, or a malformed, forged or revoked-key retention checkpoint. Checkpoint signatures are checked with `KeyStore.verify_historical()`, so routine key retirement leaves them valid.
 
 ## [0.1.0a2] - 2026-10-25
 
