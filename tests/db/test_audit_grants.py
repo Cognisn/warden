@@ -14,10 +14,10 @@ from urllib.parse import urlsplit, urlunsplit
 import psycopg
 import pytest
 from psycopg import sql
-from warden.audit.grants import grants_sql
 
 from chain_support import age, stored
 from warden.audit import ActionRegistry, AuditEvent, AuditRecorder, Severity
+from warden.audit.grants import grants_sql
 from warden.audit.retention import MIN_RETENTION_DAYS, purge
 from warden.db import Database
 from warden.keys import KeyStore
