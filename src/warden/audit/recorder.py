@@ -32,6 +32,7 @@ from psycopg import AsyncConnection, sql
 from psycopg.pq import TransactionStatus
 from psycopg.types.json import Jsonb
 
+from warden.audit.actions import PURGE_ACTION
 from warden.audit.chain import CHAIN_LOCK_KEY, GENESIS_HASH, ChainRow, cap_details, row_hash
 from warden.audit.events import AuditEvent
 from warden.audit.registry import ActionRegistry
@@ -109,7 +110,8 @@ class AuditRecorder:
         commits or rolls back with it; the chain lock is then held until the
         caller's transaction ends. The action must be registered. Details
         larger than ``details_max_bytes`` are replaced by the truncation
-        marker (``warden.audit.chain.cap_details``).
+        marker (``warden.audit.chain.cap_details``), except a retention
+        checkpoint's, which is never truncated.
 
         Sinks are offered the event only when warden owns the transaction
         (no ``conn``), and only after it commits. warden cannot see when a
@@ -117,7 +119,11 @@ class AuditRecorder:
         offered; the syslog forwarder picks it up from the table instead.
         """
         self._registry.get(event.action)
-        details = cap_details(event.details, max_bytes=self._details_max_bytes)
+        if event.action == PURGE_ACTION:
+            # A truncated checkpoint could not anchor the chain; warden writes it itself.
+            details = dict(event.details)
+        else:
+            details = cap_details(event.details, max_bytes=self._details_max_bytes)
         if details != event.details:
             event = event.model_copy(update={"details": details})
         begins = conn is None or conn.info.transaction_status == TransactionStatus.IDLE

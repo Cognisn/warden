@@ -78,8 +78,51 @@ The marker records the original size and none of the content, so a stored value 
 
 Verification (`warden audit verify`) recomputes every `row_hash` and checks every link. It names the first broken row when any column of a row is altered, a row is deleted or rows are reordered.
 
-A hash chain alone cannot stop someone who can write to the table from rewriting the whole chain from some point onwards, or from deleting rows at its tail. Retention checkpoints (section 6) are signed, which bounds the first. External anchoring of signed heads, an open design item, would bound the second.
+A hash chain alone cannot stop someone who can write to the table from rewriting the chain from some point onwards, or from deleting rows at its tail. Retention checkpoints (section 6) cannot be forged without warden's signing key, but such a person could still delete a checkpoint together with every row before it, and rewrite what remains as a fresh chain from genesis. Detecting that, and tail deletion, needs the chain head anchored outside the database, which is an open design item.
 
 ## 6. Retention checkpoints
 
-See the retention section of this document, added with the purge.
+**Code:** `src/warden/audit/retention.py`, `src/warden/audit/checkpoint.py`.
+
+A retention purge (`warden audit purge`) deletes the oldest part of the chain. It always deletes a **prefix by id**: rows `first_purged_id` to `through_id`, where every row in the prefix has a `recorded_at` older than the cutoff (now minus `audit.retention_days`). A row younger than the cutoff is never deleted, even if an older row follows it after a clock step. The retention period may not be shorter than the enforced minimum, `warden.audit.retention.MIN_RETENTION_DAYS`.
+
+Before deleting anything, the purge verifies the prefix. If the prefix is broken, the purge is refused and the refusal is recorded (action `warden.audit.purge`, outcome `failure`, details `{"reason": "chain_broken", "row_id": N}`). A purge can therefore never launder tampering by deleting the evidence.
+
+The purge then appends, in one transaction, a **checkpoint row** and deletes the prefix. The checkpoint row has action `warden.audit.purge` and outcome `success`, and is the purge's own audit record. Its details are:
+
+```json
+{"checkpoint": {
+  "version": 1,
+  "first_purged_id": 1, "through_id": 4000, "purged_rows": 3990,
+  "through_hash": "<hex row_hash of row through_id>",
+  "cutoff": "<ISO 8601 UTC>", "retention_days": 365,
+  "key_id": "<signing key id>",
+  "signature": "<base64url Ed25519 signature>"
+}}
+```
+
+The signature covers
+
+```
+"warden.audit.checkpoint.v1\n" || canonical_json(checkpoint without "signature")
+```
+
+and is made with warden's active Ed25519 key (design D14). Checkpoint details are never truncated.
+
+### Verifying across a checkpoint
+
+After a purge, the first surviving row's `prev_hash` is the `row_hash` of a row that no longer exists. Verification accepts it only if some checkpoint row satisfies all of the following:
+
+- its `through_hash` equals that `prev_hash`;
+- its `through_id` is lower than the first surviving row's id;
+- its signature verifies with `verify_historical`.
+
+`verify_historical` accepts a key retired by routine rotation, but never a revoked one. Every checkpoint row met during verification is checked the same way, whether or not it anchors the chain. The report distinguishes:
+
+- a malformed checkpoint;
+- a bad signature, from a forged checkpoint or one signed by an unknown key;
+- a checkpoint signed by a revoked key, so an operator can see which part of the trail lost its anchor.
+
+### Database roles
+
+Only the purge deletes audit rows. It must connect as a role holding `DELETE` on `audit_events`. The application's role holds only `INSERT` and `SELECT` there (`warden audit grants`, `warden.audit.grants`).

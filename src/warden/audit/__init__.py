@@ -14,10 +14,12 @@ from warden.audit.recorder import (
     set_recorder,
 )
 from warden.audit.registry import SUMMARY_FIELDS, ActionRegistry, ActionSpec
+from warden.audit.retention import MIN_RETENTION_DAYS, PurgeResult, RetentionError, purge
 from warden.audit.sink import AuditSink
 from warden.audit.verify import BrokenLink, VerificationReport, verify_chain
 
 __all__ = [
+    "MIN_RETENTION_DAYS",
     "SUMMARY_FIELDS",
     "ActionRegistry",
     "ActionSpec",
@@ -27,9 +29,12 @@ __all__ = [
     "AuditSink",
     "BrokenLink",
     "Outcome",
+    "PurgeResult",
+    "RetentionError",
     "Severity",
     "VerificationReport",
     "get_recorder",
+    "purge",
     "record_audit",
     "set_recorder",
     "verify_chain",
