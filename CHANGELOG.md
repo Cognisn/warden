@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - `warden.audit.syslog`: RFC 5424 formatting of committed audit rows. `format_message()` puts the row id in MSGID, the event in structured data under the configured SD-ID, and the action's summary in MSG; it replaces every control character (C0, DEL, C1 and the Unicode line separators) in every value, including MSG, before RFC 5424 escaping, and holds the whole message at or under `max_message_bytes`, cutting details first and marking the message `truncated="true"`. `SyslogSettings` carries the forwarder's settings, built from `SyslogConfig` with `SyslogSettings.from_config()`; the SD-ID has no default and refuses the documentation number 32473.
+- Syslog transports: UDP, and TCP or TLS with octet-counting (default) or LF framing, opened with `open_transport()`. TLS verifies the collector's certificate chain and host name, requires TLS 1.2 or later and fails closed, with no plaintext fallback and no setting that disables verification; trust anchors come from `tls_ca_pem` (for konfig's secrets store), `tls_ca_file` or the system store. Failures raise `TransportError` with a fixed category, never the underlying error text. A tripwire test fails if any module disables certificate or host name verification.
 
 ## [0.1.0a2] - 2026-10-25
 

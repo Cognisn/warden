@@ -228,7 +228,7 @@ def test_every_field_is_capped(registry: ActionRegistry) -> None:
         outcome="o" * 3000,
         source_ip="i" * 3000,
         key_id="k" * 3000,
-        row_hash=b"" * 3000,
+        row_hash=bytes([1]) * 3000,
     )
     message = format_message(record, _settings(max_message_bytes=1024), registry)
     assert len(message) <= 1024
