@@ -6,6 +6,6 @@ of them: ``import warden.audit`` runs this file first, so anything imported
 here would break audit's independence from identity.
 """
 
-__version__ = "0.1.0a2"
+__version__ = "0.1.0a3"
 
 __all__ = ["__version__"]

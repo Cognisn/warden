@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a3] - 2026-10-26
+
+Third pre-release: wave 1. The hash-chained audit trail with verification, retention, query, export and append-only grants; syslog forwarding from committed rows; and the identity core.
+
 ### Added
 
 - Hash-chained audit rows. Each row stores `prev_hash` and a SHA-256 `row_hash` over a canonical serialisation of every stored column, specified in `docs/design/audit-chain.md`. `record_audit()` and `AuditRecorder.record()` keep their signatures. Appends take a transaction-scoped chain lock before the row's id is drawn and hold it until the transaction ends, so the chain never forks and row id order equals commit order. A record written inside a caller's transaction holds the lock until the caller commits, so keep such transactions short.
