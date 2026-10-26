@@ -39,7 +39,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Sign-in throttling per identifier and source address: once a pair uses up its attempts in the window (default 10 in 15 minutes), further attempts get the same 401 without checking the password. Unknown identifiers are throttled alike, and only issuing a session clears the count. Expired records are removed by `identity.prune_sign_in_attempts()`.
 - `identity.running()`, an async context manager for the product's FastAPI lifespan that runs the session-policy listener.
 - A refused sign-in records the typed identifier in the audit trail only if it looks like an email address, so a password typed into the email field is never recorded.
-- Migration `b7e14a2c9d30` creates `warden.users`, `totp_credentials`, `recovery_codes`, `mfa_challenges`, `sessions`, `refresh_tokens`, `role_assignments` and `sign_in_attempts`. Reversible.
+- Migration `b7e14a2c9d30`, which follows `3f7a2c9d1b6e`, creates `warden.users`, `totp_credentials`, `recovery_codes`, `mfa_challenges`, `sessions`, `refresh_tokens`, `role_assignments` and `sign_in_attempts`. Reversible.
 - Runtime dependency `argon2-cffi` (MIT), from the agreed set, for password hashing.
 
 ### Changed

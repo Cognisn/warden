@@ -1,7 +1,7 @@
 """Identity core: users, TOTP, recovery codes, MFA challenges, sessions, roles, throttling.
 
 Revision ID: b7e14a2c9d30
-Revises: 8d41b7c3a9f2
+Revises: 3f7a2c9d1b6e
 Create Date: 2026-10-25
 
 Added by the identity core arc. The integration session re-chains
@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "b7e14a2c9d30"
-down_revision: str | None = "8d41b7c3a9f2"
+down_revision: str | None = "3f7a2c9d1b6e"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
