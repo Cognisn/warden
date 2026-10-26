@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import statistics
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -149,10 +150,16 @@ async def _stored_cursor(pool: Any) -> int | None:
 
 
 async def _raw_insert(conn: psycopg.AsyncConnection[Any], *, notify: bool = True) -> int:
-    """An audit row written outside the recorder, as a writer without the chain lock would."""
+    """An audit row written outside the recorder, as a writer without the chain lock would.
+
+    The schema requires 32-byte chain hashes and a unique ``prev_hash``; random
+    values satisfy it. The forwarder never verifies the chain, so the row being
+    unchained does not matter here.
+    """
     cur = await conn.execute(
-        "INSERT INTO warden.audit_events (action, outcome) VALUES ('product.export', 'success')"
-        " RETURNING id"
+        "INSERT INTO warden.audit_events (action, outcome, prev_hash, row_hash)"
+        " VALUES ('product.export', 'success', %s, %s) RETURNING id",
+        (os.urandom(32), os.urandom(32)),
     )
     row = await cur.fetchone()
     assert row is not None
