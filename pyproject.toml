@@ -32,6 +32,7 @@ dependencies = [
     "alembic>=1.13",
     "sqlalchemy>=2.0",
     "cryptography>=42",
+    "fastapi>=0.115",
 ]
 
 [project.optional-dependencies]
@@ -44,6 +45,7 @@ dev = [
     "mypy>=1.11",
     "ruff>=0.6",
     "packaging>=24",
+    "httpx>=0.27",
 ]
 
 [project.scripts]
