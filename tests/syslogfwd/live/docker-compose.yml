@@ -1,0 +1,17 @@
+# Live syslog collector for `pytest -m integration tests/syslogfwd/test_syslog_live.py`.
+#
+#   python tests/syslogfwd/live/make_certs.py <sandbox>/certs
+#   WARDEN_IT_SANDBOX=<sandbox> WARDEN_IT_SYSLOG_PORT=<udp/tcp port> WARDEN_IT_SYSLOG_TLS_PORT=<tls port> \
+#     docker compose -p <project> -f tests/syslogfwd/live/docker-compose.yml up -d --build
+#
+# Ports bind to 127.0.0.1 only.
+services:
+  rsyslog:
+    build: .
+    ports:
+      - "127.0.0.1:${WARDEN_IT_SYSLOG_PORT}:5514/udp"
+      - "127.0.0.1:${WARDEN_IT_SYSLOG_PORT}:5514/tcp"
+      - "127.0.0.1:${WARDEN_IT_SYSLOG_TLS_PORT}:6514/tcp"
+    volumes:
+      - "${WARDEN_IT_SANDBOX}/certs:/certs:ro"
+      - "${WARDEN_IT_SANDBOX}/syslog-out:/var/log/remote"
