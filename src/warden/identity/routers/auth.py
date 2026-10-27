@@ -28,7 +28,7 @@ from fastapi.responses import Response
 
 from warden.identity.dependencies import Principal, bearer_token
 from warden.identity.errors import AuthenticationRefused, MfaError
-from warden.identity.http import client_ip, json_response, read_object, refusal
+from warden.identity.http import SourceIp, client_ip, json_response, read_object, refusal
 from warden.identity.tokens import TokenPair
 
 if TYPE_CHECKING:
@@ -53,6 +53,10 @@ def _tokens(pair: TokenPair, **extra: Any) -> dict[str, Any]:
 
 def build_auth_router(identity: Identity) -> APIRouter:
     router = APIRouter(tags=["warden: sign-in"])
+    trusted_proxies = tuple(identity.config.audit.trusted_proxies)
+
+    def source(request: Request) -> SourceIp:
+        return client_ip(request, trusted_proxies)
 
     async def principal_or_none(request: Request) -> Principal | None:
         """The bearer's principal; None without a bearer; refused if the bearer is bad."""
@@ -68,7 +72,7 @@ def build_auth_router(identity: Identity) -> APIRouter:
         body = await read_object(request) or {}
         try:
             result = await identity.sign_in(
-                body.get("email"), body.get("password"), source_ip=client_ip(request)
+                body.get("email"), body.get("password"), source_ip=source(request)
             )
         except AuthenticationRefused:
             return refusal()
@@ -89,7 +93,7 @@ def build_auth_router(identity: Identity) -> APIRouter:
         body = await read_object(request) or {}
         try:
             pair = await identity.verify_totp(
-                body.get("challenge"), body.get("code"), source_ip=client_ip(request)
+                body.get("challenge"), body.get("code"), source_ip=source(request)
             )
         except AuthenticationRefused:
             return refusal()
@@ -100,7 +104,7 @@ def build_auth_router(identity: Identity) -> APIRouter:
         body = await read_object(request) or {}
         try:
             pair = await identity.use_recovery_code(
-                body.get("challenge"), body.get("code"), source_ip=client_ip(request)
+                body.get("challenge"), body.get("code"), source_ip=source(request)
             )
         except AuthenticationRefused:
             return refusal()
@@ -110,7 +114,7 @@ def build_auth_router(identity: Identity) -> APIRouter:
     async def refresh(request: Request) -> Response:
         body = await read_object(request) or {}
         try:
-            pair = await identity.refresh(body.get("refresh_token"), source_ip=client_ip(request))
+            pair = await identity.refresh(body.get("refresh_token"), source_ip=source(request))
         except AuthenticationRefused:
             return refusal()
         return json_response(_tokens(pair))
@@ -123,7 +127,7 @@ def build_auth_router(identity: Identity) -> APIRouter:
             return refusal()
         if principal is None:
             return refusal()
-        await identity.sign_out(principal, source_ip=client_ip(request))
+        await identity.sign_out(principal, source_ip=source(request))
         return Response(status_code=204, headers={"cache-control": "no-store"})
 
     @router.post("/password")
@@ -139,7 +143,7 @@ def build_auth_router(identity: Identity) -> APIRouter:
             principal,
             body.get("current_password"),
             body.get("new_password"),
-            source_ip=client_ip(request),
+            source_ip=source(request),
         )
         if reason == "weak_password":
             minimum = identity.config.identity.password_min_length
@@ -158,7 +162,7 @@ def build_auth_router(identity: Identity) -> APIRouter:
             enrolment = await identity.begin_enrolment(
                 challenge=body.get("challenge"),
                 principal=principal,
-                source_ip=client_ip(request),
+                source_ip=source(request),
             )
         except AuthenticationRefused:
             return refusal()
@@ -175,7 +179,7 @@ def build_auth_router(identity: Identity) -> APIRouter:
                 body.get("code"),
                 challenge=body.get("challenge"),
                 principal=principal,
-                source_ip=client_ip(request),
+                source_ip=source(request),
             )
         except AuthenticationRefused:
             return refusal()

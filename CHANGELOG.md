@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - A worktree recipe (`dev/worktree.json`) and sandbox Compose template (`dev/sandbox-compose.yml`) for development workstations: a development Postgres for manual checks, and the live syslog collector from `tests/syslogfwd/live` behind the `syslog` profile, each published on loopback only. Not part of the package.
 
+### Changed
+
+- Identity takes the client address from the trusted-proxy resolver (`warden.proxy.resolve_client_ip` with `audit.trusted_proxies`) for audit records and the sign-in throttle key. Behind a reverse proxy it previously saw the proxy's address, so clients sharing a proxy shared one throttle count per identifier. `X-Forwarded-For` from a peer that is not a trusted proxy is ignored. Upgrade note: `warden.identity.http.client_ip()` now takes the trusted proxy networks as a second argument.
+
 ## [0.1.0a3] - 2026-10-26
 
 Third pre-release: wave 1. The hash-chained audit trail with verification, retention, query, export and append-only grants; syslog forwarding from committed rows; and the identity core.
