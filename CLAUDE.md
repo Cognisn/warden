@@ -5,10 +5,16 @@
 - Issue tracker: github
 - GitHub repository: Cognisn/warden
 - Default branch: main
+- Release branch style: release/v<version>
+- Workstream branches: <kind>/<version>-<aspect>, cut from the release branch; the version never carries a `v` (for example `feat/0.1.0-sso`)
+- Merge to main: squash, only when the maintainer instructs it
+- Commit scopes: audit, identity, sso, syslog, keys, db, config, cli, docs, ci
+- Shared modules: src/warden/__init__.py, src/warden/config.py, src/warden/db/, src/warden/keys.py, and the migration chain
+- Worktree recipe: dev/worktree.json (Compose template dev/sandbox-compose.yml)
 
-This file is the project-level working agreement for warden. It sits under the global working agreement in `~/.claude/CLAUDE.md` on any Cognisn development workstation; where the two overlap, the global agreement governs process (branching, versioning, commit format, Kvasir protocols, tagging) and this file governs what is specific to warden. On a machine without the global agreement (for example a cloud session), the rules in "Minimum rules without the global agreement" still apply.
+This file is the project-level working agreement for warden. It sits under the workstation's global working agreement on any Cognisn development workstation; where the two overlap, the global agreement governs process (branching, versioning, commit format, worktrees, ports, Kvasir protocols, tagging) and this file governs what is specific to warden. On a machine without the global agreement (for example a cloud session), the rules in "Minimum rules without the global agreement" still apply.
 
-Project knowledge lives in the mwh-kvasir library `warden`; pass `library: "warden"` on every call. The active development plan, decisions, workstation runbook and per-arc briefings are there.
+Project knowledge lives in the mwh-kvasir library `warden`; pass `library: "warden"` on every call. The active development plan, decisions, runbooks and per-workstream briefings are there.
 
 ## What warden is
 
@@ -22,10 +28,10 @@ It is published publicly on PyPI as `cognisn-warden` (import name `warden`) unde
 
 Everything committed here is world-readable, including history.
 
-- Never commit client names, client data, internal hostnames, deployment addresses, credentials, keys, or anything received under NDA.
+- Never commit client names, client data, hostnames, internal paths, deployment addresses, credentials, keys, or anything received under NDA.
 - Never commit internal business, commercial or legal discussion. Record that in Kvasir.
 - Test fixtures are synthetic. Example domains use `example.com`, `example.org` and `example.net`; example addresses use the documentation ranges (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, `2001:db8::/32`).
-- A security defect is never discussed in a public issue or commit message before it is fixed and released. See `SECURITY.md`.
+- A security defect is never described in a commit message, public issue or issue title before it is fixed and released. Record it in Kvasir. See `SECURITY.md`.
 
 ## Relationship to other Cognisn products
 
@@ -67,33 +73,57 @@ These are enforced in code and tests, not left to configuration or documentation
 
 - Australian English in code comments, documentation, error messages and commit messages. Cyber Security is written as two words with capitals in prose.
 - No AI attribution anywhere: no `Co-Authored-By` trailers, no "generated with" footers, no session links in commits, code or documents.
-- Branching: `main` is production. Feature and fix branches (`feat/<slug>`, `fix/<slug>`, `docs/<slug>`, `refactor/<slug>`) are cut from `main`. Release branches are `release/vX.Y.Z`, and pre-release suffixes (`0.1.0a1`, `0.1.0b1`, `0.1.0rc1`) appear only on release branches.
-- Initial build (until `0.1.0` is released): `release/v0.1.0` is the integration line. Scope branches are named `feat/0.1.0-<slug>`, cut from `release/v0.1.0` and merged back into it by the integration session, which alone re-chains migrations and stamps pre-release versions. `release/v0.1.0` reaches `main` as a squash merge at `0.1.0`.
-- Conventional Commits: `type(scope): lower-case imperative summary`. Expected scopes: `audit`, `identity`, `sso`, `syslog`, `keys`, `db`, `config`, `cli`, `docs`, `ci`. A release stamp commit takes no scope: `chore: stamp 0.1.0a2`.
+- Branching follows the global agreement. `main` holds only the current released version. All work for a release happens on `release/v<version>`, through workstream branches `<kind>/<version>-<aspect>` cut from it and merged back by the integration session. Pre-release suffixes (`0.1.0a1`, `0.1.0b1`, `0.1.0rc1`) appear only on release branches. A release reaches `main` as a squash merge, only when the maintainer instructs it.
+- Conventional Commits: `type(scope): lower-case imperative summary`, with the scopes in the project configuration above. A release stamp commit takes no scope: `chore: stamp 0.1.0a4`.
 - Keep a Changelog: update `CHANGELOG.md` under `[Unreleased]` in the same commit as the change.
 - Versioning follows Semantic Versioning. Before 1.0 a minor version may break the public API, but every break is named in the changelog with an upgrade note.
 - The public API is whatever is importable from `warden` without a leading underscore, plus the HTTP contract and the database schema. Anything else is internal.
 - Python 3.12 or later (`requires-python = ">=3.12"`). Do not add compatibility code for older versions.
 - Type hints on every function; `mypy --strict` passes on `src/`.
-- A new runtime dependency needs the user's agreement in the session and a licence check. No copyleft licences in runtime dependencies.
+- A new runtime dependency needs the user's agreement in the session and a licence check (`scripts/licence_audit.py`). No copyleft licences in runtime dependencies.
+
+## Migrations across parallel workstreams
+
+- A workstream (arc) adds new migration files only, for its own tables. It never edits an existing migration and never relies on a revision number.
+- Two workstreams adding a migration from the same head produce two heads. The integration session alone re-chains (`down_revision`) at merge, to a single head.
+- Every migration is reversible, and its downgrade is tested.
+
+## Integration procedure
+
+The integration session works in the main clone on the release branch and merges workstreams one at a time:
+
+1. Check the workstream tip's CI conclusion (`gh run list --branch <branch> --limit 1`). Never merge or fast-forward a red tip.
+2. Merge with a merge commit (`git merge --no-ff`).
+3. Re-chain migrations; confirm a single head (`python -c "from warden.db import heads; print(heads())"`) and that `warden migrate` from empty reaches it.
+4. Run the full suite and every tripwire, then the checks (ruff, `mypy --strict`, licence audit), each as its own command.
+5. Stamp with the version script (`python scripts/bump_version.py 0.1.0aN`), update `CHANGELOG.md`, re-run the editable install, and re-run the suite. Commit as plain `chore: stamp 0.1.0aN`, as a separate step from the tests.
+6. Push the release branch and confirm CI on the pushed commit.
 
 ## Testing
 
 - Write the failing test first. The acceptance tests in section 5 of the design overview are written before the code that satisfies them.
-- Tests never call a live identity provider, mail service or syslog collector. Use stubs, recorded fixtures or containers; anything needing a live service is an integration test, marked as such.
+- Unit tests never call a live identity provider, mail service or syslog collector. Use stubs, recorded fixtures or containers; anything needing a live service is marked `integration` (skipped by default).
 - Database tests run against a real Postgres (testcontainers), never a mock, because the concurrency guarantees are properties of the database.
 - Concurrency claims are proven with genuinely concurrent requests (barriers, parallel tasks), not by reading the code.
-- A guard or tripwire test must be mutation-checked: show that it fails when the property it protects is removed. A guard that cannot fail is not a guard.
+- Every guard and tripwire test is mutation-checked: show that it fails when the property it protects is removed, and record the check in the session summary. A guard that cannot fail is not a guard.
 - Never weaken an assertion to make a test pass. Re-point it only when the behaviour has legitimately changed, and say so in the commit message.
 
-## Parallel sessions and worktrees
+## Worktrees and the sandbox
+
+`dev/worktree.json` is warden's worktree recipe for the workstation's shared worktree setup script, and `dev/sandbox-compose.yml` is its Compose template. Each worktree's ports come from its slot plus the recipe's offsets: `postgres`, `syslog` (UDP and TCP), `syslog_tls`, and `stub_idp` (reserved; no stub identity provider exists yet). Every port binds to `127.0.0.1`.
+
+- The test suites use testcontainers, not the sandbox. Testcontainers runs count against the workstation's heavy-workload cap; run a session's database suites one at a time.
+- The sandbox Postgres is for manual checks only.
+- The live syslog check (`tests/syslogfwd/test_syslog_live.py`, marked `integration`) runs against the sandbox's `syslog` service. Write the certificates with `python tests/syslogfwd/live/make_certs.py <sandbox>/certs`, start the stack with `--profile syslog` added to the sandbox's start command, and set `WARDEN_IT_SANDBOX`, `WARDEN_IT_SYSLOG_PORT` and `WARDEN_IT_SYSLOG_TLS_PORT` from the sandbox's ports. That check also starts a testcontainers Postgres.
+
+## Parallel sessions
 
 When a session is running in a git worktree (`git rev-parse --git-common-dir` resolves outside the working tree), assume other sessions are active concurrently and apply these rules:
 
 - Work only inside your own worktree, on your own branch. Never touch the main clone or another worktree.
 - The Kvasir library is always `warden`, never the worktree directory name, and every document submitted from a worktree session carries that branch's `branch-` tag.
 - Worktree sessions never bump the version and never create release stamp commits.
-- Shared modules (`src/warden/config.py`, `src/warden/db/`, `src/warden/keys.py`, and the migration chain) are edited only by the session assigned them in its kick-off prompt. Any other session that needs a change there records the need and stops.
+- The shared modules in the project configuration are edited only by the session assigned them in its kick-off prompt. Any other session that needs a change there records the need and stops.
 
 ## Minimum rules without the global agreement
 

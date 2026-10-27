@@ -1,0 +1,39 @@
+# Sandbox services for manual checks, generated per worktree from
+# dev/worktree.json by the workstation's worktree setup script, which fills in
+# the double-brace placeholders. The test suites do not use this file: database
+# tests start their own Postgres through testcontainers.
+name: {{COMPOSE_PROJECT}}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: {{COMPOSE_PROJECT}}-postgres
+    environment:
+      POSTGRES_USER: warden
+      POSTGRES_PASSWORD: warden-dev-only
+      POSTGRES_DB: warden
+    ports:
+      - "127.0.0.1:{{PORT_POSTGRES}}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  # The live syslog collector from tests/syslogfwd/live, for
+  # tests/syslogfwd/test_syslog_live.py. Started only with --profile syslog.
+  # Write its certificates first:
+  #   python tests/syslogfwd/live/make_certs.py {{SANDBOX_POSIX}}/certs
+  # Received messages land in {{SANDBOX_POSIX}}/syslog-out.
+  syslog:
+    profiles: ["syslog"]
+    build: {{WORKTREE_POSIX}}/tests/syslogfwd/live
+    image: {{COMPOSE_PROJECT}}-syslog
+    container_name: {{COMPOSE_PROJECT}}-syslog
+    ports:
+      - "127.0.0.1:{{PORT_SYSLOG}}:5514/udp"
+      - "127.0.0.1:{{PORT_SYSLOG}}:5514/tcp"
+      - "127.0.0.1:{{PORT_SYSLOG_TLS}}:6514/tcp"
+    volumes:
+      - "{{SANDBOX_POSIX}}/certs:/certs:ro"
+      - "{{SANDBOX_POSIX}}/syslog-out:/var/log/remote"
+
+volumes:
+  pgdata:

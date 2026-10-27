@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "python": {
+    "version": "3.12",
+    "install": ["-e", ".[dev]"],
+    "import_check": "warden"
+  },
+  "services": [
+    { "name": "syslog", "offset": 14 },
+    { "name": "syslog_tls", "offset": 15 },
+    { "name": "postgres", "offset": 32 },
+    { "name": "stub_idp", "offset": 81 }
+  ],
+  "compose_template": "dev/sandbox-compose.yml",
+  "notes": "The test suites use testcontainers, not the sandbox; the sandbox Postgres is for manual checks only. Testcontainers runs count against the workstation's heavy-workload cap. syslog (UDP and TCP) and syslog_tls serve the live syslog collector, started with --profile syslog after writing certificates with tests/syslogfwd/live/make_certs.py <sandbox>/certs. stub_idp is reserved for a stub identity provider; none exists yet."
+}
