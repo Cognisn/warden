@@ -11,10 +11,10 @@ throttling reveals nothing about which accounts exist. Only issuing a
 session clears the count: a correct password followed by an MFA challenge
 does not, or a password holder would get unlimited code guesses.
 
-The source address is only as good as the address identity is given.
-Behind a proxy it must be the client's, not the proxy's (audit core's
-trusted-proxy resolver, wired in at integration). A per-address ceiling
-across identifiers is left for then too.
+The source address is the client's, resolved through the trusted-proxy
+resolver (``audit.trusted_proxies``), so clients behind one proxy are
+throttled separately. A per-address ceiling across identifiers is not
+implemented.
 """
 
 from __future__ import annotations
@@ -24,8 +24,7 @@ from typing import Any
 
 from psycopg import AsyncConnection, sql
 
-from warden.db import Database, table
-from warden.identity import schema
+from warden.db import Database, schema, table
 from warden.identity.http import SourceIp
 
 __all__ = ["SignInThrottle"]

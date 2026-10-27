@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict
 
 from warden.audit.events import AuditEvent, Severity
 from warden.audit.recorder import AuditRecorder
-from warden.audit.registry import ActionRegistry
+from warden.audit.registry import ActionRegistry, register_warden_action
 from warden.audit.syslog.formatter import format_test_message
 from warden.audit.syslog.forwarder import ForwarderStatus, SyslogForwarder
 from warden.audit.syslog.transport import TransportError
@@ -46,7 +46,8 @@ class TestSendResult(BaseModel):
 
 def register_syslog_actions(registry: ActionRegistry) -> None:
     """Register the audit actions the syslog routes record. Safe to call more than once."""
-    registry.register(
+    register_warden_action(
+        registry,
         SYSLOG_TEST_ACTION,
         severity=Severity.NOTICE,
         summary="{actor} sent a syslog test message",

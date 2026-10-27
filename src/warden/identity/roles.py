@@ -20,8 +20,7 @@ from typing import Any
 from psycopg import AsyncConnection, sql
 
 from warden.audit import AuditEvent, record_audit
-from warden.db import Database, table
-from warden.identity import schema
+from warden.db import ADMINISTRATOR_LOCK_KEY, Database, schema, table
 
 __all__ = [
     "ADMINISTRATOR_LOCK_KEY",
@@ -35,12 +34,6 @@ __all__ = [
 
 _PERMISSION = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+")
 _ROLE = re.compile(r"[a-z][a-z0-9_-]{0,63}")
-
-# Transaction-scoped advisory lock taken by every change that could remove
-# an administrator, so two such changes never both pass the last-administrator
-# check. ASCII "warden" + 0x0101. (Belongs in ``warden.db.schema``; recorded
-# for the integration session.)
-ADMINISTRATOR_LOCK_KEY = 0x7761_7264_656E_0101
 
 _USERS = table(schema.USERS)
 _ASSIGNMENTS = table(schema.ROLE_ASSIGNMENTS)
@@ -208,7 +201,7 @@ class Roles:
             )
             await record_audit(
                 AuditEvent(
-                    action="identity.role.assigned",
+                    action="warden.identity.role.assigned",
                     outcome="success",
                     actor=actor,
                     resource_type="user",
@@ -251,7 +244,7 @@ class Roles:
                     await self.ensure_administrator_remains(tx)
                 await record_audit(
                     AuditEvent(
-                        action="identity.role.revoked",
+                        action="warden.identity.role.revoked",
                         outcome="success",
                         actor=actor,
                         resource_type="user",
@@ -263,7 +256,7 @@ class Roles:
         except LastAdministratorError:
             await record_audit(
                 AuditEvent(
-                    action="identity.role.revoked",
+                    action="warden.identity.role.revoked",
                     outcome="failure",
                     actor=actor,
                     resource_type="user",

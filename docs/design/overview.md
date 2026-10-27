@@ -1,7 +1,7 @@
 # warden: Design Overview
 
-**Status:** Design agreed, implementation not started.
-**Last updated:** 24 October 2026
+**Status:** Design agreed; implementation in progress (0.1.0 pre-releases).
+**Last updated:** 28 October 2026
 
 This is the design document the code is built against. Decisions recorded here are standing; see `CLAUDE.md` for how they are changed.
 
@@ -26,8 +26,8 @@ It is written from scratch. The design draws on the identity and audit implement
 | D9 | Mounting | The product mounts warden's routers under prefixes it chooses and supplies, through one typed configuration object read via konfig: public base URL, mount prefixes, and UI link templates (accept invitation, reset password, SSO completion). The SSO callback URI is derived, never configured separately. Missing or inconsistent values fail at start-up. |
 | D10 | Audit | warden includes an audit subsystem: a single recording funnel, product-defined events, syslog forwarding (RFC 5424 over UDP, TCP or TLS), filtering and export, and configurable retention. |
 | D11 | Audit independence | `warden.audit` imports nothing from `warden.identity`; identity records through audit. A product with its own authentication, or a worker process, can use audit alone. Enforced by an import tripwire test. |
-| D12 | Syslog naming | Structured data uses `warden@<PEN>` with Cognisn's IANA Private Enterprise Number, registered before the first release. The documentation number 32473 is never shipped. |
-| D13 | Tamper evidence | Hash-chained audit rows, append-only database grants, and signed checkpoint events written by every retention purge, with a verification route and CLI. |
+| D12 | Syslog naming | Structured data uses `warden@67382`, from Cognisn's IANA Private Enterprise Number 67382, as the default SD-ID. A product may set its own valid SD-ID. The documentation number 32473 is never shipped and is refused. |
+| D13 | Tamper evidence | Hash-chained audit rows, append-only database grants, and signed checkpoint events written by every retention purge, with a verification route and CLI. Signed head attestations can be exported (for example to a SIEM) and checked against the chain, so a database administrator cannot replace both the chain and its checkpoints unnoticed. |
 | D14 | Signing | Ed25519 keys held in konfig's secrets store, identified by key id, rotatable without signing users out. One key family signs session tokens and audit checkpoints. Public keys are published so other components can verify without being able to sign. |
 | D15 | Passwords | Argon2id (`argon2-cffi`) for new hashes. Legacy `pbkdf2:sha256` hashes are verified and transparently rehashed on the next successful sign-in, so migrating users need no forced reset. |
 | D16 | Database | warden's tables live in a dedicated `warden` Postgres schema with its own Alembic chain and version table (`warden.alembic_version`), applied by `warden migrate` or a single call from the product's migration step. At runtime the product passes in its existing psycopg 3 async pool, so a product write and its audit event can share a transaction. |
@@ -66,9 +66,9 @@ It is written from scratch. The design draws on the identity and audit implement
 **Audit (`warden.audit`)**
 
 - `record_audit()` as the only writer, with a tripwire test that fails on any second writer.
-- Product-registered event actions with severity and summary templates.
+- Product-registered event actions with severity and summary templates. Every action warden itself records lives under `warden.` (for example `warden.identity.sign_in`, `warden.audit.purge`); a product cannot register an action in that namespace.
 - Actor, action, resource, outcome, source IP and structured details on every event, with the details size-capped.
-- Trusted-proxy middleware for the real client IP: forwarded headers are believed only from configured proxy ranges, and the rightmost forwarded entry is used.
+- Trusted-proxy middleware for the real client IP: forwarded headers are believed only from configured proxy ranges, and the rightmost forwarded entry is used. Identity uses the same resolver for audit records and the sign-in throttle, so clients behind one proxy are throttled separately.
 - Syslog forwarding:
   - RFC 5424 over UDP, TCP or TLS, with octet-counting or LF framing
   - control characters neutralised in every value
@@ -77,7 +77,7 @@ It is written from scratch. The design draws on the identity and audit implement
   - secrets read through konfig
   - status and test-send routes
 - Filtering by time range, action, actor, resource and outcome, and export as CSV (with formula-injection escaping) or NDJSON. Exports are themselves audited.
-- Retention: a configurable period with an enforced minimum, a scheduled purge, and a signed checkpoint per purge.
+- Retention: by default the trail is kept for ever; a product may set a period of at least 365 days and run the purge on its own schedule (warden ships no scheduler). Each purge writes a signed checkpoint.
 - Tamper evidence: a per-row hash chain, plus a verification route and a `warden audit verify` CLI that report the first broken link.
 
 **Shared**
@@ -171,10 +171,19 @@ Each behaviour below is written as a failing test before the code that satisfies
 
 ## 8. Open items
 
-1. Register Cognisn's IANA Private Enterprise Number before the first release (D12).
-2. Licence choice pending legal confirmation (D8).
-3. Default retention period and minimum for the audit trail.
-4. Whether checkpoint signatures should also be anchored outside the database (for example, emitted to syslog), so a database administrator cannot replace both the chain and its checkpoints.
+1. Licence choice pending legal confirmation (D8).
+
+### Resolved
+
+| Item | Resolution |
+|---|---|
+| IANA Private Enterprise Number (D12) | Registered: 67382. The default SD-ID is `warden@67382`. |
+| Audit retention default and minimum | No default period: the trail is kept for ever unless the product sets `audit.retention_days`, which must be at least 365. |
+| Anchoring checkpoints outside the database | In 0.1.0: signed head attestation rows, a `warden audit anchor` command, and verification against anchors exported from a SIEM (D13). |
+| Syslog mutual TLS | Deferred past 0.1.0. TLS to the collector verifies the server and fails closed; client certificates are a later release. |
+| Audit action names | Every action warden registers lives under `warden.`; the registry refuses a product action there. |
+| Refused sign-in identifier | A refused sign-in records the typed identifier only when it is shaped like an email address, so a password typed into the wrong field is never recorded. |
+| Licence policy for dependencies | No strong copyleft (GPL, AGPL, SSPL, EUPL, OSL) in runtime dependencies. Weak copyleft (LGPL, MPL) only as a named, reviewed exception for an unmodified, separately installed package: psycopg (LGPL-3.0) and certifi (MPL-2.0). Enforced by `scripts/licence_audit.py`. |
 
 ## References
 

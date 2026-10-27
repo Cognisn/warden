@@ -18,10 +18,10 @@ async def test_create_and_look_up(identity: Identity, db: Database) -> None:
     assert not user.has_password
     assert await identity.users.get(user.id) == user
     assert await identity.users.get_by_email("alice@example.COM") == user
-    rows = await audit_rows(db, "identity.user.created")
+    rows = await audit_rows(db, "warden.identity.user.created")
     assert rows == [
         {
-            "action": "identity.user.created",
+            "action": "warden.identity.user.created",
             "outcome": "success",
             "actor": "admin-1",
             "resource_type": "user",
@@ -77,7 +77,7 @@ async def test_status_change_is_audited(
     user = await make_user()
     updated = await identity.users.set_status(user.id, UserStatus.SUSPENDED, actor="admin-1")
     assert updated.status is UserStatus.SUSPENDED
-    rows = await audit_rows(db, "identity.user.status_changed")
+    rows = await audit_rows(db, "warden.identity.user.status_changed")
     assert rows[-1]["details"] == {"from": "active", "to": "suspended"}
     assert rows[-1]["actor"] == "admin-1"
 
@@ -90,7 +90,7 @@ async def test_sign_in_method_change_is_audited(
         user.id, SignInMethod.SSO_ONLY, actor="admin-1"
     )
     assert updated.sign_in_method is SignInMethod.SSO_ONLY
-    rows = await audit_rows(db, "identity.user.sign_in_method_changed")
+    rows = await audit_rows(db, "warden.identity.user.sign_in_method_changed")
     assert rows[-1]["details"] == {"from": "password_and_sso", "to": "sso_only"}
 
 
@@ -112,7 +112,7 @@ async def test_the_last_administrator_cannot_be_suspended_or_deactivated(
         await identity.users.set_status(admin.id, status, actor="admin-2")
     current = await identity.users.get(admin.id)
     assert current is not None and current.status is UserStatus.ACTIVE
-    rows = await audit_rows(db, "identity.user.status_changed")
+    rows = await audit_rows(db, "warden.identity.user.status_changed")
     assert rows[-1]["outcome"] == "failure"
     assert rows[-1]["details"]["reason"] == "last_administrator"
 

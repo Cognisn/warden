@@ -11,9 +11,13 @@ Values of the form ``secret://<name>`` are resolved through the secrets
 store before validation. Error messages carry field names and fixed reasons
 only, never the offending value, because the value may be a secret.
 
-This module is shared: after the Foundation arc only the integration session
-edits it. Sections whose fields are marked provisional are declared now so
-later arcs can rely on them existing.
+Fields that name a konfig secret (``*_secret``) hold the secret's name, not
+its value; the component that needs the value reads it from the secrets
+store when it starts.
+
+This module is shared: only the session assigned it edits it. Fields marked
+"Provisional until 0.1.0b1" are declared now so the 0.1.0 workstreams can
+rely on them existing; their names and defaults may still change before b1.
 """
 
 from __future__ import annotations
@@ -37,6 +41,9 @@ from pydantic import (
 )
 
 __all__ = [
+    "COGNISN_PEN",
+    "DEFAULT_SD_ID",
+    "MIN_RETENTION_DAYS",
     "AuditConfig",
     "ConfigError",
     "DbConfig",
@@ -64,9 +71,36 @@ _SD_ID = re.compile(r"[A-Za-z0-9._-]{1,23}@([1-9][0-9]{0,8})")
 _DOMAIN = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
 _EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 _SCOPE = re.compile(r"[!#-\[\]-~]+")
+_PACKAGE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
+_API_KEY_PREFIX = re.compile(r"[a-z0-9_]{1,16}")
 
 # RFC 5612: the enterprise number reserved for documentation. Never shipped.
 DOCUMENTATION_PEN = "32473"
+
+# Cognisn's IANA Private Enterprise Number (design D12), and the structured-data
+# id warden's syslog messages carry unless the product sets its own.
+COGNISN_PEN = "67382"
+DEFAULT_SD_ID = f"warden@{COGNISN_PEN}"
+
+# The shortest audit retention period warden accepts, in days.
+MIN_RETENTION_DAYS = 365
+
+# id_token signature algorithms single sign-on may accept: asymmetric only, so
+# never ``none`` and never a shared-secret (HS*) algorithm.
+_ASYMMETRIC_ALGORITHMS = frozenset(
+    {
+        "RS256",
+        "RS384",
+        "RS512",
+        "PS256",
+        "PS384",
+        "PS512",
+        "ES256",
+        "ES384",
+        "ES512",
+        "EdDSA",
+    }
+)
 
 
 class ConfigError(Exception):
@@ -100,6 +134,13 @@ def _split_list(value: Any) -> Any:
     """Accept a comma-separated string (as the environment supplies) for a list field."""
     if isinstance(value, str):
         return [item.strip() for item in value.split(",") if item.strip()]
+    return value
+
+
+def _check_secret_name(value: str | None) -> str | None:
+    """A konfig secret name: letters, digits, '.', '_', '/' and '-'."""
+    if value is not None and _SECRET_NAME.fullmatch(value) is None:
+        raise ValueError("must be a secret name: letters, digits, '.', '_', '/' and '-'")
     return value
 
 
@@ -176,40 +217,84 @@ class KeysConfig(_Section):
 
 
 class AuditConfig(_Section):
-    """Audit trail settings. Provisional: the audit core arc settles the defaults."""
+    """Audit trail settings."""
 
     details_max_bytes: int = Field(default=8192, ge=256, le=1_048_576)
-    retention_days: int | None = Field(default=None, ge=1)
+    retention_days: int | None = None
+    """Days of audit trail ``warden audit purge`` keeps. None (the default) keeps
+    it for ever; any value set must be at least ``MIN_RETENTION_DAYS`` (365)."""
     trusted_proxies: Annotated[tuple[IPvAnyNetwork, ...], BeforeValidator(_split_list)] = ()
+    """Reverse proxies whose ``X-Forwarded-For`` is believed, for audit records
+    and identity's sign-in throttle alike."""
+
+    @field_validator("retention_days")
+    @classmethod
+    def _retention_minimum(cls, value: int | None) -> int | None:
+        if value is not None and value < MIN_RETENTION_DAYS:
+            raise ValueError(
+                f"must be at least {MIN_RETENTION_DAYS} days, or unset to keep the trail for ever"
+            )
+        return value
 
 
 class SyslogConfig(_Section):
-    """Syslog forwarding. Provisional: the syslog arc settles the transport fields."""
+    """Syslog forwarding: every field ``SyslogSettings`` needs.
+
+    ``SyslogSettings.from_config`` builds the forwarder's settings from this
+    section; the defaults here are the forwarder's own.
+    """
 
     enabled: bool = False
     host: str | None = None
     port: int | None = Field(default=None, ge=1, le=65535)
     transport: Literal["udp", "tcp", "tls"] = "tls"
     framing: Literal["octet-counting", "lf"] = "octet-counting"
-    sd_id: str | None = None
-    """Structured-data id, ``name@<PEN>``. No default is shipped (design D12)."""
-    app_name: str = "warden"
-    queue_size: int = Field(default=10_000, ge=1, le=1_000_000)
+    """Stream framing (RFC 6587); UDP always sends one message per datagram."""
+    sd_id: str = DEFAULT_SD_ID
+    """Structured-data id, ``name@<PEN>``; ``warden@67382`` unless the product
+    sets its own. The documentation number 32473 is refused."""
+    app_name: str = Field(default="warden", max_length=48)
+    hostname: str | None = Field(default=None, max_length=255)
+    """RFC 5424 HOSTNAME as the collector should see it; None uses this host's name."""
+    facility: int = Field(default=13, ge=0, le=23)
+    """RFC 5424 facility; 13 is "log audit"."""
+    max_message_bytes: int = Field(default=8192, ge=1024, le=65_000)
+    """Whole-message cap in bytes, framing excluded."""
     tls_ca_file: str | None = None
+    """CA bundle path; with neither this nor ``tls_ca_secret`` the system trust store is used."""
+    tls_ca_secret: str | None = None
+    """Name of the konfig secret holding the collector's CA certificates as PEM."""
     tls_server_name: str | None = None
+    """Name the collector's certificate must match; defaults to ``host``."""
+    start_from: Literal["latest", "beginning"] = "latest"
+    """With no stored cursor: start at the newest row, or replay the whole table."""
+    grace_seconds: float = Field(default=2.0, gt=0, le=300)
+    """How long a gap in row ids is held open for a late commit before it is passed."""
+    poll_seconds: float = Field(default=5.0, gt=0, le=3600)
+    """Safety poll interval, in case a notification is missed."""
+    standby_retry_seconds: float = Field(default=2.0, gt=0, le=3600)
+    """How often a standby replica tries to become the forwarder."""
+    batch_size: int = Field(default=500, ge=1, le=10_000)
+    connect_timeout_seconds: float = Field(default=10.0, gt=0, le=300)
+    send_timeout_seconds: float = Field(default=10.0, gt=0, le=300)
+    backoff_initial_seconds: float = Field(default=0.5, gt=0, le=300)
+    backoff_max_seconds: float = Field(default=30.0, gt=0, le=3600)
 
-    @field_validator("host", "app_name", "tls_ca_file", "tls_server_name")
+    @field_validator("host", "app_name", "hostname", "tls_ca_file", "tls_server_name")
     @classmethod
     def _printable(cls, value: str | None) -> str | None:
         if value is not None and _PRINTABLE.fullmatch(value) is None:
             raise ValueError("must not contain spaces or control characters")
         return value
 
+    @field_validator("tls_ca_secret")
+    @classmethod
+    def _secret_name(cls, value: str | None) -> str | None:
+        return _check_secret_name(value)
+
     @field_validator("sd_id")
     @classmethod
-    def _sd_id_shape(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
+    def _sd_id_shape(cls, value: str) -> str:
         match = _SD_ID.fullmatch(value)
         if match is None:
             raise ValueError("must be name@<enterprise number>")
@@ -217,9 +302,17 @@ class SyslogConfig(_Section):
             raise ValueError("must not use the documentation enterprise number 32473")
         return value
 
+    @model_validator(mode="after")
+    def _backoff_consistent(self) -> Self:
+        if self.backoff_max_seconds < self.backoff_initial_seconds:
+            raise _FieldProblems(
+                [(("backoff_max_seconds",), "must not be below backoff_initial_seconds")]
+            )
+        return self
+
 
 class IdentityConfig(_Section):
-    """Identity settings. Provisional: the identity arcs settle the defaults."""
+    """Identity settings."""
 
     enabled: bool = True
     access_token_ttl_seconds: int = Field(default=900, ge=60, le=3600)
@@ -231,9 +324,58 @@ class IdentityConfig(_Section):
     require_mfa: bool = True
     password_min_length: int = Field(default=12, ge=8, le=1024)
 
+    totp_issuer: str | None = Field(default=None, min_length=1, max_length=64)
+    """Issuer shown in authenticator apps; None uses the host of ``http.public_base_url``."""
+    mfa_challenge_ttl_seconds: int = Field(default=300, ge=30, le=1800)
+    """How long a second-factor or enrolment challenge stays usable."""
+    mfa_max_failures: int = Field(default=5, ge=1, le=20)
+    """Wrong codes a challenge tolerates before it is used up."""
+    recovery_code_count: int = Field(default=10, ge=5, le=50)
+    """Recovery codes issued at each enrolment."""
+    policy_cache_seconds: float = Field(default=30.0, gt=0, le=3600)
+    """Longest a replica serves its cached session policy without re-reading it,
+    should a change notification be missed."""
+    sign_in_attempt_limit: int = Field(default=10, ge=1, le=1000)
+    """Password attempts per identifier and client address in each window."""
+    sign_in_window_seconds: int = Field(default=900, ge=60, le=86_400)
+    """Length of the sign-in throttle window."""
+    totp_key_secret: str = "warden.totp-key"  # noqa: S105 - a secret name, not a secret
+    """Name of the konfig secret holding the TOTP encryption key."""
+    totp_previous_key_secret: str = "warden.totp-key.previous"  # noqa: S105
+    """Name of the konfig secret holding the previous TOTP key while rotating."""
+
+    api_key_prefix: str = "wdn_"
+    """Prefix on every API key, so a leaked key is recognisable. Provisional until 0.1.0b1."""
+    api_key_max_lifetime_days: int | None = Field(default=365, ge=1, le=3660)
+    """Longest lifetime an API key may be given; None allows keys that never
+    expire. Provisional until 0.1.0b1."""
+
+    @field_validator("totp_issuer")
+    @classmethod
+    def _issuer_shape(cls, value: str | None) -> str | None:
+        # Shown in an otpauth:// label, where ':' separates issuer and account.
+        if value is not None and (any(ch < " " or ch == "\x7f" for ch in value) or ":" in value):
+            raise ValueError("must not contain control characters or ':'")
+        return value
+
+    @field_validator("totp_key_secret", "totp_previous_key_secret")
+    @classmethod
+    def _secret_names(cls, value: str) -> str:
+        _check_secret_name(value)
+        return value
+
+    @field_validator("api_key_prefix")
+    @classmethod
+    def _api_key_prefix_shape(cls, value: str) -> str:
+        if _API_KEY_PREFIX.fullmatch(value) is None:
+            raise ValueError("must be 1 to 16 lower-case letters, digits or '_'")
+        return value
+
     @model_validator(mode="after")
     def _lifetimes_consistent(self) -> Self:
         problems: list[tuple[tuple[str, ...], str]] = []
+        if self.totp_key_secret == self.totp_previous_key_secret:
+            problems.append((("totp_previous_key_secret",), "must differ from totp_key_secret"))
         if self.access_token_ttl_seconds >= self.refresh_token_ttl_seconds:
             problems.append(
                 (("access_token_ttl_seconds",), "must be shorter than refresh_token_ttl_seconds")
@@ -248,12 +390,15 @@ class IdentityConfig(_Section):
 
 
 class SsoConfig(_Section):
-    """OIDC single sign-on. Provisional: the SSO arc settles the fields."""
+    """OIDC single sign-on. Provisional until 0.1.0b1: the single sign-on
+    workstream settles the fields."""
 
     enabled: bool = False
     issuer_url: str | None = None
     client_id: str | None = None
-    client_secret: SecretStr | None = None
+    client_secret: str | None = None
+    """Name of the konfig secret holding the OIDC client secret, never the
+    secret itself."""
     scopes: Annotated[tuple[str, ...], BeforeValidator(_split_list)] = (
         "openid",
         "email",
@@ -263,6 +408,49 @@ class SsoConfig(_Section):
     provider_preset: Literal["entra", "google", "okta", "generic"] = "generic"
     """A label for setup guidance only; it never changes behaviour."""
     discovery_cache_seconds: int = Field(default=3600, ge=60, le=86_400)
+    jwks_cache_seconds: int = Field(default=3600, ge=60, le=86_400)
+    """How long the provider's signing keys are cached. Provisional until 0.1.0b1."""
+    jwks_refetch_min_seconds: int = Field(default=60, ge=1, le=3600)
+    """Shortest interval between fetches forced by an unknown key id, so a
+    stream of forged tokens cannot hammer the provider. Provisional until 0.1.0b1."""
+    login_transaction_ttl_seconds: int = Field(default=600, ge=60, le=3600)
+    """How long a started sign-in (state, nonce, PKCE verifier) stays
+    usable. Provisional until 0.1.0b1."""
+    handoff_code_ttl_seconds: int = Field(default=60, ge=5, le=300)
+    """How long the single-use code handed to the product's completion
+    screen stays usable. Provisional until 0.1.0b1."""
+    allowed_algorithms: Annotated[tuple[str, ...], BeforeValidator(_split_list)] = (
+        "RS256",
+        "ES256",
+        "PS256",
+    )
+    """id_token signature algorithms accepted: asymmetric only, never ``none``
+    or HS*. Provisional until 0.1.0b1."""
+    clock_skew_seconds: int = Field(default=60, ge=0, le=300)
+    """Leeway when checking id_token times. Provisional until 0.1.0b1."""
+
+    @field_validator("client_secret")
+    @classmethod
+    def _client_secret_name(cls, value: str | None) -> str | None:
+        return _check_secret_name(value)
+
+    @field_validator("allowed_algorithms")
+    @classmethod
+    def _algorithms_asymmetric(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if not value:
+            raise ValueError("must name at least one algorithm")
+        if any(name not in _ASYMMETRIC_ALGORITHMS for name in value):
+            allowed = ", ".join(sorted(_ASYMMETRIC_ALGORITHMS))
+            raise ValueError(f"may contain only asymmetric algorithms: {allowed}")
+        return value
+
+    @model_validator(mode="after")
+    def _jwks_timings_consistent(self) -> Self:
+        if self.jwks_refetch_min_seconds > self.jwks_cache_seconds:
+            raise _FieldProblems(
+                [(("jwks_refetch_min_seconds",), "must not exceed jwks_cache_seconds")]
+            )
+        return self
 
     @field_validator("issuer_url")
     @classmethod
@@ -300,11 +488,24 @@ class SsoConfig(_Section):
 
 
 class MailConfig(_Section):
-    """Mail settings. The product implements the sender. Provisional."""
+    """Mail settings. The product implements the sender. Provisional until 0.1.0b1."""
 
     from_address: str | None = None
     from_name: str | None = None
     reply_to: str | None = None
+    template_package: str | None = None
+    """Importable package holding the product's message templates, which
+    replace warden's own template by template. Provisional until 0.1.0b1."""
+    subject_prefix: str | None = Field(default=None, max_length=64)
+    """Text put before every message subject, such as the product's name.
+    Provisional until 0.1.0b1."""
+
+    @field_validator("template_package")
+    @classmethod
+    def _package_shape(cls, value: str | None) -> str | None:
+        if value is not None and _PACKAGE.fullmatch(value) is None:
+            raise ValueError("must be a dotted Python package name")
+        return value
 
     @field_validator("from_address", "reply_to")
     @classmethod
@@ -313,7 +514,7 @@ class MailConfig(_Section):
             raise ValueError("must be an email address")
         return value
 
-    @field_validator("from_name")
+    @field_validator("from_name", "subject_prefix")
     @classmethod
     def _name_shape(cls, value: str | None) -> str | None:
         if value is not None and any(ch < " " or ch == "\x7f" for ch in value):
@@ -431,7 +632,7 @@ class WardenConfig(_Section):
                     (("http", "sso_completion_link"), "is required while sso is enabled")
                 )
         if self.syslog.enabled:
-            for name in ("host", "port", "sd_id"):
+            for name in ("host", "port"):
                 if getattr(self.syslog, name) is None:
                     problems.append((("syslog", name), "is required while syslog is enabled"))
         if problems:

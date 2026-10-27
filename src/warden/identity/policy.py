@@ -27,17 +27,11 @@ from psycopg.types.json import Jsonb
 
 from warden.audit import AuditEvent, record_audit
 from warden.config import IdentityConfig
-from warden.db import SETTINGS, Database, table
+from warden.db import POLICY_CHANNEL, POLICY_SETTING, SETTINGS, Database, table
 
 __all__ = ["POLICY_CHANNEL", "POLICY_SETTING", "PolicyError", "PolicyStore", "SessionPolicy"]
 
 logger = logging.getLogger(__name__)
-
-# ``warden.settings`` key holding the administrator's overrides, and the
-# channel a change is announced on. (Both belong in ``warden.db.schema``;
-# recorded for the integration session.)
-POLICY_SETTING = "identity.session_policy"
-POLICY_CHANNEL = "warden_identity_policy"
 
 _SETTINGS = table(SETTINGS)
 
@@ -169,7 +163,7 @@ class PolicyStore:
             await self._write(tx, overrides)
             await record_audit(
                 AuditEvent(
-                    action="identity.policy.changed",
+                    action="warden.identity.policy.changed",
                     outcome="success",
                     actor=actor,
                     resource_type="session_policy",
@@ -190,7 +184,7 @@ class PolicyStore:
             await tx.execute("SELECT pg_notify(%s, '')", (POLICY_CHANNEL,))
             await record_audit(
                 AuditEvent(
-                    action="identity.policy.changed",
+                    action="warden.identity.policy.changed",
                     outcome="success",
                     actor=actor,
                     resource_type="session_policy",

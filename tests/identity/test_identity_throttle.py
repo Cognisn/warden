@@ -66,7 +66,7 @@ async def test_attempts_beyond_the_limit_are_refused_even_with_the_right_passwor
     with pytest.raises(AuthenticationRefused) as refused:
         await throttled.sign_in("tina@example.com", PASSWORD, source_ip=IP_A)
     assert refused.value.reason == "throttled"
-    rows = await audit_rows(db, "identity.sign_in")
+    rows = await audit_rows(db, "warden.identity.sign_in")
     assert rows[-1]["details"] == {"reason": "throttled", "identifier": "tina@example.com"}
 
 

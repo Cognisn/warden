@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from warden.cli import MIGRATE_CONNECTION_FAILED, main
+from warden.cli import KEYS_CONNECTION_FAILED, MIGRATE_CONNECTION_FAILED, main
 
 # Port 1 on loopback refuses at once; no database is needed for this test.
 UNREACHABLE = "postgresql://warden:pw-not-a-secret@127.0.0.1:1/warden_example?connect_timeout=5"
@@ -26,7 +26,7 @@ class FakeSecrets:
         return None
 
     def set(self, key: str, value: str) -> None:
-        raise AssertionError("migrate must not write secrets")
+        raise AssertionError("an unreachable database must not lead to a secret write")
 
 
 def _settings(dsn: str) -> FakeSettings:
@@ -50,6 +50,18 @@ def test_migrate_connection_failure_prints_a_fixed_message_and_exits_1(
     assert main(["migrate"], settings=_settings(UNREACHABLE), secrets=FakeSecrets()) == 1
     captured = capsys.readouterr()
     assert captured.err == MIGRATE_CONNECTION_FAILED + "\n"
+    assert captured.out == ""
+    for fragment in ("pw-not-a-secret", "127.0.0.1", "warden_example", "Traceback"):
+        assert fragment not in captured.err
+
+
+def test_keys_rotate_connection_failure_prints_a_fixed_message_and_exits_1(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    argv = ["keys", "rotate"]
+    assert main(argv, settings=_settings(UNREACHABLE), secrets=FakeSecrets()) == 1
+    captured = capsys.readouterr()
+    assert captured.err == KEYS_CONNECTION_FAILED + "\n"
     assert captured.out == ""
     for fragment in ("pw-not-a-secret", "127.0.0.1", "warden_example", "Traceback"):
         assert fragment not in captured.err

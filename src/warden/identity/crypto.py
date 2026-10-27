@@ -83,18 +83,28 @@ class SecretBox:
             self._keys[self._previous_id] = AESGCM(previous)
 
     @classmethod
-    def from_secrets(cls, store: SecretStore) -> SecretBox:
-        """Read the keys from konfig's secrets store; fails if the current key is unusable."""
-        current = store.get(TOTP_KEY_SECRET)
+    def from_secrets(
+        cls,
+        store: SecretStore,
+        *,
+        current_name: str = TOTP_KEY_SECRET,
+        previous_name: str = TOTP_PREVIOUS_KEY_SECRET,
+    ) -> SecretBox:
+        """Read the keys from konfig's secrets store; fails if the current key is unusable.
+
+        The names default to ``identity.totp_key_secret`` and
+        ``identity.totp_previous_key_secret``'s defaults.
+        """
+        current = store.get(current_name)
         if not current:
             raise SecretKeyError(
-                f"secret {TOTP_KEY_SECRET} is not set; store a key from"
+                f"secret {current_name} is not set; store a key from"
                 " warden.identity.crypto.new_totp_key()"
             )
-        previous = store.get(TOTP_PREVIOUS_KEY_SECRET)
+        previous = store.get(previous_name)
         return cls(
-            _decode(TOTP_KEY_SECRET, current),
-            _decode(TOTP_PREVIOUS_KEY_SECRET, previous) if previous else None,
+            _decode(current_name, current),
+            _decode(previous_name, previous) if previous else None,
         )
 
     @property

@@ -260,11 +260,11 @@ def test_complete_sso_configuration_loads() -> None:
     assert "openid" in config.sso.scopes
 
 
-def test_syslog_enabled_requires_destination_and_sd_id() -> None:
+def test_syslog_enabled_requires_destination() -> None:
     with pytest.raises(ConfigError) as caught:
         _load(_tree(syslog__enabled=True))
     message = str(caught.value)
-    for field in ("warden.syslog.host", "warden.syslog.port", "warden.syslog.sd_id"):
+    for field in ("warden.syslog.host", "warden.syslog.port"):
         assert field in message
 
 
@@ -297,8 +297,8 @@ def test_syslog_sd_id_shape_is_validated(sd_id: str) -> None:
     assert "warden.syslog.sd_id" in str(caught.value)
 
 
-def test_syslog_has_no_default_sd_id() -> None:
-    assert _load(_tree()).syslog.sd_id is None
+def test_syslog_defaults_to_the_registered_sd_id() -> None:
+    assert _load(_tree()).syslog.sd_id == "warden@67382"
 
 
 def test_trusted_proxies_parse_as_networks() -> None:

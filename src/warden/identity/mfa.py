@@ -31,13 +31,14 @@ from typing import Any, Literal
 from psycopg import AsyncConnection, sql
 
 from warden.audit import AuditEvent, record_audit
-from warden.db import Database, table
-from warden.identity import schema, totp
+from warden.db import Database, schema, table
+from warden.identity import totp
 from warden.identity.crypto import SecretBox
 from warden.identity.errors import MfaError
 
 __all__ = ["CHALLENGE_TTL_SECONDS", "MAX_CHALLENGE_FAILURES", "Challenge", "Enrolment", "Mfa"]
 
+# Defaults of ``identity.mfa_challenge_ttl_seconds`` and ``identity.mfa_max_failures``.
 CHALLENGE_TTL_SECONDS = 300
 MAX_CHALLENGE_FAILURES = 5
 
@@ -51,9 +52,7 @@ _TOTP = table(schema.TOTP_CREDENTIALS)
 _CODES = table(schema.RECOVERY_CODES)
 _CHALLENGES = table(schema.MFA_CHALLENGES)
 
-_CHALLENGE_LIVE = sql.SQL(
-    "consumed_at IS NULL AND expires_at > now() AND failed_attempts < {}"
-).format(sql.Literal(MAX_CHALLENGE_FAILURES))
+_CHALLENGE_LIVE = sql.SQL("consumed_at IS NULL AND expires_at > now() AND failed_attempts < {}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,11 +86,17 @@ class Mfa:
         issuer: str,
         box: SecretBox,
         clock: Callable[[], float] = time.time,
+        challenge_ttl_seconds: int = CHALLENGE_TTL_SECONDS,
+        max_failures: int = MAX_CHALLENGE_FAILURES,
+        recovery_code_count: int = 10,
     ) -> None:
         self._db = db
         self._issuer = issuer
         self._box = box
         self._clock = clock
+        self.challenge_ttl_seconds = challenge_ttl_seconds
+        self._recovery_code_count = recovery_code_count
+        self._live = _CHALLENGE_LIVE.format(sql.Literal(max_failures))
 
     def _open(self, user_id: uuid.UUID, sealed: bytes, key_id: str) -> bytes | None:
         secret = self._box.open(key_id, bytes(sealed), context=user_id.bytes)
@@ -166,7 +171,7 @@ class Mfa:
                 raise MfaError(f"user {user_id} already has a confirmed TOTP enrolment")
             await record_audit(
                 AuditEvent(
-                    action="identity.mfa.enrolment_started",
+                    action="warden.identity.mfa.enrolment_started",
                     outcome="success",
                     actor=actor or str(user_id),
                     resource_type="user",
@@ -218,7 +223,7 @@ class Mfa:
             codes = await self._replace_recovery_codes(tx, user_id)
             await record_audit(
                 AuditEvent(
-                    action="identity.mfa.enrolled",
+                    action="warden.identity.mfa.enrolled",
                     outcome="success",
                     actor=actor or str(user_id),
                     resource_type="user",
@@ -231,7 +236,7 @@ class Mfa:
     async def _replace_recovery_codes(
         self, tx: AsyncConnection[Any], user_id: uuid.UUID
     ) -> list[str]:
-        codes = totp.generate_recovery_codes()
+        codes = totp.generate_recovery_codes(self._recovery_code_count)
         await tx.execute(sql.SQL("DELETE FROM {} WHERE user_id = %s").format(_CODES), (user_id,))
         async with tx.cursor() as cur:
             await cur.executemany(
@@ -300,7 +305,7 @@ class Mfa:
                 "INSERT INTO {} (token_hash, user_id, purpose, expires_at)"
                 " VALUES (%s, %s, %s, now() + %s * interval '1 second')"
             ).format(_CHALLENGES),
-            (_hash_token(token), user_id, purpose, CHALLENGE_TTL_SECONDS),
+            (_hash_token(token), user_id, purpose, self.challenge_ttl_seconds),
         )
         return token
 
@@ -313,7 +318,7 @@ class Mfa:
         cur = await conn.execute(
             sql.SQL(
                 "SELECT id, user_id, purpose FROM {} WHERE token_hash = %s AND purpose = %s AND {}"
-            ).format(_CHALLENGES, _CHALLENGE_LIVE),
+            ).format(_CHALLENGES, self._live),
             (_hash_token(token), purpose),
         )
         row = await cur.fetchone()
@@ -323,7 +328,7 @@ class Mfa:
         """Use up a challenge; False if another request already did."""
         cur = await conn.execute(
             sql.SQL("UPDATE {} SET consumed_at = now() WHERE id = %s AND {} RETURNING 1").format(
-                _CHALLENGES, _CHALLENGE_LIVE
+                _CHALLENGES, self._live
             ),
             (challenge.id,),
         )

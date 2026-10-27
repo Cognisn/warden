@@ -33,6 +33,10 @@ from typing import Any
 
 from pydantic import JsonValue
 
+# Serialises appends to the chain; defined with the other lock keys and
+# still importable from here.
+from warden.db.schema import CHAIN_LOCK_KEY
+
 __all__ = [
     "CHAIN_LOCK_KEY",
     "GENESIS_HASH",
@@ -44,12 +48,6 @@ __all__ = [
     "row_hash",
     "timestamp_text",
 ]
-
-# Transaction-scoped advisory lock serialising appends to the chain. It is
-# taken before a row's id is drawn and held until the transaction ends, so
-# rows commit in id order. ASCII "warden" + 0x0003. Belongs in
-# ``warden.db.schema`` beside the other lock keys; see the session notes.
-CHAIN_LOCK_KEY = 0x7761_7264_656E_0003
 
 GENESIS_HASH = bytes(32)
 

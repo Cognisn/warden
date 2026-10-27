@@ -38,10 +38,10 @@ async def test_update_is_stored_and_audited(db: Database, config: WardenConfig) 
     updated = await store.update(actor="admin-1", require_mfa=True, refresh_reuse_grace_seconds=0)
     assert updated.require_mfa and updated.refresh_reuse_grace_seconds == 0
     assert await _store(db, config).current() == updated
-    rows = await audit_rows(db, "identity.policy.changed")
+    rows = await audit_rows(db, "warden.identity.policy.changed")
     assert rows == [
         {
-            "action": "identity.policy.changed",
+            "action": "warden.identity.policy.changed",
             "outcome": "success",
             "actor": "admin-1",
             "resource_type": "session_policy",

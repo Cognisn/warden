@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import ipaddress
 import json
+from collections.abc import Sequence
 from typing import Any
 
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
+
+from warden.proxy import Network, resolve_client_ip
 
 __all__ = [
     "FORBIDDEN_BODY",
@@ -75,15 +78,22 @@ async def read_object(request: Request) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def client_ip(request: Request) -> SourceIp:
-    """The address recorded in audit events.
+def client_ip(request: Request, trusted_proxies: Sequence[Network]) -> SourceIp:
+    """The client address, for audit events and the sign-in throttle key.
 
-    The peer address for now. Audit core's trusted-proxy middleware decides
-    the real client address; identity switches to it at integration.
+    Resolved by ``warden.proxy.resolve_client_ip``: ``X-Forwarded-For`` is
+    believed only when the peer is one of ``trusted_proxies``
+    (``audit.trusted_proxies``). Resolving again after
+    ``TrustedProxyMiddleware`` gives the same address, so a product may use
+    both.
     """
     if request.client is None:
         return None
+    forwarded = request.headers.getlist("x-forwarded-for")
+    resolved = resolve_client_ip(request.client.host, forwarded, trusted_proxies)
+    if resolved is None:
+        return None
     try:
-        return ipaddress.ip_address(request.client.host)
+        return ipaddress.ip_address(resolved)
     except ValueError:
         return None

@@ -64,7 +64,7 @@ async def test_totp_completes_sign_in(
     user, secret = await _enrolled(identity, make_user)
     result = await identity.verify_totp(await _challenge(identity, user), await _fresh_code(secret))
     assert isinstance(result, TokenPair)
-    rows = await audit_rows(db, "identity.sign_in")
+    rows = await audit_rows(db, "warden.identity.sign_in")
     assert rows[-1]["outcome"] == "success"
     assert rows[-1]["details"]["amr"] == ["pwd", "otp"]
 
@@ -238,7 +238,7 @@ async def test_recovery_code_completes_sign_in_once(
     assert isinstance(result, TokenPair)
     with pytest.raises(AuthenticationRefused):
         await identity.use_recovery_code(await _challenge(identity, user), codes[3])
-    rows = await audit_rows(db, "identity.sign_in")
+    rows = await audit_rows(db, "warden.identity.sign_in")
     assert rows[-1]["details"]["amr"] == ["pwd", "recovery_code"]
 
 
@@ -278,7 +278,7 @@ async def test_verify_issues_nothing_to_a_user_suspended_after_the_password_step
     await identity.users.set_status(user.id, UserStatus.SUSPENDED, actor="t")
     with pytest.raises(AuthenticationRefused):
         await identity.verify_totp(challenge, await _fresh_code(secret))
-    rows = await audit_rows(db, "identity.mfa.verify")
+    rows = await audit_rows(db, "warden.identity.mfa.verify")
     assert rows[-1]["details"]["reason"] == "user_inactive"
 
 
@@ -352,8 +352,8 @@ async def test_confirmation_is_audited(
 ) -> None:
     user, _ = await _enrolled(identity, make_user)
     actions = [r["action"] for r in await audit_rows(db) if r["resource_id"] == str(user.id)]
-    assert "identity.mfa.enrolment_started" in actions
-    assert "identity.mfa.enrolled" in actions
+    assert "warden.identity.mfa.enrolment_started" in actions
+    assert "warden.identity.mfa.enrolled" in actions
 
 
 async def test_forced_enrolment_over_http(
@@ -435,5 +435,5 @@ async def test_a_signed_in_users_wrong_enrolment_code_is_a_400_not_a_sign_out(
         )
         assert response.status_code == 400
         assert response.content == b'{"detail":"code not accepted"}'
-    rows = await audit_rows(db, "identity.mfa.verify")
+    rows = await audit_rows(db, "warden.identity.mfa.verify")
     assert rows[-1]["details"] == {"reason": "wrong_code", "method": "enrolment"}

@@ -1,25 +1,30 @@
-"""Names of identity's tables in the ``warden`` schema."""
+"""Names of identity's tables, now defined in ``warden.db.schema``.
+
+Kept so existing imports keep working; new code imports from ``warden.db``.
+"""
 
 from __future__ import annotations
 
-USERS = "users"
-TOTP_CREDENTIALS = "totp_credentials"
-RECOVERY_CODES = "recovery_codes"
-MFA_CHALLENGES = "mfa_challenges"
-SESSIONS = "sessions"
-REFRESH_TOKENS = "refresh_tokens"
-ROLE_ASSIGNMENTS = "role_assignments"
-SIGN_IN_ATTEMPTS = "sign_in_attempts"
-
-IDENTITY_TABLES = frozenset(
-    {
-        USERS,
-        TOTP_CREDENTIALS,
-        RECOVERY_CODES,
-        MFA_CHALLENGES,
-        SESSIONS,
-        REFRESH_TOKENS,
-        ROLE_ASSIGNMENTS,
-        SIGN_IN_ATTEMPTS,
-    }
+from warden.db.schema import (
+    IDENTITY_TABLES,
+    MFA_CHALLENGES,
+    RECOVERY_CODES,
+    REFRESH_TOKENS,
+    ROLE_ASSIGNMENTS,
+    SESSIONS,
+    SIGN_IN_ATTEMPTS,
+    TOTP_CREDENTIALS,
+    USERS,
 )
+
+__all__ = [
+    "IDENTITY_TABLES",
+    "MFA_CHALLENGES",
+    "RECOVERY_CODES",
+    "REFRESH_TOKENS",
+    "ROLE_ASSIGNMENTS",
+    "SESSIONS",
+    "SIGN_IN_ATTEMPTS",
+    "TOTP_CREDENTIALS",
+    "USERS",
+]
