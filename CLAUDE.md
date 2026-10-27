@@ -80,7 +80,7 @@ These are enforced in code and tests, not left to configuration or documentation
 - The public API is whatever is importable from `warden` without a leading underscore, plus the HTTP contract and the database schema. Anything else is internal.
 - Python 3.12 or later (`requires-python = ">=3.12"`). Do not add compatibility code for older versions.
 - Type hints on every function; `mypy --strict` passes on `src/`.
-- A new runtime dependency needs the user's agreement in the session and a licence check (`scripts/licence_audit.py`). No copyleft licences in runtime dependencies.
+- A new runtime dependency needs the user's agreement in the session and a licence check (`scripts/licence_audit.py`). No strong copyleft (GPL, AGPL, SSPL, EUPL, OSL) in runtime dependencies; weak copyleft (LGPL, MPL) only as a named, reviewed exception for an unmodified, separately installed package. The named exceptions, each with its reason, are listed in `scripts/licence_audit.py`: psycopg (LGPL-3.0) and certifi (MPL-2.0).
 
 ## Migrations across parallel workstreams
 

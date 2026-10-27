@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - Identity takes the client address from the trusted-proxy resolver (`warden.proxy.resolve_client_ip` with `audit.trusted_proxies`) for audit records and the sign-in throttle key. Behind a reverse proxy it previously saw the proxy's address, so clients sharing a proxy shared one throttle count per identifier. `X-Forwarded-For` from a peer that is not a trusted proxy is ignored. Upgrade note: `warden.identity.http.client_ip()` now takes the trusted proxy networks as a second argument.
+- Licence policy: no strong copyleft (GPL, AGPL, SSPL, EUPL, OSL) in runtime dependencies, even as a named exception; weak copyleft (LGPL, MPL) only as a named, reviewed exception for an unmodified, separately installed package. `scripts/licence_audit.py` names psycopg (LGPL-3.0) and certifi (MPL-2.0, which httpx needs for single sign-on), each with its reason, and refuses any other copyleft package.
 
 ### Fixed
 

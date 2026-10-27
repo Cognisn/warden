@@ -1,12 +1,18 @@
-"""Fail if any runtime dependency of warden carries a copyleft licence.
+"""Enforce warden's licence policy on its runtime dependencies.
 
     python scripts/licence_audit.py
 
 Walks the installed runtime dependency tree of ``cognisn-warden`` (extras
 excluded, environment markers evaluated for this interpreter) and reads each
-distribution's licence metadata. A dependency is refused if it is copyleft
-(GPL, AGPL, LGPL, MPL, EUPL, EPL, CDDL, SSPL, OSL) or declares no licence.
-A dual licence passes if any alternative is permissive.
+distribution's licence metadata. The policy:
+
+- No strong copyleft (GPL, AGPL, SSPL, EUPL, OSL) in a runtime dependency,
+  ever. Naming such a package as an exception does not admit it.
+- Weak copyleft (LGPL, MPL, EPL, CDDL) only as a named, reviewed exception
+  for a package used unmodified and installed separately.
+- A package that declares no licence is refused unless it is named.
+
+For a dual licence the most permissive alternative counts.
 
 Exceptions are listed below, each with the reason it was agreed. Adding one
 needs explicit agreement and a licence check, recorded in the project's
@@ -29,16 +35,28 @@ ROOT = "cognisn-warden"
 EXCEPTIONS: dict[str, str] = {
     "psycopg": (
         "LGPL-3.0: agreed in the 0.1.0 development plan (section 7) as warden's database"
-        " driver; used unmodified as a separately installed library"
+        " driver; used unmodified as a separately installed package"
+    ),
+    "certifi": (
+        "MPL-2.0: the CA bundle httpx depends on, needed by single sign-on; agreed under"
+        " the licence policy of 27 October 2026; used unmodified as a separately installed"
+        " package"
     ),
 }
 
-_COPYLEFT = re.compile(
-    r"\b(?:A?GPL|LGPL|GPLv\d|MPL|EUPL|EPL|CDDL|SSPL|OSL)\b"
-    r"|GNU (?:Affero |Lesser |Library )?General Public"
-    r"|Mozilla Public|Eclipse Public|European Union Public|Common Development and Distribution",
+_STRONG = re.compile(
+    r"\b(?:A?GPL|GPLv\d|SSPL|EUPL|OSL)\b"
+    r"|GNU (?:Affero )?General Public|Server Side Public|European Union Public"
+    r"|Open Software Licen[cs]e",
     re.IGNORECASE,
 )
+_WEAK = re.compile(
+    r"\b(?:LGPL|LGPLv\d|MPL|EPL|CDDL)\b"
+    r"|GNU (?:Lesser|Library)|Mozilla Public|Eclipse Public"
+    r"|Common Development and Distribution",
+    re.IGNORECASE,
+)
+_RANK = {"permissive": 0, "weak copyleft": 1, "strong copyleft": 2}
 _UNKNOWN = {"", "unknown", "none", "license :: osi approved"}
 
 
@@ -56,19 +74,28 @@ class Report:
     excepted: list[Package] = field(default_factory=list)
 
 
+def _one(text: str) -> str:
+    if _STRONG.search(text):
+        return "strong copyleft"
+    if _WEAK.search(text):
+        return "weak copyleft"
+    return "permissive"
+
+
 def classify(licences: list[str]) -> str:
-    """``permissive``, ``copyleft`` or ``unknown`` for a distribution's licence strings."""
+    """``permissive``, ``weak copyleft``, ``strong copyleft`` or ``unknown``.
+
+    Each licence string is judged by its most permissive ``OR`` alternative;
+    the distribution by its least permissive string.
+    """
     known = [text.strip() for text in licences if text.strip().lower() not in _UNKNOWN]
     if not known:
         return "unknown"
-    for text in known:
-        alternatives = re.split(r"\s+OR\s+", text)
-        if len(alternatives) > 1:
-            if all(_COPYLEFT.search(alt) for alt in alternatives):
-                return "copyleft"
-        elif _COPYLEFT.search(text):
-            return "copyleft"
-    return "permissive"
+    verdicts = [
+        min((_one(alt) for alt in re.split(r"\s+OR\s+", text)), key=_RANK.__getitem__)
+        for text in known
+    ]
+    return max(verdicts, key=_RANK.__getitem__)
 
 
 def installed(name: str) -> Package:
@@ -103,7 +130,9 @@ def audit(
         report.checked.append(package)
         if name != canonicalize_name(root):
             verdict = classify(package.licences)
-            if verdict != "permissive":
+            if verdict == "strong copyleft":
+                report.violations.append(package)
+            elif verdict != "permissive":
                 (report.excepted if name in allowed else report.violations).append(package)
         for spec in package.requires:
             requirement = Requirement(spec)
@@ -118,7 +147,7 @@ def main() -> int:
     report = audit()
     for package in report.checked:
         shown = "; ".join(text for text in package.licences if text) or "(none declared)"
-        print(f"{package.name:<24} {classify(package.licences):<10} {shown}")
+        print(f"{package.name:<24} {classify(package.licences):<16} {shown}")
     for package in report.excepted:
         print(f"EXCEPTION {package.name}: {EXCEPTIONS[package.name]}")
     if report.violations:
