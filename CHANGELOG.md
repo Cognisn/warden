@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - A worktree recipe (`dev/worktree.json`) and sandbox Compose template (`dev/sandbox-compose.yml`) for development workstations: a development Postgres for manual checks, and the live syslog collector from `tests/syslogfwd/live` behind the `syslog` profile, each published on loopback only. Not part of the package.
+- Dependabot (`.github/dependabot.yml`) proposes updated commit SHAs for the pinned GitHub Actions weekly, in the pinned form the pinned-actions tripwire accepts.
 
 ### Changed
 
