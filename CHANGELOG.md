@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a4] - 2026-10-28
+
+Fourth pre-release: the shared contracts wave 2 builds on. Identity resolves the client address through the trusted proxies; shared lock keys and names move into `warden.db`; the configuration declares every forwarder, identity and wave 2 setting; warden's own audit actions live under `warden.`; the syslog SD-ID defaults to `warden@67382`; and the licence policy distinguishes strong from weak copyleft.
+
 ### Added
 
 - A worktree recipe (`dev/worktree.json`) and sandbox Compose template (`dev/sandbox-compose.yml`) for development workstations: a development Postgres for manual checks, and the live syslog collector from `tests/syslogfwd/live` behind the `syslog` profile, each published on loopback only. Not part of the package.
