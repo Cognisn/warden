@@ -14,6 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Identity takes the client address from the trusted-proxy resolver (`warden.proxy.resolve_client_ip` with `audit.trusted_proxies`) for audit records and the sign-in throttle key. Behind a reverse proxy it previously saw the proxy's address, so clients sharing a proxy shared one throttle count per identifier. `X-Forwarded-For` from a peer that is not a trusted proxy is ignored. Upgrade note: `warden.identity.http.client_ip()` now takes the trusted proxy networks as a second argument.
 
+### Fixed
+
+- `warden keys rotate` no longer prints a traceback when it cannot reach the database. It prints a fixed message, without the host, database or user, and exits with code 1.
+
 ## [0.1.0a3] - 2026-10-26
 
 Third pre-release: wave 1. The hash-chained audit trail with verification, retention, query, export and append-only grants; syslog forwarding from committed rows; and the identity core.

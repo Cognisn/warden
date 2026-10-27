@@ -50,6 +50,7 @@ EXIT_CONFIG = 2
 # Fixed wording: the driver's own message can carry the host, database and user.
 MIGRATE_CONNECTION_FAILED = "warden migrate: could not connect to the database"
 AUDIT_CONNECTION_FAILED = "warden audit: could not connect to the database"
+KEYS_CONNECTION_FAILED = "warden keys: could not connect to the database"
 
 
 class _OneConnection:
@@ -268,6 +269,9 @@ def main(
 
     try:
         key_id = _run_async(_rotate(dsn, secrets, config))
+    except psycopg.OperationalError:
+        print(KEYS_CONNECTION_FAILED, file=sys.stderr)
+        return EXIT_FAILED
     except KeyStoreError as exc:
         print(exc, file=sys.stderr)
         return EXIT_FAILED
