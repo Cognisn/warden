@@ -383,7 +383,7 @@ class Sessions:
         await self._revoke(tx, row["session_id"], "refresh_reuse")
         await record_audit(
             AuditEvent(
-                action="identity.session.reuse_detected",
+                action="warden.identity.session.reuse_detected",
                 outcome="failure",
                 actor=str(row["user_id"]),
                 resource_type="session",
@@ -404,7 +404,7 @@ class Sessions:
         if reason != "refresh_reuse":  # already audited with the revocation
             await record_audit(
                 AuditEvent(
-                    action="identity.session.refresh",
+                    action="warden.identity.session.refresh",
                     outcome="failure",
                     actor=None if user_id is None else str(user_id),
                     resource_type="session",

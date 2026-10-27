@@ -171,7 +171,7 @@ class Mfa:
                 raise MfaError(f"user {user_id} already has a confirmed TOTP enrolment")
             await record_audit(
                 AuditEvent(
-                    action="identity.mfa.enrolment_started",
+                    action="warden.identity.mfa.enrolment_started",
                     outcome="success",
                     actor=actor or str(user_id),
                     resource_type="user",
@@ -223,7 +223,7 @@ class Mfa:
             codes = await self._replace_recovery_codes(tx, user_id)
             await record_audit(
                 AuditEvent(
-                    action="identity.mfa.enrolled",
+                    action="warden.identity.mfa.enrolled",
                     outcome="success",
                     actor=actor or str(user_id),
                     resource_type="user",

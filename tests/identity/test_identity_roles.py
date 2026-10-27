@@ -24,11 +24,11 @@ async def test_assign_and_revoke_are_audited(
     assert not await identity.roles.revoke(user.id, "viewer", actor="admin-1")
     actions = [(r["action"], r["outcome"], r["details"]) for r in await audit_rows(db)]
     assert (
-        "identity.role.assigned",
+        "warden.identity.role.assigned",
         "success",
         {"role": "viewer", "expires_at": None},
     ) in actions
-    assert ("identity.role.revoked", "success", {"role": "viewer"}) in actions
+    assert ("warden.identity.role.revoked", "success", {"role": "viewer"}) in actions
 
 
 async def test_users_hold_several_roles(identity: Identity, make_user: UserFactory) -> None:
@@ -79,7 +79,7 @@ async def test_the_last_administrator_cannot_be_demoted(
     with pytest.raises(LastAdministratorError):
         await identity.roles.revoke(admin.id, "admin", actor=str(admin.id))
     assert await identity.roles.roles_of(admin.id) == ["admin"]
-    rows = await audit_rows(db, "identity.role.revoked")
+    rows = await audit_rows(db, "warden.identity.role.revoked")
     assert rows[-1]["outcome"] == "failure"
     assert rows[-1]["details"] == {"role": "admin", "reason": "last_administrator"}
 

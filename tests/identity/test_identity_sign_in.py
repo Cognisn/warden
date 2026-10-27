@@ -55,7 +55,7 @@ async def test_sign_in_without_mfa_issues_tokens(
     assert body["access_token"].count(".") == 2
     assert body["refresh_token"]
     assert response.headers["cache-control"] == "no-store"
-    rows = await audit_rows(db, "identity.sign_in")
+    rows = await audit_rows(db, "warden.identity.sign_in")
     assert rows[-1]["outcome"] == "success"
     assert rows[-1]["actor"] == str(user.id)
     assert rows[-1]["details"]["amr"] == ["pwd"]
@@ -81,7 +81,7 @@ async def test_an_unconfirmed_enrolment_is_not_mfa(
     assert not await identity.mfa.has_confirmed_totp(user.id)
     body = (await _sign_in(client, user.email, PASSWORD)).json()
     assert body["status"] == "signed_in"
-    rows = await audit_rows(db, "identity.sign_in")
+    rows = await audit_rows(db, "warden.identity.sign_in")
     assert rows[-1]["details"]["amr"] == ["pwd"]
 
 
@@ -137,7 +137,7 @@ async def test_every_sign_in_failure_is_byte_identical(
         )
         _assert_refusal(response)
         assert b"active@example.com" not in response.content
-    reasons = [r["details"]["reason"] for r in await audit_rows(db, "identity.sign_in")]
+    reasons = [r["details"]["reason"] for r in await audit_rows(db, "warden.identity.sign_in")]
     assert reasons[:4] == list(cases)
 
 
@@ -147,7 +147,7 @@ async def test_the_reason_is_audited_never_returned(
     await make_user("gina@example.com")
     response = await _sign_in(client, "gina@example.com", "not the password")
     assert b"wrong" not in response.content and b"password" not in response.content
-    rows = await audit_rows(db, "identity.sign_in")
+    rows = await audit_rows(db, "warden.identity.sign_in")
     assert rows[-1]["outcome"] == "failure"
     assert rows[-1]["details"] == {"reason": "wrong_password", "identifier": "gina@example.com"}
     assert "not the password" not in str(rows)
@@ -231,7 +231,7 @@ async def test_legacy_pbkdf2_hash_is_rehashed_to_argon2id_on_sign_in(
         cur = await conn.execute("SELECT password_hash FROM warden.users WHERE id = %s", (user.id,))
         row = await cur.fetchone()
     assert row is not None and row[0].startswith("$argon2id$")
-    rows = await audit_rows(db, "identity.sign_in")
+    rows = await audit_rows(db, "warden.identity.sign_in")
     assert rows[-1]["details"]["rehashed"] is True
     # The new hash works; the legacy one is gone.
     assert (await _sign_in(client, "legacy@example.com", PASSWORD)).json()["status"] == "signed_in"
@@ -263,6 +263,6 @@ async def test_an_identifier_that_is_not_an_email_address_is_not_audited(
 ) -> None:
     """Someone who types their password into the email field must not have it recorded."""
     _assert_refusal(await _sign_in(client, identifier, PASSWORD))
-    rows = await audit_rows(db, "identity.sign_in")
+    rows = await audit_rows(db, "warden.identity.sign_in")
     assert rows[-1]["details"] == {"reason": "unknown_user", "identifier_recorded": False}
     assert identifier not in str(rows)

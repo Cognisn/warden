@@ -172,7 +172,7 @@ async def test_reuse_after_the_grace_window_revokes_the_family(
         await identity.refresh(renewed.refresh_token)
     with pytest.raises(AuthenticationRefused):
         await identity.authenticate(renewed.access_token)
-    rows = await audit_rows(db, "identity.session.reuse_detected")
+    rows = await audit_rows(db, "warden.identity.session.reuse_detected")
     assert len(rows) == 1
     assert rows[0]["actor"] == str(user.id)
     assert rows[0]["resource_id"] == str(tokens.session_id)
@@ -189,7 +189,7 @@ async def test_reuse_of_an_older_generation_revokes_even_inside_the_grace_window
         await identity.refresh(tokens.refresh_token)  # two generations back
     with pytest.raises(AuthenticationRefused):
         await identity.refresh(third.refresh_token)
-    assert len(await audit_rows(db, "identity.session.reuse_detected")) == 1
+    assert len(await audit_rows(db, "warden.identity.session.reuse_detected")) == 1
 
 
 async def test_the_immediate_predecessor_inside_the_grace_window_is_refused_without_revoking(
@@ -201,8 +201,10 @@ async def test_the_immediate_predecessor_inside_the_grace_window_is_refused_with
     with pytest.raises(AuthenticationRefused):
         await identity.refresh(tokens.refresh_token)
     await identity.refresh(renewed.refresh_token)  # still valid
-    assert await audit_rows(db, "identity.session.reuse_detected") == []
-    reasons = [r["details"]["reason"] for r in await audit_rows(db, "identity.session.refresh")]
+    assert await audit_rows(db, "warden.identity.session.reuse_detected") == []
+    reasons = [
+        r["details"]["reason"] for r in await audit_rows(db, "warden.identity.session.refresh")
+    ]
     assert reasons == ["reuse_within_grace"]
 
 
@@ -238,7 +240,9 @@ async def test_refresh_issues_nothing_to_an_inactive_user(
             await identity.refresh(tokens.refresh_token)
         with pytest.raises(AuthenticationRefused):
             await identity.authenticate(tokens.access_token)
-    reasons = [r["details"]["reason"] for r in await audit_rows(db, "identity.session.refresh")]
+    reasons = [
+        r["details"]["reason"] for r in await audit_rows(db, "warden.identity.session.refresh")
+    ]
     assert reasons == ["user_inactive", "user_inactive"]
 
 
@@ -252,7 +256,9 @@ async def test_refresh_token_expiry_is_enforced(
         )
     with pytest.raises(AuthenticationRefused):
         await identity.refresh(tokens.refresh_token)
-    reasons = [r["details"]["reason"] for r in await audit_rows(db, "identity.session.refresh")]
+    reasons = [
+        r["details"]["reason"] for r in await audit_rows(db, "warden.identity.session.refresh")
+    ]
     assert reasons == ["token_expired"]
 
 
@@ -311,7 +317,7 @@ async def test_sign_out_revokes_the_session(
         await identity.authenticate(tokens.access_token)
     refused = await client.post("/auth/refresh", json={"refresh_token": tokens.refresh_token})
     assert refused.status_code == 401 and refused.content == REFUSAL
-    assert len(await audit_rows(db, "identity.sign_out")) == 1
+    assert len(await audit_rows(db, "warden.identity.sign_out")) == 1
 
 
 async def test_refresh_over_http(
@@ -354,5 +360,5 @@ async def test_change_password(
     with pytest.raises(AuthenticationRefused):
         await identity.refresh(other.tokens.refresh_token)
     await identity.authenticate(tokens.access_token)
-    outcomes = [r["outcome"] for r in await audit_rows(db, "identity.password.changed")]
+    outcomes = [r["outcome"] for r in await audit_rows(db, "warden.identity.password.changed")]
     assert outcomes == ["failure", "failure", "success"]

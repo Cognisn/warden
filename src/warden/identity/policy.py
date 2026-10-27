@@ -163,7 +163,7 @@ class PolicyStore:
             await self._write(tx, overrides)
             await record_audit(
                 AuditEvent(
-                    action="identity.policy.changed",
+                    action="warden.identity.policy.changed",
                     outcome="success",
                     actor=actor,
                     resource_type="session_policy",
@@ -184,7 +184,7 @@ class PolicyStore:
             await tx.execute("SELECT pg_notify(%s, '')", (POLICY_CHANNEL,))
             await record_audit(
                 AuditEvent(
-                    action="identity.policy.changed",
+                    action="warden.identity.policy.changed",
                     outcome="success",
                     actor=actor,
                     resource_type="session_policy",

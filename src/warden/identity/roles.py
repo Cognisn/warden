@@ -201,7 +201,7 @@ class Roles:
             )
             await record_audit(
                 AuditEvent(
-                    action="identity.role.assigned",
+                    action="warden.identity.role.assigned",
                     outcome="success",
                     actor=actor,
                     resource_type="user",
@@ -244,7 +244,7 @@ class Roles:
                     await self.ensure_administrator_remains(tx)
                 await record_audit(
                     AuditEvent(
-                        action="identity.role.revoked",
+                        action="warden.identity.role.revoked",
                         outcome="success",
                         actor=actor,
                         resource_type="user",
@@ -256,7 +256,7 @@ class Roles:
         except LastAdministratorError:
             await record_audit(
                 AuditEvent(
-                    action="identity.role.revoked",
+                    action="warden.identity.role.revoked",
                     outcome="failure",
                     actor=actor,
                     resource_type="user",

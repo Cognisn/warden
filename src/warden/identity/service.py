@@ -246,7 +246,7 @@ class Identity:
                 challenge = ChallengeIssued(token, purpose, self.mfa.challenge_ttl_seconds)
                 await self._audit(
                     tx,
-                    "identity.mfa.challenge",
+                    "warden.identity.mfa.challenge",
                     account.id,
                     source_ip,
                     purpose=purpose,
@@ -256,7 +256,7 @@ class Identity:
                 new = await self.sessions.start(tx, account.id, ["pwd"], policy)
                 await self.throttle.clear(tx, email, source_ip)
                 await self._audit(
-                    tx, "identity.sign_in", account.id, source_ip, amr=["pwd"], **details
+                    tx, "warden.identity.sign_in", account.id, source_ip, amr=["pwd"], **details
                 )
         if challenge is not None:
             return SignInResult(challenge=challenge)
@@ -308,7 +308,7 @@ class Identity:
                         new = await self.sessions.start(tx, opened.user_id, amr, policy)
                         await self._clear_throttle(tx, opened.user_id, source_ip)
                         await self._audit(
-                            tx, "identity.sign_in", opened.user_id, source_ip, amr=amr
+                            tx, "warden.identity.sign_in", opened.user_id, source_ip, amr=amr
                         )
         except _Rollback:
             pass
@@ -383,7 +383,7 @@ class Identity:
                         new = await self.sessions.start(tx, opened.user_id, amr, policy)
                         await self._clear_throttle(tx, opened.user_id, source_ip)
                         await self._audit(
-                            tx, "identity.sign_in", opened.user_id, source_ip, amr=amr
+                            tx, "warden.identity.sign_in", opened.user_id, source_ip, amr=amr
                         )
         except _Rollback:
             pass
@@ -446,7 +446,7 @@ class Identity:
             await self.sessions.revoke(principal.session_id, reason="sign_out", conn=tx)
             await self._audit(
                 tx,
-                "identity.sign_out",
+                "warden.identity.sign_out",
                 principal.user_id,
                 source_ip,
                 resource=("session", str(principal.session_id)),
@@ -485,7 +485,7 @@ class Identity:
         if reason is not None:
             await record_audit(
                 AuditEvent(
-                    action="identity.password.changed",
+                    action="warden.identity.password.changed",
                     outcome="failure",
                     actor=str(principal.user_id),
                     resource_type="user",
@@ -510,7 +510,7 @@ class Identity:
             )
             await self._audit(
                 tx,
-                "identity.password.changed",
+                "warden.identity.password.changed",
                 account.id,
                 source_ip,
                 other_sessions_ended=ended,
@@ -601,7 +601,7 @@ class Identity:
                 details["identifier_recorded"] = False
         await record_audit(
             AuditEvent(
-                action="identity.sign_in",
+                action="warden.identity.sign_in",
                 outcome="failure",
                 actor=None if user_id is None else str(user_id),
                 resource_type="user" if user_id is not None else None,
@@ -624,7 +624,7 @@ class Identity:
     ) -> None:
         await record_audit(
             AuditEvent(
-                action="identity.mfa.verify",
+                action="warden.identity.mfa.verify",
                 outcome="failure",
                 actor=user,
                 resource_type="user" if user else None,

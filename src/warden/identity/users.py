@@ -136,7 +136,7 @@ class Users:
                 user = _row_to_user(row)
                 await record_audit(
                     AuditEvent(
-                        action="identity.user.created",
+                        action="warden.identity.user.created",
                         outcome="success",
                         actor=actor,
                         resource_type="user",
@@ -201,7 +201,7 @@ class Users:
                     await self._roles.ensure_administrator_remains(tx)
                 await record_audit(
                     AuditEvent(
-                        action="identity.user.status_changed",
+                        action="warden.identity.user.status_changed",
                         outcome="success",
                         actor=actor,
                         resource_type="user",
@@ -213,7 +213,7 @@ class Users:
         except LastAdministratorError:
             await record_audit(
                 AuditEvent(
-                    action="identity.user.status_changed",
+                    action="warden.identity.user.status_changed",
                     outcome="failure",
                     actor=actor,
                     resource_type="user",
@@ -243,7 +243,7 @@ class Users:
             user = await self._update(tx, user_id, sql.SQL("sign_in_method = %s"), method.value)
             await record_audit(
                 AuditEvent(
-                    action="identity.user.sign_in_method_changed",
+                    action="warden.identity.user.sign_in_method_changed",
                     outcome="success",
                     actor=actor,
                     resource_type="user",
@@ -268,7 +268,7 @@ class Users:
             user = await self._update(tx, user_id, sql.SQL("password_hash = %s"), password_hash)
             await record_audit(
                 AuditEvent(
-                    action="identity.user.password_set",
+                    action="warden.identity.user.password_set",
                     outcome="success",
                     actor=actor,
                     resource_type="user",
