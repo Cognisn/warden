@@ -26,14 +26,13 @@ from psycopg import AsyncConnection, sql
 
 from warden.audit import AuditEvent, get_recorder, record_audit
 from warden.config import WardenConfig
-from warden.db import Database, table
-from warden.identity import schema
+from warden.db import Database, schema, table
 from warden.identity.actions import register_actions
 from warden.identity.crypto import SecretBox, SecretStore
 from warden.identity.dependencies import APP_STATE_KEY, Principal, ResourceScopeHook
 from warden.identity.errors import AuthenticationRefused, MfaError
 from warden.identity.http import SourceIp
-from warden.identity.mfa import CHALLENGE_TTL_SECONDS, Challenge, ChallengePurpose, Enrolment, Mfa
+from warden.identity.mfa import Challenge, ChallengePurpose, Enrolment, Mfa
 from warden.identity.passwords import MAX_PASSWORD_LENGTH, PasswordHasher
 from warden.identity.policy import PolicyStore, SessionPolicy
 from warden.identity.roles import PermissionRegistry, Roles
@@ -90,15 +89,24 @@ class Identity:
         secrets: SecretStore,
         hasher: PasswordHasher | None = None,
         resource_scope: ResourceScopeHook | None = None,
-        policy_max_age: float = 30.0,
-        sign_in_attempt_limit: int = 10,
-        sign_in_window_seconds: int = 900,
+        policy_max_age: float | None = None,
+        sign_in_attempt_limit: int | None = None,
+        sign_in_window_seconds: int | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         """``secrets`` is konfig's secrets store. It must hold the TOTP encryption
-        key (``warden.identity.crypto.TOTP_KEY_SECRET``) or construction fails.
+        key (named by ``identity.totp_key_secret``) or construction fails.
+
+        ``policy_max_age``, ``sign_in_attempt_limit`` and ``sign_in_window_seconds``
+        override ``identity.policy_cache_seconds``, ``identity.sign_in_attempt_limit``
+        and ``identity.sign_in_window_seconds``; normally leave them unset.
         """
-        box = SecretBox.from_secrets(secrets)
+        settings = config.identity
+        box = SecretBox.from_secrets(
+            secrets,
+            current_name=settings.totp_key_secret,
+            previous_name=settings.totp_previous_key_secret,
+        )
         register_actions(get_recorder().registry)
         self.config = config
         self.db = db
@@ -113,12 +121,28 @@ class Identity:
             password_min_length=config.identity.password_min_length,
         )
         self.policy = PolicyStore(
-            db, SessionPolicy.from_config(config.identity), max_age=policy_max_age
+            db,
+            SessionPolicy.from_config(settings),
+            max_age=settings.policy_cache_seconds if policy_max_age is None else policy_max_age,
         )
         issuer = config.http.public_base_url
-        self.mfa = Mfa(db, issuer=urlsplit(issuer).hostname or issuer, box=box, clock=clock)
+        self.mfa = Mfa(
+            db,
+            issuer=settings.totp_issuer or urlsplit(issuer).hostname or issuer,
+            box=box,
+            clock=clock,
+            challenge_ttl_seconds=settings.mfa_challenge_ttl_seconds,
+            max_failures=settings.mfa_max_failures,
+            recovery_code_count=settings.recovery_code_count,
+        )
         self.throttle = SignInThrottle(
-            db, limit=sign_in_attempt_limit, window_seconds=sign_in_window_seconds
+            db,
+            limit=settings.sign_in_attempt_limit
+            if sign_in_attempt_limit is None
+            else sign_in_attempt_limit,
+            window_seconds=settings.sign_in_window_seconds
+            if sign_in_window_seconds is None
+            else sign_in_window_seconds,
         )
         self.sessions = Sessions(db, keys, self.policy, issuer=issuer, clock=clock)
 
@@ -219,9 +243,14 @@ class Identity:
             details: dict[str, Any] = {"rehashed": True} if rehashed else {}
             if purpose is not None:
                 token = await self.mfa.create_challenge(tx, account.id, purpose)
-                challenge = ChallengeIssued(token, purpose, CHALLENGE_TTL_SECONDS)
+                challenge = ChallengeIssued(token, purpose, self.mfa.challenge_ttl_seconds)
                 await self._audit(
-                    tx, "identity.mfa.challenge", account.id, source_ip, purpose=purpose, **details
+                    tx,
+                    "identity.mfa.challenge",
+                    account.id,
+                    source_ip,
+                    purpose=purpose,
+                    **details,
                 )
             else:
                 new = await self.sessions.start(tx, account.id, ["pwd"], policy)
@@ -480,7 +509,11 @@ class Identity:
                 account.id, reason="password_changed", keep=principal.session_id, conn=tx
             )
             await self._audit(
-                tx, "identity.password.changed", account.id, source_ip, other_sessions_ended=ended
+                tx,
+                "identity.password.changed",
+                account.id,
+                source_ip,
+                other_sessions_ended=ended,
             )
         return None
 

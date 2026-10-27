@@ -7,8 +7,7 @@ import uuid
 import psycopg
 import pytest
 
-from warden.db import SCHEMA, current_revision, downgrade, heads, migrate
-from warden.identity.schema import IDENTITY_TABLES
+from warden.db import IDENTITY_TABLES, SCHEMA, current_revision, downgrade, heads, migrate
 
 pytestmark = pytest.mark.db
 

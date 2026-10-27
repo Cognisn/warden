@@ -24,8 +24,7 @@ from typing import Any
 
 from psycopg import AsyncConnection, sql
 
-from warden.db import Database, table
-from warden.identity import schema
+from warden.db import Database, schema, table
 from warden.identity.http import SourceIp
 
 __all__ = ["SignInThrottle"]

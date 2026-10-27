@@ -30,13 +30,13 @@ from warden.audit.checkpoint import Checkpoint, HistoricalVerifier
 from warden.audit.events import AuditEvent
 from warden.audit.recorder import AuditRecorder
 from warden.audit.verify import verify_chain
+from warden.config import MIN_RETENTION_DAYS
 from warden.db import AUDIT_EVENTS, table
 
 __all__ = ["MIN_RETENTION_DAYS", "CheckpointSigner", "PurgeResult", "RetentionError", "purge"]
 
-# Provisional, pending a decision (design open item 3): no configuration may
-# keep audit rows for less than a year.
-MIN_RETENTION_DAYS = 365
+# MIN_RETENTION_DAYS (365, defined in ``warden.config``): no purge may keep
+# audit rows for less than a year.
 
 _AUDIT = table(AUDIT_EVENTS)
 

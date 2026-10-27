@@ -84,7 +84,7 @@ A hash chain alone cannot stop someone who can write to the table from rewriting
 
 **Code:** `src/warden/audit/retention.py`, `src/warden/audit/checkpoint.py`.
 
-A retention purge (`warden audit purge`) deletes the oldest part of the chain. It always deletes a **prefix by id**: rows `first_purged_id` to `through_id`, where every row in the prefix has a `recorded_at` older than the cutoff (now minus `audit.retention_days`). A row younger than the cutoff is never deleted, even if an older row follows it after a clock step. The retention period may not be shorter than the enforced minimum, `warden.audit.retention.MIN_RETENTION_DAYS`.
+A retention purge (`warden audit purge`) deletes the oldest part of the chain. It always deletes a **prefix by id**: rows `first_purged_id` to `through_id`, where every row in the prefix has a `recorded_at` older than the cutoff (now minus `audit.retention_days`). A row younger than the cutoff is never deleted, even if an older row follows it after a clock step. The retention period may not be shorter than the enforced minimum, `warden.config.MIN_RETENTION_DAYS` (365 days).
 
 Before deleting anything, the purge verifies the prefix. If the prefix is broken, the purge is refused and the refusal is recorded (action `warden.audit.purge`, outcome `failure`, details `{"reason": "chain_broken", "row_id": N}`). A purge can therefore never launder tampering by deleting the evidence.
 

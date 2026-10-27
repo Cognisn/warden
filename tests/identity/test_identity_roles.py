@@ -23,7 +23,11 @@ async def test_assign_and_revoke_are_audited(
     assert await identity.roles.roles_of(user.id) == []
     assert not await identity.roles.revoke(user.id, "viewer", actor="admin-1")
     actions = [(r["action"], r["outcome"], r["details"]) for r in await audit_rows(db)]
-    assert ("identity.role.assigned", "success", {"role": "viewer", "expires_at": None}) in actions
+    assert (
+        "identity.role.assigned",
+        "success",
+        {"role": "viewer", "expires_at": None},
+    ) in actions
     assert ("identity.role.revoked", "success", {"role": "viewer"}) in actions
 
 

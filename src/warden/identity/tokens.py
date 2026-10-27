@@ -33,8 +33,7 @@ from typing import Any, NoReturn
 from psycopg import AsyncConnection, sql
 
 from warden.audit import AuditEvent, record_audit
-from warden.db import Database, table
-from warden.identity import schema
+from warden.db import Database, schema, table
 from warden.identity.errors import AuthenticationRefused
 from warden.identity.http import SourceIp
 from warden.identity.policy import PolicyStore, SessionPolicy

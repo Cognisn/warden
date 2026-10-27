@@ -7,9 +7,14 @@ edits it. Arcs add new migration files only and never edit an existing one.
 from warden.db.migrate import current_revision, downgrade, heads, migrate, migrate_connection
 from warden.db.pool import ConnectionSource, Database
 from warden.db.schema import (
+    ADMINISTRATOR_LOCK_KEY,
     AUDIT_CHANNEL,
     AUDIT_EVENTS,
+    CHAIN_LOCK_KEY,
+    IDENTITY_TABLES,
     MIGRATION_LOCK_KEY,
+    POLICY_CHANNEL,
+    POLICY_SETTING,
     SCHEMA,
     SETTINGS,
     SIGNING_KEYS,
@@ -20,9 +25,14 @@ from warden.db.schema import (
 )
 
 __all__ = [
+    "ADMINISTRATOR_LOCK_KEY",
     "AUDIT_CHANNEL",
     "AUDIT_EVENTS",
+    "CHAIN_LOCK_KEY",
+    "IDENTITY_TABLES",
     "MIGRATION_LOCK_KEY",
+    "POLICY_CHANNEL",
+    "POLICY_SETTING",
     "SCHEMA",
     "SETTINGS",
     "SIGNING_KEYS",

@@ -1,21 +1,20 @@
 """Settings for the syslog forwarder.
 
-``SyslogConfig`` in ``warden.config`` carries the fields an operator sets
-through konfig. The forwarder needs a few more (header host name, facility,
-byte cap, gap grace and timings); until they join the shared configuration,
-``SyslogSettings.from_config`` builds the full set from ``SyslogConfig`` plus
-keyword overrides, with defaults for everything else.
+``SyslogConfig`` in ``warden.config`` carries every field an operator sets
+through konfig; ``SyslogSettings.from_config`` builds these settings from it,
+reading the CA certificates named by ``tls_ca_secret`` from the secrets store.
 """
 
 from __future__ import annotations
 
 import re
 import socket
+from collections.abc import Callable
 from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from warden.config import SyslogConfig
+from warden.config import DEFAULT_SD_ID, SyslogConfig
 
 __all__ = ["SyslogSettings"]
 
@@ -43,8 +42,9 @@ class SyslogSettings(BaseModel):
     transport: Literal["udp", "tcp", "tls"] = "tls"
     framing: Literal["octet-counting", "lf"] = "octet-counting"
     """Stream framing (RFC 6587); UDP always sends one message per datagram."""
-    sd_id: str
-    """Structured-data id, ``name@<PEN>``. No default (design D12); never 32473."""
+    sd_id: str = DEFAULT_SD_ID
+    """Structured-data id, ``name@<PEN>``: ``warden@67382`` (design D12) unless
+    the product sets its own; never 32473."""
     app_name: str = Field(default="warden", max_length=48)
     hostname: str = Field(default_factory=_local_hostname, max_length=255)
     """RFC 5424 HOSTNAME: this application host, as the collector should see it."""
@@ -102,21 +102,34 @@ class SyslogSettings(BaseModel):
         return self.tls_server_name or self.host
 
     @classmethod
-    def from_config(cls, config: SyslogConfig, **overrides: Any) -> Self:
-        """Build settings from the shared ``SyslogConfig``; ``overrides`` set the rest."""
-        missing = [name for name in ("host", "port", "sd_id") if getattr(config, name) is None]
+    def from_config(
+        cls,
+        config: SyslogConfig,
+        *,
+        secrets: Callable[[str], str | None] | None = None,
+        **overrides: Any,
+    ) -> Self:
+        """Build settings from the shared ``SyslogConfig``.
+
+        ``secrets`` looks up a konfig secret by name (``Secrets.get``); it is
+        needed only when ``tls_ca_secret`` is set. ``overrides`` replace
+        individual fields, for tests and one-off sends.
+        """
+        missing = [name for name in ("host", "port") if getattr(config, name) is None]
         missing = [name for name in missing if name not in overrides]
         if missing:
             raise ValueError("syslog configuration is missing " + ", ".join(missing))
         values: dict[str, Any] = {
-            "host": config.host,
-            "port": config.port,
-            "transport": config.transport,
-            "framing": config.framing,
-            "sd_id": config.sd_id,
-            "app_name": config.app_name,
-            "tls_ca_file": config.tls_ca_file,
-            "tls_server_name": config.tls_server_name,
+            name: getattr(config, name)
+            for name in cls.model_fields
+            if name in SyslogConfig.model_fields
         }
+        if values.get("hostname") is None:
+            del values["hostname"]
+        if config.tls_ca_secret is not None and "tls_ca_pem" not in overrides:
+            pem = secrets(config.tls_ca_secret) if secrets is not None else None
+            if not pem:
+                raise ValueError("syslog tls_ca_secret names a secret that is not set")
+            values["tls_ca_pem"] = pem
         values.update(overrides)
         return cls(**values)

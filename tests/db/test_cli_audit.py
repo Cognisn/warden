@@ -130,9 +130,19 @@ def test_purge_without_a_retention_period_is_a_configuration_error(
     assert "warden.audit.retention_days" in capsys.readouterr().err
 
 
-def test_purge_below_the_minimum_is_refused(
+def test_a_configured_retention_below_the_minimum_fails_at_start_up(
     migrated_dsn: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
     settings = _settings(migrated_dsn, retention_days=30)
-    assert main(["audit", "purge"], settings=settings, secrets=FakeSecrets()) == 1
+    assert main(["audit", "purge"], settings=settings, secrets=FakeSecrets()) == 2
+    err = capsys.readouterr().err
+    assert "warden.audit.retention_days" in err and "at least 365" in err
+
+
+def test_purge_below_the_minimum_is_refused(
+    migrated_dsn: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings = _settings(migrated_dsn)
+    argv = ["audit", "purge", "--retention-days", "30"]
+    assert main(argv, settings=settings, secrets=FakeSecrets()) == 1
     assert "minimum" in capsys.readouterr().err

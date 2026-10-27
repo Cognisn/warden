@@ -30,11 +30,10 @@ def test_defaults() -> None:
     assert settings.hostname  # the local host name, never empty
 
 
-def test_sd_id_has_no_default() -> None:
+def test_sd_id_defaults_to_the_registered_enterprise_number() -> None:
     values = _base()
     del values["sd_id"]
-    with pytest.raises(ValidationError):
-        SyslogSettings(**values)
+    assert SyslogSettings(**values).sd_id == "warden@67382"
 
 
 @pytest.mark.parametrize("sd_id", ["warden@32473", "warden", "warden@", "a b@1", "x" * 24 + "@1"])
@@ -95,4 +94,4 @@ def test_from_config_carries_the_transport_fields() -> None:
 
 def test_from_config_refuses_an_incomplete_section() -> None:
     with pytest.raises(ValueError, match="host"):
-        SyslogSettings.from_config(SyslogConfig(port=1514, sd_id="warden@99999"))
+        SyslogSettings.from_config(SyslogConfig(port=1514))
