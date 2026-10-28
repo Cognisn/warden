@@ -20,12 +20,14 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI
-from identity_support import PASSWORD, UserFactory, audit_rows
+from identity_support import PASSWORD, RecordingSender, UserFactory, audit_rows
 from sso_support import CLIENT_SECRET_NAME, COMPLETION, sso_config
 
 from warden.config import WardenConfig
 from warden.db import Database
-from warden.identity import Identity
+from warden.identity import Identity, UserStatus
+
+NEW_PASSWORD = "a brand new passphrase"
 
 pytestmark = [pytest.mark.integration, pytest.mark.db]
 
@@ -55,6 +57,7 @@ def app(identity: Identity) -> FastAPI:
     application = FastAPI()
     identity.install(application)
     application.include_router(identity.auth_router(), prefix="/auth")
+    application.include_router(identity.lifecycle_router(), prefix="/auth")
     application.include_router(identity.sso_router(), prefix="/auth")
     return application
 
@@ -82,3 +85,29 @@ async def test_password_sign_in_works_while_sso_fails(
     )
     assert password.status_code == 200
     assert password.json()["status"] == "signed_in"
+
+
+async def test_an_invitation_completes_with_a_password_while_sso_fails(
+    client: httpx.AsyncClient, identity: Identity, mail: RecordingSender, db: Database
+) -> None:
+    test_the_provider_is_stopped()
+    invitation = await identity.invitations.create("frank@example.com", actor="admin")
+    token = mail.token()
+
+    sso = await client.post("/auth/sso/start", data={"invitation": token})
+    assert sso.headers["location"] == f"{COMPLETION}?error=sso_failed"
+    rows = await audit_rows(db, "warden.identity.sso.sign_in")
+    assert rows[-1]["details"]["reason"] == "discovery_unavailable"
+
+    # The invitation is untouched, and completes with a password instead.
+    accepted = await client.post(
+        "/auth/invitations/accept", json={"token": token, "password": NEW_PASSWORD}
+    )
+    assert accepted.status_code == 200, accepted.text
+    password = await client.post(
+        "/auth/sign-in", json={"email": "frank@example.com", "password": NEW_PASSWORD}
+    )
+    assert password.status_code == 200
+    assert password.json()["status"] == "signed_in"
+    user = await identity.users.get(invitation.user_id)
+    assert user is not None and user.status == UserStatus.ACTIVE

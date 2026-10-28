@@ -24,11 +24,24 @@ The flow, through the routes in ``warden.identity.routers.sso``:
 No token, verifier or secret ever appears in a URL. Every refusal is recorded
 as ``warden.identity.sso.sign_in`` with its reason; the browser always gets
 the same failure.
+
+An invitation link can complete through single sign-on. ``begin`` is given
+the invitation token, records its SHA-256 hash in the login transaction (the
+token itself is never stored), and the browser keeps the token in a second
+cookie, ``__Secure-warden-sso-invitation``. At the callback the token must
+come back from that browser and match the hash; once the provider's identity
+is verified (email verified and in an allowed domain), it goes to identity
+lifecycle's ``accept_with_sso``, which requires the invited address (ignoring
+case) and decides method, status and the single consume. The pin it calls
+inside its transaction pins the subject and stores the handoff code, so the
+acceptance, the pin and the sign-in commit together or not at all. The
+session is then issued at the handoff as for any SSO sign-in.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import re
 import secrets
 import time
@@ -46,6 +59,12 @@ from warden.config import WardenConfig
 from warden.db import Database, schema, table
 from warden.identity.errors import AuthenticationRefused
 from warden.identity.http import SourceIp
+from warden.identity.invitations import (
+    AcceptedInvitation,
+    InvitationMismatch,
+    SubjectPin,
+    VerifiedIdentity,
+)
 from warden.identity.policy import PolicyStore
 from warden.identity.sso.actions import register_sso_actions
 from warden.identity.sso.errors import SsoError
@@ -64,14 +83,17 @@ from warden.identity.users import UserStatus, is_email
 __all__ = [
     "COOKIE_NAME",
     "DEFAULT_CLIENT_SECRET_NAME",
+    "INVITATION_COOKIE_NAME",
     "SSO_FAILURE_MESSAGE",
     "ConfigurationCheck",
     "ConfigurationReport",
+    "InvitationAcceptance",
     "LoginStart",
     "SingleSignOn",
 ]
 
 COOKIE_NAME = "__Secure-warden-sso"
+INVITATION_COOKIE_NAME = "__Secure-warden-sso-invitation"
 SSO_FAILURE_MESSAGE = "Single sign-on did not complete. Try again, or contact your administrator."
 """The one message a product shows when single sign-on fails, whatever the reason."""
 
@@ -97,6 +119,28 @@ class SecretWriter(Protocol):
     def get(self, key: str) -> str | None: ...
 
     def set(self, key: str, value: str) -> None: ...
+
+
+class InvitationAcceptance(Protocol):
+    """Identity lifecycle's SSO acceptance entry point (``identity.invitations``)."""
+
+    async def accept_with_sso(
+        self,
+        token: object,
+        verified: VerifiedIdentity,
+        *,
+        pin: SubjectPin,
+        source_ip: SourceIp = None,
+    ) -> AcceptedInvitation: ...
+
+
+class _PinRefused(Exception):
+    """Raised by the acceptance pin, so the whole acceptance rolls back."""
+
+    def __init__(self, reason: str, user_id: uuid.UUID) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.user_id = user_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,10 +238,21 @@ class SingleSignOn:
 
     # 1. Begin
 
-    async def begin(self, *, source_ip: SourceIp = None) -> LoginStart:
+    async def begin(self, *, source_ip: SourceIp = None, invitation: object = None) -> LoginStart:
+        """Start a sign-in; with ``invitation`` (the link's token), an invitation acceptance.
+
+        The browser must hold the invitation token in ``INVITATION_COOKIE_NAME``
+        when it returns to the callback; only its hash is stored here.
+        """
         settings = await self.settings.current()
         if not settings.enabled or settings.issuer_url is None or settings.client_id is None:
             await self._refuse("sso_disabled", source_ip)
+        invitation_hash: bytes | None = None
+        if invitation is not None:
+            offered = _token(invitation)
+            if offered is None:
+                await self._refuse("invitation_malformed", source_ip)
+            invitation_hash = _hash(offered)
         discovery, _, _ = self._provider()
         try:
             metadata = await discovery.get(settings.issuer_url)
@@ -212,9 +267,18 @@ class SingleSignOn:
             await conn.execute(
                 sql.SQL(
                     "INSERT INTO {} (state_hash, binding_hash, nonce, code_verifier, issuer,"
-                    " expires_at) VALUES (%s, %s, %s, %s, %s, now() + %s * interval '1 second')"
+                    " invitation_hash, expires_at)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, now() + %s * interval '1 second')"
                 ).format(_TRANSACTIONS),
-                (_hash(state), _hash(binding), nonce, verifier, settings.issuer_url, ttl),
+                (
+                    _hash(state),
+                    _hash(binding),
+                    nonce,
+                    verifier,
+                    settings.issuer_url,
+                    invitation_hash,
+                    ttl,
+                ),
             )
         query = urlencode(
             {
@@ -241,8 +305,15 @@ class SingleSignOn:
         error: object,
         binding: object,
         source_ip: SourceIp = None,
+        invitation: object = None,
+        invitations: InvitationAcceptance | None = None,
     ) -> str:
-        """Finish at the provider and match the account; returns a one-time handoff code."""
+        """Finish at the provider and match the account; returns a one-time handoff code.
+
+        If the login transaction was started with an invitation, ``invitation``
+        (the browser's invitation cookie) must be that token, and the verified
+        identity accepts it through ``invitations`` instead of being matched.
+        """
         settings = await self.settings.current()
         if not settings.enabled or settings.issuer_url is None or settings.client_id is None:
             await self._refuse("sso_disabled", source_ip)
@@ -253,6 +324,17 @@ class SingleSignOn:
         if checked_state is None:
             await self._refuse("transaction_unknown", source_ip)
         transaction = await self._use_transaction(checked_state, bound, source_ip)
+        nonce, verifier, issuer, invitation_hash = transaction
+        accepting: tuple[str, InvitationAcceptance] | None = None
+        if invitation_hash is not None:
+            offered = _token(invitation)
+            if (
+                offered is None
+                or invitations is None
+                or not hmac.compare_digest(_hash(offered), invitation_hash)
+            ):
+                await self._refuse("invitation_not_bound", source_ip)
+            accepting = (offered, invitations)
         if error is not None:
             shown = (
                 error if isinstance(error, str) and _PROVIDER_ERROR.fullmatch(error) else "other"
@@ -260,7 +342,6 @@ class SingleSignOn:
             await self._refuse("provider_error", source_ip, provider_error=shown)
         if not isinstance(code, str) or _PROVIDER_CODE.fullmatch(code) is None:
             await self._refuse("token_exchange_failed", source_ip)
-        nonce, verifier, issuer = transaction
         if issuer != settings.issuer_url:
             await self._refuse("issuer_changed", source_ip)
         discovery, validator, _ = self._provider()
@@ -275,23 +356,29 @@ class SingleSignOn:
             if reason in _VALIDATION_REASONS:
                 reason = f"id_token_invalid:{reason}"
             await self._refuse(reason, source_ip)
+        if accepting is not None:
+            token, acceptance = accepting
+            return await self._accept_invitation(
+                claims, settings, token, acceptance, bound, source_ip
+            )
         return await self._match(claims, settings, bound, source_ip)
 
     async def _use_transaction(
         self, state: str, binding: str, source_ip: SourceIp
-    ) -> tuple[str, str, str]:
+    ) -> tuple[str, str, str, bytes | None]:
         async with self.db.transaction() as tx:
             cur = await tx.execute(
                 sql.SQL(
                     "UPDATE {} SET consumed_at = now() WHERE state_hash = %s AND binding_hash = %s"
                     " AND consumed_at IS NULL AND expires_at > now()"
-                    " RETURNING nonce, code_verifier, issuer"
+                    " RETURNING nonce, code_verifier, issuer, invitation_hash"
                 ).format(_TRANSACTIONS),
                 (_hash(state), _hash(binding)),
             )
             row = await cur.fetchone()
             if row is not None:
-                return str(row[0]), str(row[1]), str(row[2])
+                invitation_hash = None if row[3] is None else bytes(row[3])
+                return str(row[0]), str(row[1]), str(row[2]), invitation_hash
             cur = await tx.execute(
                 sql.SQL(
                     "SELECT binding_hash = %s, consumed_at IS NOT NULL, expires_at <= now()"
@@ -344,9 +431,10 @@ class SingleSignOn:
             raise SsoError("token_exchange_failed")
         return id_token
 
-    async def _match(
-        self, claims: IdTokenClaims, settings: SsoSettings, binding: str, source_ip: SourceIp
-    ) -> str:
+    async def _verified_email(
+        self, claims: IdTokenClaims, settings: SsoSettings, source_ip: SourceIp
+    ) -> tuple[str, dict[str, Any]]:
+        """The id_token's email, verified and in an allowed domain; and what to audit."""
         email = claims.email
         about: dict[str, Any] = {"subject": claims.subject}
         if email is not None and is_email(email):
@@ -358,6 +446,23 @@ class SingleSignOn:
         domain = email.rpartition("@")[2].lower()
         if settings.allowed_email_domains and domain not in settings.allowed_email_domains:
             await self._refuse("domain_not_allowed", source_ip, **about)
+        return email, about
+
+    async def _issue_handoff(
+        self, tx: AsyncConnection[Any], code: str, binding: str, user_id: uuid.UUID
+    ) -> None:
+        await tx.execute(
+            sql.SQL(
+                "INSERT INTO {} (code_hash, binding_hash, user_id, expires_at)"
+                " VALUES (%s, %s, %s, now() + %s * interval '1 second')"
+            ).format(_HANDOFFS),
+            (_hash(code), _hash(binding), user_id, self.config.sso.handoff_code_ttl_seconds),
+        )
+
+    async def _match(
+        self, claims: IdTokenClaims, settings: SsoSettings, binding: str, source_ip: SourceIp
+    ) -> str:
+        email, about = await self._verified_email(claims, settings, source_ip)
         reason: str | None = None
         user_id: uuid.UUID | None = None
         code = secrets.token_urlsafe(32)
@@ -379,20 +484,68 @@ class SingleSignOn:
             else:
                 user_id, reason = await self._first_sign_in(tx, claims, email, source_ip)
             if reason is None and user_id is not None:
-                await tx.execute(
-                    sql.SQL(
-                        "INSERT INTO {} (code_hash, binding_hash, user_id, expires_at)"
-                        " VALUES (%s, %s, %s, now() + %s * interval '1 second')"
-                    ).format(_HANDOFFS),
-                    (
-                        _hash(code),
-                        _hash(binding),
-                        user_id,
-                        self.config.sso.handoff_code_ttl_seconds,
-                    ),
-                )
+                await self._issue_handoff(tx, code, binding, user_id)
         if reason is not None or user_id is None:
             await self._refuse(reason or "no_account", source_ip, user_id=user_id, **about)
+        return code
+
+    async def _accept_invitation(
+        self,
+        claims: IdTokenClaims,
+        settings: SsoSettings,
+        token: str,
+        invitations: InvitationAcceptance,
+        binding: str,
+        source_ip: SourceIp,
+    ) -> str:
+        """Accept the invitation with the verified identity; returns a one-time handoff code.
+
+        Lifecycle decides the email match, method, status and the single
+        consume under its locks. Its pin, run in the acceptance transaction
+        after the consume, pins this subject and stores the handoff code; a
+        subject or user already pinned raises, so nothing is accepted and the
+        invitation stays usable.
+        """
+        email, about = await self._verified_email(claims, settings, source_ip)
+        code = secrets.token_urlsafe(32)
+
+        async def pin(
+            conn: AsyncConnection[Any], user_id: uuid.UUID, issuer: str, subject: str
+        ) -> None:
+            cur = await conn.execute(
+                sql.SQL(
+                    "INSERT INTO {} (user_id, issuer, subject) VALUES (%s, %s, %s)"
+                    " ON CONFLICT DO NOTHING RETURNING user_id"
+                ).format(_IDENTITIES),
+                (user_id, issuer, subject),
+            )
+            if await cur.fetchone() is None:
+                raise _PinRefused("already_pinned", user_id)
+            await record_audit(
+                AuditEvent(
+                    action="warden.identity.sso.subject_pinned",
+                    outcome="success",
+                    actor=str(user_id),
+                    resource_type="user",
+                    resource_id=str(user_id),
+                    source_ip=source_ip,
+                    details={"issuer": issuer, "subject": subject},
+                ),
+                conn=conn,
+            )
+            await self._issue_handoff(conn, code, binding, user_id)
+
+        verified = VerifiedIdentity(issuer=claims.issuer, subject=claims.subject, email=email)
+        try:
+            await invitations.accept_with_sso(token, verified, pin=pin, source_ip=source_ip)
+        except _PinRefused as exc:
+            await self._refuse(exc.reason, source_ip, user_id=exc.user_id, **about)
+        except InvitationMismatch:
+            # Lifecycle has recorded the mismatch; the invitation stays usable.
+            await self._refuse("invitation_mismatch", source_ip, **about)
+        except AuthenticationRefused:
+            # Lifecycle has recorded why (unknown, spent, or the user's status).
+            await self._refuse("invitation_refused", source_ip, **about)
         return code
 
     async def _first_sign_in(
