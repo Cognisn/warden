@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `identity.sso.prune()` removes expired login transactions and handoff codes.
 - Migration `e3a9c5d17f42` creates `warden.sso_identities`, `sso_login_transactions` and `sso_handoff_codes`. Reversible.
 - Runtime dependency `pyjwt[crypto]` (MIT), from the agreed set, for id_token validation.
+- A stub OIDC provider for development workstations: navikt mock-oauth2-server (MIT) over TLS behind the sandbox's `idp` profile, published on loopback only, with its keystore written by `tests/identity/sso/live/make_certs.py`. Not part of the package.
+- Live single sign-on checks against it (marked `integration`): the round trip (sign-in, a forged subject, a forged email and a disallowed domain refused) in `tests/identity/sso/test_sso_live.py`, and break-glass password sign-in with the provider stopped in `tests/identity/sso/test_sso_break_glass_live.py`.
 
 ### Changed
 
