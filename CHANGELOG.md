@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a5] - 2026-10-28
+
+Fifth pre-release: the identity lifecycle. Single-use tokens, invitations with a generic acceptance service, password reset, mail through a product-supplied sender, scoped API keys, administration routes and pruning.
+
 ### Added
 
 - Identity lifecycle (milestone M4). `Identity` takes an optional `mail_sender` and gains `mailer`, `single_use`, `invitations`, `resets`, `api_keys` and `pruner`, with `prune()`, `pruning()`, `lifecycle_router()` and `admin_router()`.
