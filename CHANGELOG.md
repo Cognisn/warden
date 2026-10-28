@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a6] - 2026-10-28
+
+Sixth pre-release: OIDC single sign-on. The authorisation code flow with PKCE, cached discovery and JWKS, id_token validation with pyjwt, subject pinning for pre-provisioned users, run-time settings and administration routes, and a stub identity provider for live checks.
+
 ### Added
 
 - OIDC single sign-on (`warden.identity.sso`), one provider per deployment. `Identity` builds a `SingleSignOn` as `identity.sso`; the product mounts `identity.sso_router()` under its auth prefix and `identity.sso_settings_router(authorise=...)` under its admin prefix.
