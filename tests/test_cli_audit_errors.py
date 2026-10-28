@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import copy
+import json
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from warden.audit.actions import ANCHOR_ACTION
+from warden.audit.anchor import Anchor
 from warden.audit.retention import MIN_RETENTION_DAYS
 from warden.cli import AUDIT_CONNECTION_FAILED, main
 
@@ -43,10 +48,34 @@ def _settings(dsn: str | None) -> FakeSettings:
     return FakeSettings({"warden": warden})
 
 
-@pytest.mark.parametrize("command", [["audit", "verify"], ["audit", "purge"]])
+def _anchors_file(directory: Path) -> str:
+    """One synthetic anchor row, as an NDJSON export holds it."""
+    anchor = Anchor(
+        head_id=3,
+        head_hash=bytes(32),
+        anchored_at=datetime(2026, 10, 28, tzinfo=UTC),
+        key_id="k-example",
+        signature=bytes(64),
+    )
+    path = directory / "anchors.ndjson"
+    row = {"id": 4, "action": ANCHOR_ACTION, "details": anchor.to_details()}
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8", newline="\n")
+    return str(path)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["audit", "verify"],
+        ["audit", "purge"],
+        ["audit", "anchor"],
+        ["audit", "verify", "--anchors", "{anchors}"],
+    ],
+)
 def test_connection_failure_prints_a_fixed_message_and_exits_1(
-    command: list[str], capsys: pytest.CaptureFixture[str]
+    command: list[str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    command = [_anchors_file(tmp_path) if arg == "{anchors}" else arg for arg in command]
     assert main(command, settings=_settings(UNREACHABLE), secrets=FakeSecrets()) == 1
     captured = capsys.readouterr()
     assert captured.err.splitlines() == [AUDIT_CONNECTION_FAILED]
@@ -68,3 +97,13 @@ def test_grants_refuses_a_shared_role(capsys: pytest.CaptureFixture[str]) -> Non
     argv = ["audit", "grants", "--app-role", "app", "--purger-role", "app"]
     assert main(argv, settings=_settings(None), secrets=FakeSecrets()) == 2
     assert "distinct" in capsys.readouterr().err
+
+
+def test_anchor_refuses_an_actor_too_long_to_forward_whole(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    argv = ["audit", "anchor", "--actor", "a" * 65]
+    with pytest.raises(SystemExit) as exited:
+        main(argv, settings=_settings(UNREACHABLE), secrets=FakeSecrets())
+    assert exited.value.code == 2
+    assert "at most 64" in capsys.readouterr().err

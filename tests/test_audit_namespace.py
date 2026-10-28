@@ -47,8 +47,9 @@ def test_every_action_warden_registers_is_in_the_warden_namespace() -> None:
     register_syslog_actions(registry)
     register_actions(registry)
     names = [spec.action for spec in registry.actions()]
-    assert len(names) == 3 + len(IDENTITY_ACTIONS)
+    assert len(names) == 4 + len(IDENTITY_ACTIONS)
     assert all(name.startswith("warden.") for name in names), names
+    assert "warden.audit.anchor" in names
     assert "warden.syslog.test_sent" in names
     assert "warden.identity.sign_in" in names
     assert not any(name.startswith("identity.") for name in names)

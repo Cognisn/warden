@@ -1,7 +1,7 @@
 # Audit hash chain
 
-**Status:** implemented in the audit core arc (milestone M1).
-**Code:** `src/warden/audit/chain.py` (canonical form and hash), `src/warden/audit/recorder.py` (appending).
+**Status:** implemented in the audit core arc (milestone M1); external anchoring (section 7) added in 0.1.0 before b1.
+**Code:** `src/warden/audit/chain.py` (canonical form and hash), `src/warden/audit/recorder.py` (appending), `src/warden/audit/anchor.py` and `src/warden/audit/verify.py` (anchors).
 
 This document specifies how warden makes its audit trail tamper-evident (design D13), precisely enough that a verifier can be written without reading warden's code.
 
@@ -78,7 +78,7 @@ The marker records the original size and none of the content, so a stored value 
 
 Verification (`warden audit verify`) recomputes every `row_hash` and checks every link. It names the first broken row when any column of a row is altered, a row is deleted or rows are reordered.
 
-A hash chain alone cannot stop someone who can write to the table from rewriting the chain from some point onwards, or from deleting rows at its tail. Retention checkpoints (section 6) cannot be forged without warden's signing key, but such a person could still delete a checkpoint together with every row before it, and rewrite what remains as a fresh chain from genesis. Detecting that, and tail deletion, needs the chain head anchored outside the database, which is an open design item.
+A hash chain alone cannot stop someone who can write to the table from rewriting the chain from some point onwards, or from deleting rows at its tail. Retention checkpoints (section 6) cannot be forged without warden's signing key, but such a person could still delete a checkpoint together with every row before it, and rewrite what remains as a fresh chain from genesis. Detecting that, and tail deletion, needs the chain head anchored outside the database: signed anchors (section 7), held in a SIEM, checked with `warden audit verify --anchors FILE`.
 
 ## 6. Retention checkpoints
 
@@ -126,3 +126,67 @@ After a purge, the first surviving row's `prev_hash` is the `row_hash` of a row 
 ### Database roles
 
 Only the purge deletes audit rows. It must connect as a role holding `DELETE` on `audit_events`. The application's role holds only `INSERT` and `SELECT` there (`warden audit grants`, `warden.audit.grants`).
+
+## 7. Anchors
+
+**Code:** `src/warden/audit/anchor.py` (writing and reading anchors), `src/warden/audit/verify.py` (`verify_anchors`).
+
+An anchor is a signed statement of the chain head at a moment: "row `head_id` had `row_hash` `head_hash` at `anchored_at`". It is written into the chain as an ordinary row, so the syslog forwarder sends it to the SIEM like any other, and from then on a copy exists that nobody with access only to the database can recall or edit. Checking the stored chain against those copies detects tail deletion and a rewrite of the chain, including one from genesis, back to the latest anchor the SIEM holds.
+
+### Writing an anchor
+
+`warden audit anchor` (or `warden.audit.anchor()`) reads the committed head, signs it with warden's active Ed25519 key (design D14), and appends a row with action `warden.audit.anchor` and outcome `success`. warden ships no scheduler: the product runs the command on its own schedule. With `--min-rows N` (`min_rows=N`) nothing is written unless at least N rows have been appended since the last anchor, so a scheduler that runs often anchors roughly every N rows and never anchors an idle trail twice. Writing an anchor needs only the application role's `INSERT` and `SELECT`, and a signing key. An empty trail is not anchored.
+
+The head is read, signed and then appended without holding the chain lock in between, because signing borrows database connections of its own and a held lock could starve the pool. Rows recorded meanwhile may sit between the head and the anchor row; the anchor still attests the head as it was committed. When nothing else is recorded, the anchor row's `prev_hash` is the `head_hash` it signs.
+
+The row's details are:
+
+```json
+{"anchor": {
+  "version": 1,
+  "head_id": 4120,
+  "head_hash": "<hex row_hash of row head_id>",
+  "anchored_at": "2026-10-28T03:00:00.123456Z",
+  "key_id": "<signing key id>",
+  "signature": "<base64url Ed25519 signature, unpadded>"
+}}
+```
+
+`anchored_at` is the database's `clock_timestamp()` when the head was read, in the timestamp form of section 2. The signature covers
+
+```
+"warden.audit.anchor.v1\n" || canonical_json(anchor without "signature")
+```
+
+The domain string differs from the checkpoint's (`warden.audit.checkpoint.v1`), so a signature over one kind of artefact can never be presented as the other. Anchor details, like checkpoint details, are never truncated (section 4). An anchor's actor may be at most 64 characters, so that even with the longest host and application names the forwarded message fits the smallest syslog message cap warden accepts (1024 bytes) and the SIEM's copy is whole.
+
+An anchor is accepted only in exactly this form: version 1, `head_id` a positive integer, `head_hash` 64 lower-case hex digits, `anchored_at` with six fractional digits and `Z`, a non-empty `key_id`, a 64-byte signature in unpadded base64url, and no other members.
+
+### Reading anchors back
+
+`warden audit verify --anchors FILE` reads one record per line from an export taken from the SIEM, in either of the forms warden emits:
+
+- **NDJSON**, as `warden.audit.export` writes it: an object whose `action` is `warden.audit.anchor`, its `details` holding the anchor and its `id` the anchor row's id.
+- **RFC 5424**, as the syslog forwarder sends it: a message whose structured data has a parameter `action="warden.audit.anchor"` and a `details` parameter holding the details as JSON. Any SD-ID is accepted, since a product may set its own; the anchor row's id is the MSGID. An octet count or a collector's prefix (its own receive time and host, say) before the message is skipped.
+
+Every other line is ignored, so a whole export can be passed as it is. A line that is an anchor row but whose anchor cannot be read (a cut-short message, for example) is reported as malformed rather than skipped. A file with no anchors at all is refused.
+
+### Verification rules
+
+`verify_anchors` first verifies the chain exactly as `warden audit verify` does, then checks each anchor against the stored rows, all in the same REPEATABLE READ snapshot. For each anchor, in this order:
+
+1. **Malformed:** the anchor could not be read.
+2. **Signature:** the signature must verify with `verify_historical` over the message above. A key retired by routine rotation still counts. A revoked key does not, and is reported as such (`anchor_revoked_key`); any other failure, including an unknown key, is a bad signature (`anchor_signature`). No claim of an anchor that fails here is trusted.
+3. **Head present:** if the row at `head_id` exists, its stored `row_hash` must equal `head_hash` (`matched`); otherwise the chain was rewritten (`head_hash`).
+4. **Head purged:** if the row at `head_id` does not exist, the earliest checkpoint row still in the table whose `through_id` is at or after `head_id`, and whose own signature verifies, covers it. If that checkpoint's `through_id` is `head_id` itself, its `through_hash` must equal `head_hash` (`head_hash` if not). A covered anchor is reported `checkpointed`. With no such checkpoint, the row is missing (`head_missing`): the tail was deleted, or rows were removed without a checkpoint.
+
+The command exits 0 only if the chain verifies and every anchor is `matched` or `checkpointed`. It reports anchors by line number and `head_id`, never row contents.
+
+### What anchors show, and what they do not
+
+- **Rewriting or altering any row up to an anchor's head**, with every later hash recomputed, changes the head's `row_hash`: `head_hash`. Altering a row without recomputing hashes is already found by the chain itself.
+- **Deleting the tail** back past an anchor's head: `head_missing`.
+- **Rewriting from genesis:** with the same ids, `head_hash`; as a fresh chain with new ids, `head_missing`.
+- **A forged anchor**, or a genuine one edited to claim another head: `anchor_signature`.
+- **Anchors survive retention.** After a purge removes an anchor's head (and the anchor row itself), the SIEM's copy is checked against the checkpoint that covers it, so anchors older than a purge keep verifying, across successive purges.
+- **Residual exposure.** Rows written since the latest anchor the SIEM holds are protected only by the chain. A database administrator can still alter or delete them unseen, so the anchor interval bounds the exposure. And an anchor whose head lies strictly inside a purged range is accepted on the strength of the covering checkpoint: a rewrite made between that anchor and the purge, which the purge would then have verified and signed, is visible only if the anchors are checked before purging. Run `warden audit verify --anchors FILE` before each `warden audit purge`.

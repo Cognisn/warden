@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- External anchoring of the audit chain (design D13). `warden.audit.anchor()` appends an ordinary chained row, action `warden.audit.anchor`, whose details carry the committed head (`head_id`, `head_hash`) and the time, signed with warden's Ed25519 key over `"warden.audit.anchor.v1\n" || canonical_json(payload)` with the key id. The syslog forwarder sends it like any row, so a SIEM holds a signed, timestamped head that nobody with only database access can recall. `min_rows=N` writes an anchor only once N rows have been appended since the last one; an empty trail is not anchored; the actor may be at most 64 characters (`MAX_ANCHOR_ACTOR`), so a forwarded anchor always fits the smallest syslog message cap whole. The format is specified in `docs/design/audit-chain.md` section 7.
+- `warden.audit.read_anchors()` reads anchors back from a SIEM export, one record per line: NDJSON rows as `warden.audit.export` writes them, or RFC 5424 messages as the forwarder sends them under any SD-ID, with or without an octet count or a collector's prefix. Other lines are skipped; an anchor row whose anchor cannot be read is kept and reported as malformed.
+- `warden.audit.verify_anchors()` verifies the chain and checks each external anchor against it in one snapshot, returning an `AnchorReport` that names, by line and `head_id` and never by row contents, an anchor that is malformed, has a bad signature, was signed by a revoked key (retired keys stay valid, through `verify_historical`), whose head row is missing (tail deletion, or rows removed without a checkpoint), or whose head row's hash differs (a rewrite, including one from genesis). An anchor whose head was purged is checked against the earliest valid checkpoint covering it, so anchors survive retention.
+- `warden.audit.register_audit_actions()` also registers `warden.audit.anchor`.
+- `warden audit anchor [--actor NAME] [--min-rows N]` writes an anchor, for the product's scheduler to run (warden ships none); the application's role is enough. `warden audit verify --anchors FILE` also checks the chain against the anchors in a SIEM export, exits 0 only if the chain verifies and every anchor matches or is covered by a checkpoint, and reports failing anchors by line and head row, never row contents. A connection failure prints the fixed audit message and exits 1; an unreadable anchors file exits 2 and a file without anchors exits 1, neither naming the path.
+
+### Changed
+
+- The audit recorder never truncates an anchor's details, as it already never truncated a retention checkpoint's: either, cut short, could not vouch for the chain.
+- The tripwire that keeps warden from reading files or the environment directly now names one exemption: the anchors file an operator passes to `warden audit verify --anchors`, which is input data rather than configuration. A companion test fails unless the exemption matches exactly that one read.
+
 ## [0.1.0a6] - 2026-10-28
 
 Sixth pre-release: OIDC single sign-on. The authorisation code flow with PKCE, cached discovery and JWKS, id_token validation with pyjwt, subject pinning for pre-provisioned users, run-time settings and administration routes, and a stub identity provider for live checks.
