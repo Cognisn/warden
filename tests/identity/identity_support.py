@@ -6,10 +6,12 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import unquote
 
 from warden.config import WardenConfig, parse_config
 from warden.db import Database
 from warden.identity import Identity, User
+from warden.identity.mail import MailMessage
 from warden.identity.passwords import PasswordHasher
 from warden.identity.totp import code_at, step_for
 
@@ -18,6 +20,24 @@ FAST_HASHER = PasswordHasher(time_cost=1, memory_cost=8192, parallelism=1)
 PASSWORD = "correct horse battery staple"
 
 UserFactory = Callable[..., Awaitable[User]]
+
+
+class RecordingSender:
+    """The product's mail sender, recording instead of sending. ``fail`` makes it refuse."""
+
+    def __init__(self) -> None:
+        self.sent: list[MailMessage] = []
+        self.fail = False
+
+    async def send(self, message: MailMessage) -> None:
+        if self.fail:
+            raise ConnectionError("mail.example.com is unreachable")
+        self.sent.append(message)
+
+    def token(self, index: int = -1) -> str:
+        """The token in a sent message's link (the test links end ``?t=<token>``)."""
+        link = next(line for line in self.sent[index].text.splitlines() if "?t=" in line).strip()
+        return unquote(link.rpartition("?t=")[2].split()[0].rstrip("."))
 
 
 class MemorySecrets:

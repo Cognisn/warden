@@ -27,15 +27,18 @@ from psycopg import AsyncConnection, sql
 from warden.audit import AuditEvent, get_recorder, record_audit
 from warden.config import WardenConfig
 from warden.db import Database, schema, table
+from warden.identity import apikeys, invitations, prune, reset
 from warden.identity.actions import register_actions
 from warden.identity.crypto import SecretBox, SecretStore
 from warden.identity.dependencies import APP_STATE_KEY, Principal, ResourceScopeHook
 from warden.identity.errors import AuthenticationRefused, MfaError
 from warden.identity.http import SourceIp
+from warden.identity.mail import Mailer, MailError, MailKind, MailSender
 from warden.identity.mfa import Challenge, ChallengePurpose, Enrolment, Mfa
 from warden.identity.passwords import MAX_PASSWORD_LENGTH, PasswordHasher
 from warden.identity.policy import PolicyStore, SessionPolicy
 from warden.identity.roles import PermissionRegistry, Roles
+from warden.identity.single_use import SingleUseTokens
 from warden.identity.throttle import SignInThrottle
 from warden.identity.tokens import NewSession, Sessions, TokenPair
 from warden.identity.users import SignInMethod, Users, UserStatus, is_email
@@ -93,9 +96,13 @@ class Identity:
         sign_in_attempt_limit: int | None = None,
         sign_in_window_seconds: int | None = None,
         clock: Callable[[], float] = time.time,
+        mail_sender: MailSender | None = None,
     ) -> None:
         """``secrets`` is konfig's secrets store. It must hold the TOTP encryption
         key (named by ``identity.totp_key_secret``) or construction fails.
+
+        ``mail_sender`` is the product's ``MailSender``; invitations and
+        password resets need one.
 
         ``policy_max_age``, ``sign_in_attempt_limit`` and ``sign_in_window_seconds``
         override ``identity.policy_cache_seconds``, ``identity.sign_in_attempt_limit``
@@ -145,6 +152,92 @@ class Identity:
             else sign_in_window_seconds,
         )
         self.sessions = Sessions(db, keys, self.policy, issuer=issuer, clock=clock)
+        self._init_lifecycle(mail_sender)
+
+    def _init_lifecycle(self, mail_sender: MailSender | None) -> None:
+        """Identity lifecycle: mail, single-use tokens, invitations, password reset, API keys."""
+        for module in (invitations, reset, apikeys):
+            module.register_actions(get_recorder().registry)
+        self.api_keys = apikeys.ApiKeys(self.config.identity, self.db, self.roles)
+        self.mailer = Mailer(self.config.mail, mail_sender)
+        self.single_use = SingleUseTokens(self.db)
+        self.invitations = invitations.Invitations(
+            self.config,
+            self.db,
+            self.users,
+            self.roles,
+            self.single_use,
+            self.mailer,
+            self.passwords,
+        )
+        self.resets = reset.PasswordResets(
+            self.config, self.db, self.single_use, self.mailer, self.passwords, self.sessions
+        )
+        self.pruner = prune.Pruner(self.db, self.single_use, self.throttle)
+
+    async def prune(self) -> prune.PruneReport:
+        """Delete expired refresh tokens, single-use tokens, MFA challenges and throttle windows."""
+        return await self.pruner.prune()
+
+    def pruning(
+        self, *, every_seconds: float = 3600
+    ) -> contextlib.AbstractAsyncContextManager[None]:
+        """Run ``prune`` every ``every_seconds`` for a block, such as the product's lifespan."""
+        prune.check_interval(every_seconds)
+        return prune.scheduled(lambda: self.prune(), every_seconds)
+
+    async def _notify_enrolled(self, user_id: uuid.UUID) -> None:
+        """Mail the MFA-enrolled notice, after the enrolment committed.
+
+        Best effort: without a sender nothing is sent, and a failed delivery
+        is logged, never allowed to undo or fail the enrolment.
+        """
+        if not self.mailer.configured:
+            return
+        async with self.db.connection() as conn:
+            cur = await conn.execute(
+                sql.SQL(
+                    "SELECT u.email, u.display_name, t.confirmed_at FROM {} u"
+                    " JOIN {} t ON t.user_id = u.id WHERE u.id = %s"
+                ).format(_USERS, table(schema.TOTP_CREDENTIALS)),
+                (user_id,),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return
+        try:
+            await self.mailer.send(
+                MailKind.MFA_ENROLLED, email=row[0], display_name=row[1], enrolled_at=row[2]
+            )
+        except MailError as exc:
+            logger.warning(
+                "MFA-enrolled notice for user %s not sent (%s)", user_id, type(exc).__name__
+            )
+
+    def lifecycle_router(self) -> APIRouter:
+        """Invitation acceptance and password reset; mount under ``config.http.auth_prefix``."""
+        from warden.identity.routers.lifecycle import build_lifecycle_router
+
+        return build_lifecycle_router(self)
+
+    def admin_router(
+        self,
+        *,
+        permission: str,
+        roles: str | None = None,
+        invitations: str | None = None,
+        api_keys: str | None = None,
+    ) -> APIRouter:
+        """Administration routes; mount under ``config.http.admin_prefix``.
+
+        ``permission`` guards the user routes, and the role, invitation and
+        API key routes unless they are given their own permission.
+        """
+        from warden.identity.routers.admin import build_admin_router
+
+        return build_admin_router(
+            self, users=permission, roles=roles, invitations=invitations, api_keys=api_keys
+        )
 
     @property
     def permissions(self) -> PermissionRegistry:
@@ -358,6 +451,7 @@ class Identity:
                     "wrong_code", str(principal.user_id), "enrolment", source_ip
                 )
                 raise MfaError("code not accepted")
+            await self._notify_enrolled(principal.user_id)
             return codes, None
         policy = await self.policy.current()
         reason: str | None = None
@@ -393,6 +487,7 @@ class Identity:
             await self._refuse_second_factor(
                 reason or "unknown_challenge", opened, "enrolment", source_ip
             )
+        await self._notify_enrolled(new.user_id)
         return codes, await self.sessions.finish(new)
 
     async def _enrolling_user(
