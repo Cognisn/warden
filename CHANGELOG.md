@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a8] - 2026-10-28
+
+Eighth pre-release: invitations accepted through single sign-on, joining the single sign-on callback to the identity lifecycle's acceptance service, with the live single sign-on suite extended to cover it.
+
 ### Added
 
 - Invitation acceptance through single sign-on. The product's accept-invitation screen submits a form to `POST <auth>/sso/start` with the link's token in the field `invitation` (a top-level navigation, `application/x-www-form-urlencoded`, so the token stays out of every URL warden sends); warden answers 303 to the provider. The login transaction records only the token's SHA-256 hash, and the browser holds the token in a second cookie, `__Secure-warden-sso-invitation` (HttpOnly, Secure, SameSite=Lax, path `<auth prefix>/sso`, cleared at the callback). At the callback the cookie must match the transaction's hash; once the provider's identity is verified (`email_verified` true, and the domain in the allowed list), it goes to identity lifecycle's `accept_with_sso`, which requires the invited address (ignoring case) and decides method, status and the single consume. The subject is pinned and the handoff code stored inside the acceptance transaction, so the acceptance, the pin and the sign-in commit together or not at all; the browser lands like any SSO sign-in, and the handoff issues the new user's session with `amr` `["sso"]`. Both `password_and_sso` and `sso_only` invitations accept this way. An identity for another address, a disallowed or unverified email, or a subject already pinned to another user is refused and leaves the invitation usable; a user who is no longer invited is refused and the invitation used up (#154); of concurrent acceptances through single sign-on and a password, exactly one succeeds (#127). New refusal reasons under `warden.identity.sso.sign_in`: `invitation_malformed`, `invitation_not_bound`, `invitation_mismatch`, `invitation_refused` and `already_pinned`; lifecycle records its own reason under `warden.identity.invitation.accepted`.
