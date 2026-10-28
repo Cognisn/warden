@@ -9,7 +9,14 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI
-from identity_support import FAST_HASHER, PASSWORD, MemorySecrets, UserFactory, make_config
+from identity_support import (
+    FAST_HASHER,
+    PASSWORD,
+    MemorySecrets,
+    RecordingSender,
+    UserFactory,
+    make_config,
+)
 
 from warden.audit import ActionRegistry, AuditRecorder, set_recorder
 from warden.config import WardenConfig
@@ -67,14 +74,23 @@ def config() -> WardenConfig:
 
 
 @pytest.fixture
+def mail() -> RecordingSender:
+    """The product's mail sender; records every message instead of sending it."""
+    return RecordingSender()
+
+
+@pytest.fixture
 def identity(
     config: WardenConfig,
     db: Database,
     keys: KeyStore,
     permissions: PermissionRegistry,
     secrets: MemorySecrets,
+    mail: RecordingSender,
 ) -> Identity:
-    return Identity(config, db, keys, permissions, secrets=secrets, hasher=FAST_HASHER)
+    return Identity(
+        config, db, keys, permissions, secrets=secrets, hasher=FAST_HASHER, mail_sender=mail
+    )
 
 
 @pytest.fixture

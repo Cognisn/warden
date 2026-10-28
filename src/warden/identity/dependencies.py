@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Protocol
 from fastapi import HTTPException, Request
 
 from warden.identity.errors import AuthenticationRefused
-from warden.identity.http import Refused
+from warden.identity.http import Refused, client_ip
 
 if TYPE_CHECKING:
     from warden.identity.service import Identity
@@ -41,7 +41,13 @@ APP_STATE_KEY = "warden_identity"
 
 @dataclass(frozen=True, slots=True)
 class Principal:
-    """The signed-in user behind a request."""
+    """The signed-in user behind a request.
+
+    For a request made with an API key, ``api_key_id`` names the key,
+    ``session_id`` holds the same id (a key has no session), ``amr`` is
+    ``("api_key",)``, and ``permissions`` are the key's scopes intersected
+    with the user's current permissions.
+    """
 
     user_id: uuid.UUID
     session_id: uuid.UUID
@@ -49,6 +55,7 @@ class Principal:
     roles: frozenset[str]
     permissions: frozenset[str]
     amr: tuple[str, ...]
+    api_key_id: uuid.UUID | None = None
 
 
 class ResourceScopeHook(Protocol):
@@ -84,12 +91,15 @@ def bearer_token(request: Request) -> str | None:
 
 
 async def require_user(request: Request) -> Principal:
-    """The signed-in user, or the uniform 401 refusal."""
+    """The signed-in user (by access token or API key), or the uniform 401 refusal."""
     identity = installed_identity(request)
     token = bearer_token(request)
     if token is None:
         raise Refused()
     try:
+        if identity.api_keys.looks_like_key(token):
+            source = client_ip(request, identity.config.audit.trusted_proxies)
+            return await identity.api_keys.authenticate(token, source_ip=source)
         return await identity.authenticate(token)
     except AuthenticationRefused:
         raise Refused() from None
