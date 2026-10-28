@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a7] - 2026-10-28
+
+Seventh pre-release: external anchoring of the audit chain. Signed head anchors forwarded to the SIEM, `warden audit anchor`, and verification of the chain against anchors exported from it.
+
 ### Added
 
 - External anchoring of the audit chain (design D13). `warden.audit.anchor()` appends an ordinary chained row, action `warden.audit.anchor`, whose details carry the committed head (`head_id`, `head_hash`) and the time, signed with warden's Ed25519 key over `"warden.audit.anchor.v1\n" || canonical_json(payload)` with the key id. The syslog forwarder sends it like any row, so a SIEM holds a signed, timestamped head that nobody with only database access can recall. `min_rows=N` writes an anchor only once N rows have been appended since the last one; an empty trail is not anchored; the actor may be at most 64 characters (`MAX_ANCHOR_ACTOR`), so a forwarded anchor always fits the smallest syslog message cap whole. The format is specified in `docs/design/audit-chain.md` section 7.
