@@ -87,14 +87,22 @@ async def test_password_sign_in_works_while_sso_fails(
     assert password.json()["status"] == "signed_in"
 
 
+@pytest.mark.parametrize("body_type", ["form", "json"])
 async def test_an_invitation_completes_with_a_password_while_sso_fails(
-    client: httpx.AsyncClient, identity: Identity, mail: RecordingSender, db: Database
+    client: httpx.AsyncClient,
+    identity: Identity,
+    mail: RecordingSender,
+    db: Database,
+    body_type: str,
 ) -> None:
     test_the_provider_is_stopped()
     invitation = await identity.invitations.create("frank@example.com", actor="admin")
     token = mail.token()
 
-    sso = await client.post("/auth/sso/start", data={"invitation": token})
+    if body_type == "json":
+        sso = await client.post("/auth/sso/start", json={"invitation": token})
+    else:
+        sso = await client.post("/auth/sso/start", data={"invitation": token})
     assert sso.headers["location"] == f"{COMPLETION}?error=sso_failed"
     rows = await audit_rows(db, "warden.identity.sso.sign_in")
     assert rows[-1]["details"]["reason"] == "discovery_unavailable"

@@ -7,7 +7,8 @@ with the same variables as ``test_sso_live.py``:
     WARDEN_IT_IDP_PORT     the stub provider's port (stub_idp in ports.txt)
 
 An administrator invites a user; the user's browser posts the link's token to
-``POST /auth/sso/start``, signs in on the provider's own login page, and the
+``POST /auth/sso/start`` (as a urlencoded form, and again as a JSON object),
+signs in on the provider's own login page, and the
 callback accepts the invitation and lands with a handoff code. The new user
 then signs in again through single sign-on, matched by subject. The
 break-glass half, with the provider stopped, is in
@@ -44,9 +45,17 @@ from warden.identity import Identity, SignInMethod, UserStatus  # noqa: E402
 
 
 async def accept_through_sso(
-    client: httpx.AsyncClient, idp: httpx.AsyncClient, token: str, subject: str, email: str
+    client: httpx.AsyncClient,
+    idp: httpx.AsyncClient,
+    token: str,
+    subject: str,
+    email: str,
+    body_type: str,
 ) -> dict[str, str]:
-    started = await client.post("/auth/sso/start", data={"invitation": token})
+    if body_type == "json":
+        started = await client.post("/auth/sso/start", json={"invitation": token})
+    else:
+        started = await client.post("/auth/sso/start", data={"invitation": token})
     assert started.status_code == 303, started.text
     location = started.headers["location"]
     assert token not in location
@@ -56,12 +65,14 @@ async def accept_through_sso(
     return completion(await client.get("/auth/sso/callback", params={"code": code, "state": state}))
 
 
+@pytest.mark.parametrize("body_type", ["form", "json"])
 async def test_live_invitation_accepted_through_sso_then_sign_in_by_subject(
     client: httpx.AsyncClient,
     browser_to_idp: httpx.AsyncClient,  # noqa: F811 - the shared fixture, by name
     identity: Identity,
     mail: RecordingSender,
     db: Database,
+    body_type: str,
 ) -> None:
     invitation = await identity.invitations.create(
         "dana@example.com", actor="admin", sign_in_method=SignInMethod.SSO_ONLY
@@ -69,13 +80,17 @@ async def test_live_invitation_accepted_through_sso_then_sign_in_by_subject(
     token = mail.token()
 
     # An identity for another address is refused, and the invitation stays usable.
-    refused = await accept_through_sso(client, browser_to_idp, token, "s-erin", "erin@example.com")
+    refused = await accept_through_sso(
+        client, browser_to_idp, token, "s-erin", "erin@example.com", body_type
+    )
     assert refused == {"error": "sso_failed"}
     reasons = [r["details"]["reason"] for r in await audit_rows(db, "warden.identity.sso.sign_in")]
     assert reasons[-1] == "invitation_mismatch"
 
     # Accepted through the provider (the address differs only in case), then signed in.
-    landed = await accept_through_sso(client, browser_to_idp, token, "s-dana", "Dana@Example.com")
+    landed = await accept_through_sso(
+        client, browser_to_idp, token, "s-dana", "Dana@Example.com", body_type
+    )
     response = await handoff(client, landed["code"])
     assert response.status_code == 200, response.text
     principal = await identity.authenticate(response.json()["access_token"])
@@ -96,5 +111,5 @@ async def test_live_invitation_accepted_through_sso_then_sign_in_by_subject(
 
     # The link is spent.
     assert await accept_through_sso(
-        client, browser_to_idp, token, "s-dana", "dana@example.com"
+        client, browser_to_idp, token, "s-dana", "dana@example.com", body_type
     ) == {"error": "sso_failed"}

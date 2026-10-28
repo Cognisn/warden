@@ -1,7 +1,9 @@
 """SSO invitations' migration: the login transaction's invitation hash, and a tested downgrade.
 
 The integration session may re-chain the migration, so the tests find it and
-its parent by the migration's name rather than a revision id.
+its parent by the migration's name rather than a revision id. A later
+migration (SSO invitation sealing) replaces the hash with a sealed token, so
+these tests check this migration at its own revision, not at head.
 """
 
 from __future__ import annotations
@@ -62,6 +64,7 @@ def _insert(conn: psycopg.Connection[tuple[object, ...]], invitation_hash: objec
 
 
 def test_a_transaction_may_carry_an_invitation_hash(migrated_dsn: str) -> None:
+    downgrade(migrated_dsn, _revisions()[0])
     assert COLUMN in _columns(migrated_dsn)
     with psycopg.connect(migrated_dsn) as conn:
         _insert(conn, None)
@@ -70,6 +73,7 @@ def test_a_transaction_may_carry_an_invitation_hash(migrated_dsn: str) -> None:
 
 @pytest.mark.parametrize("value", [b"", b"\x01" * 31, b"\x01" * 33], ids=["empty", "31", "33"])
 def test_the_invitation_hash_is_a_sha256_digest(migrated_dsn: str, value: bytes) -> None:
+    downgrade(migrated_dsn, _revisions()[0])
     with psycopg.connect(migrated_dsn) as conn, pytest.raises(psycopg.errors.CheckViolation):
         _insert(conn, value)
 
@@ -86,4 +90,5 @@ def test_downgrade_removes_only_the_invitation_hash(migrated_dsn: str) -> None:
     assert _columns(migrated_dsn) == columns - {COLUMN}
     migrate(migrated_dsn)
     assert current_revision(migrated_dsn) == heads()[0]
+    downgrade(migrated_dsn, revision)
     assert _columns(migrated_dsn) == columns

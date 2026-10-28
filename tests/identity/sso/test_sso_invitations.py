@@ -1,24 +1,29 @@
 """Invitation acceptance through single sign-on, against a local fake provider.
 
 The product's accept-invitation screen posts the link's token to
-``POST <auth>/sso/start``. The login transaction records the token's hash,
-the browser holds the token in a second HttpOnly cookie, and the callback,
-once the provider's identity is verified, hands it to identity lifecycle's
-``accept_with_sso`` with a pin that also writes the handoff code, so the
-acceptance, the pin and the sign-in commit together or not at all.
+``POST <auth>/sso/start``, as a urlencoded form or a JSON object. The token
+is sealed into the login transaction under a key derived from the browser's
+login binding (the database holds only the binding's hash), and the
+callback, after the binding check and once the provider's identity is
+verified, opens it and hands it to identity lifecycle's ``accept_with_sso``
+with a pin that also writes the handoff code, so the acceptance, the pin and
+the sign-in commit together or not at all.
 
-Covers the email match (ignoring case) and allowed domains, the subject pin,
-method and status rules (#154), and a single consume under concurrent SSO
-and password acceptance (#127).
+Covers the sealing (nothing of the token in clear, a tampered or moved
+sealed value refused), both start bodies and the malformed-body refusal, the
+email match (ignoring case) and allowed domains, the subject pin, method and
+status rules (#154), and a single consume under concurrent SSO and password
+acceptance (#127).
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from collections.abc import Awaitable, Callable
 from functools import partial
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import pytest
@@ -43,12 +48,18 @@ from warden.identity import AuthenticationRefused, Identity, SignInMethod, UserS
 from warden.identity.invitations import InvitationMismatch, StagedGrant
 from warden.identity.sso.errors import SsoError
 from warden.identity.sso.provider import ProviderHttp
-from warden.identity.sso.service import COOKIE_NAME, INVITATION_COOKIE_NAME, SingleSignOn
+from warden.identity.sso.sealing import open_invitation
+from warden.identity.sso.service import COOKIE_NAME, SingleSignOn
 
 pytestmark = pytest.mark.db
 
 INVITEE = "invitee@example.com"
 NEW_PASSWORD = "a brand new passphrase"
+# 0.1.0a8 held the token in this cookie; nothing sets or reads it now.
+A8_INVITATION_COOKIE = "__Secure-warden-sso-invitation"
+
+Body = Literal["form", "json"]
+BODIES: tuple[Body, ...] = ("form", "json")
 
 
 @pytest.fixture
@@ -105,19 +116,25 @@ async def invite(
     return invitation.user_id, mail.token()
 
 
-async def start_with(client: httpx.AsyncClient, token: str) -> Started:
-    """The accept-invitation screen's form, posted by the browser."""
-    response = await client.post("/auth/sso/start", data={"invitation": token})
+async def post_start(client: httpx.AsyncClient, token: str, body: Body) -> httpx.Response:
+    """The accept-invitation screen's post: a urlencoded form, or a JSON object."""
+    if body == "json":
+        return await client.post("/auth/sso/start", json={"invitation": token})
+    return await client.post("/auth/sso/start", data={"invitation": token})
+
+
+async def start_with(client: httpx.AsyncClient, token: str, body: Body = "form") -> Started:
+    response = await post_start(client, token, body)
     assert response.status_code == 303, response.text
     location = httpx.URL(response.headers["location"])
     return Started({k: v for k, v in location.params.items()}, response)
 
 
 async def accept(
-    client: httpx.AsyncClient, idp: FakeIdp, token: str, **claims: Any
+    client: httpx.AsyncClient, idp: FakeIdp, token: str, body: Body = "form", **claims: Any
 ) -> dict[str, str]:
     """Start with the invitation, sign in at the provider, and land on the completion screen."""
-    started = await start_with(client, token)
+    started = await start_with(client, token, body)
     return completion(await callback(client, provider_code(idp, started, **claims), started.state))
 
 
@@ -165,6 +182,36 @@ async def acceptance_rows(db: Database) -> list[dict[str, Any]]:
     return await audit_rows(db, "warden.identity.invitation.accepted")
 
 
+async def transactions(db: Database) -> list[dict[str, Any]]:
+    async with db.connection() as conn:
+        cur = await conn.execute("SELECT * FROM warden.sso_login_transactions")
+        names = [c.name for c in cur.description or ()]
+        rows = await cur.fetchall()
+    return [dict(zip(names, row, strict=True)) for row in rows]
+
+
+async def sealed_of(db: Database, state: str) -> bytes:
+    value = await one(
+        db,
+        "SELECT invitation_sealed FROM warden.sso_login_transactions WHERE state_hash = %s",
+        hashlib.sha256(state.encode()).digest(),
+    )
+    assert value is not None
+    return bytes(value)
+
+
+async def set_sealed(db: Database, state: str, sealed: bytes) -> None:
+    async with db.connection() as conn:
+        await conn.execute(
+            "UPDATE warden.sso_login_transactions SET invitation_sealed = %s WHERE state_hash = %s",
+            (sealed, hashlib.sha256(state.encode()).digest()),
+        )
+
+
+async def transaction_count(db: Database) -> int:
+    return int(await one(db, "SELECT count(*) FROM warden.sso_login_transactions"))
+
+
 async def still_usable(identity: Identity, db: Database, user_id: uuid.UUID, token: str) -> None:
     """The invitation can still be accepted, here with a password."""
     assert await status_of(db, user_id) == "invited"
@@ -175,6 +222,7 @@ async def still_usable(identity: Identity, db: Database, user_id: uuid.UUID, tok
 # The round trip
 
 
+@pytest.mark.parametrize("body_type", BODIES)
 @pytest.mark.parametrize("method", [SignInMethod.PASSWORD_AND_SSO, SignInMethod.SSO_ONLY])
 async def test_an_invitation_is_accepted_through_single_sign_on(
     client: httpx.AsyncClient,
@@ -183,12 +231,14 @@ async def test_an_invitation_is_accepted_through_single_sign_on(
     mail: RecordingSender,
     db: Database,
     method: SignInMethod,
+    body_type: Body,
 ) -> None:
     user_id, token = await invite(identity, mail, method=method, grants=(StagedGrant("viewer"),))
     # The provider's address differs from the invited one only in case.
-    body = await signed_in(
-        client, await accept(client, idp, token, sub="s-invitee", email="Invitee@Example.COM")
+    landed = await accept(
+        client, idp, token, body_type, sub="s-invitee", email="Invitee@Example.COM"
     )
+    body = await signed_in(client, landed)
     principal = await identity.authenticate(body["access_token"])
     assert principal.user_id == user_id
     assert principal.amr == ("sso",)
@@ -220,44 +270,82 @@ async def test_the_accepted_user_then_signs_in_by_subject(
     assert (await sso_reasons(db))[-1] == "subject_mismatch"
 
 
-async def test_the_start_sets_an_invitation_cookie_and_keeps_the_token_out_of_urls(
-    client: httpx.AsyncClient, identity: Identity, mail: RecordingSender, db: Database
+@pytest.mark.parametrize("body_type", BODIES)
+async def test_the_start_seals_the_token_in_the_transaction(
+    client: httpx.AsyncClient,
+    identity: Identity,
+    mail: RecordingSender,
+    db: Database,
+    body_type: Body,
 ) -> None:
     _, token = await invite(identity, mail)
-    started = await start_with(client, token)
+    started = await start_with(client, token, body_type)
     assert token not in started.response.headers["location"]
+    # One cookie, the login binding; the token no longer rides in a cookie.
     cookies = started.response.headers.get_list("set-cookie")
-    invitation = next(c for c in cookies if c.startswith(f"{INVITATION_COOKIE_NAME}="))
-    lowered = invitation.lower()
-    assert "httponly" in lowered
-    assert "secure" in lowered
-    assert "samesite=lax" in lowered
-    assert "path=/auth/sso" in lowered
-    assert any(c.startswith(f"{COOKIE_NAME}=") for c in cookies)
-    # The transaction holds only the token's hash; the token itself is nowhere in the table.
-    async with db.connection() as conn:
-        cur = await conn.execute("SELECT * FROM warden.sso_login_transactions")
-        rows = await cur.fetchall()
+    assert [c.split("=", 1)[0] for c in cookies] == [COOKIE_NAME]
+    assert token not in " ".join(cookies)
+    binding = client.cookies[COOKIE_NAME]
+
+    rows = await transactions(db)
     assert len(rows) == 1
-    assert hashlib.sha256(token.encode()).digest() in rows[0]
-    assert all(token not in str(value) for value in rows[0])
+    row = rows[0]
+    assert "invitation_hash" not in row
+    sealed = row["invitation_sealed"]
+    assert isinstance(sealed, bytes) and len(sealed) == 71
+    # Nothing of the token, or of its hash, is in clear anywhere in the row.
+    digest = hashlib.sha256(token.encode()).digest()
+    for value in row.values():
+        assert token not in str(value)
+        assert digest.hex() not in str(value)
+        if isinstance(value, bytes):
+            assert token.encode() not in value
+            assert digest not in value
+    # It opens only with the browser's binding, bound to this row's state.
+    assert open_invitation(sealed, binding=binding, state_hash=bytes(row["state_hash"])) == token
+    assert bytes(row["binding_hash"]) == hashlib.sha256(binding.encode()).digest()
 
 
-async def test_the_callback_clears_the_invitation_cookie(
-    client: httpx.AsyncClient, idp: FakeIdp, identity: Identity, mail: RecordingSender
+async def test_a_tampered_sealed_value_is_refused_and_leaves_the_invitation_usable(
+    client: httpx.AsyncClient, idp: FakeIdp, identity: Identity, mail: RecordingSender, db: Database
 ) -> None:
-    _, token = await invite(identity, mail)
+    user_id, token = await invite(identity, mail)
     started = await start_with(client, token)
+    tampered = bytearray(await sealed_of(db, started.state))
+    tampered[-1] ^= 0x01
+    await set_sealed(db, started.state, bytes(tampered))
     landed = await callback(
         client, provider_code(idp, started, sub="s-invitee", email=INVITEE), started.state
     )
-    cleared = [
-        c
-        for c in landed.headers.get_list("set-cookie")
-        if c.startswith(f"{INVITATION_COOKIE_NAME}=")
-    ]
-    assert cleared and ("max-age=0" in cleared[0].lower() or "expires=" in cleared[0].lower())
-    assert INVITATION_COOKIE_NAME not in client.cookies
+    assert completion(landed) == {"error": "sso_failed"}
+    refusal = (await audit_rows(db, "warden.identity.sso.sign_in"))[-1]
+    assert refusal["outcome"] == "failure"
+    assert refusal["details"] == {"reason": "invitation_not_bound"}
+    assert await acceptance_rows(db) == []
+    assert await pin_of(db, user_id) is None
+    assert await handoffs_of(db, user_id) == 0
+    await still_usable(identity, db, user_id, token)
+
+
+async def test_a_sealed_value_moved_to_another_transaction_does_not_open(
+    client: httpx.AsyncClient, idp: FakeIdp, identity: Identity, mail: RecordingSender, db: Database
+) -> None:
+    # Someone who can write the table moves the victim's sealed invitation
+    # into a transaction of their own, to accept it with their own identity.
+    victim_id, victim_token = await invite(identity, mail)
+    own_id, own_token = await invite(identity, mail, "mallory@example.com")
+    victim = await start_with(client, victim_token)
+    own = await start_with(client, own_token)
+    await set_sealed(db, own.state, await sealed_of(db, victim.state))
+    landed = await callback(
+        client, provider_code(idp, own, sub="s-mallory", email=INVITEE), own.state
+    )
+    assert completion(landed) == {"error": "sso_failed"}
+    assert (await sso_reasons(db))[-1] == "invitation_not_bound"
+    assert await acceptance_rows(db) == []
+    assert await pin_of(db, victim_id) is None
+    await still_usable(identity, db, victim_id, victim_token)
+    await still_usable(identity, db, own_id, own_token)
 
 
 # The email must match, and the domain must be allowed
@@ -384,23 +472,27 @@ async def test_an_accepted_invitation_cannot_be_used_again(
 # The invitation is bound to the browser that started
 
 
-async def test_the_invitation_must_come_from_the_browser_that_started(
-    client: httpx.AsyncClient, idp: FakeIdp, identity: Identity, mail: RecordingSender, db: Database
+async def test_the_acceptance_must_finish_in_the_browser_that_started(
+    client: httpx.AsyncClient,
+    app: FastAPI,
+    idp: FakeIdp,
+    identity: Identity,
+    mail: RecordingSender,
+    db: Database,
 ) -> None:
     user_id, token = await invite(identity, mail)
-    _, other_token = await invite(identity, mail, "second@example.com")
-    for cookie in (None, other_token, "A" * 43):
-        started = await start_with(client, token)
-        client.cookies.delete(INVITATION_COOKIE_NAME)
-        if cookie is not None:
-            client.cookies.set(
-                INVITATION_COOKIE_NAME, cookie, domain="app.example.com", path="/auth/sso"
+    transport = httpx.ASGITransport(app=app, client=("198.51.100.20", 50000))
+    async with httpx.AsyncClient(transport=transport, base_url="https://app.example.com") as other:
+        # Another browser with no login cookie, then with one of its own.
+        for expected in ("no_cookie", "binding_mismatch"):
+            started = await start_with(client, token)
+            if expected == "binding_mismatch":
+                await other.get("/auth/sso/start")
+            landed = await callback(
+                other, provider_code(idp, started, sub="s-invitee", email=INVITEE), started.state
             )
-        landed = await callback(
-            client, provider_code(idp, started, sub="s-invitee", email=INVITEE), started.state
-        )
-        assert completion(landed) == {"error": "sso_failed"}
-        assert (await sso_reasons(db))[-1] == "invitation_not_bound"
+            assert completion(landed) == {"error": "sso_failed"}
+            assert (await sso_reasons(db))[-1] == expected
     assert await pin_of(db, user_id) is None
     await still_usable(identity, db, user_id, token)
 
@@ -408,10 +500,11 @@ async def test_the_invitation_must_come_from_the_browser_that_started(
 async def test_an_invitation_cookie_does_not_turn_a_sign_in_into_an_acceptance(
     client: httpx.AsyncClient, idp: FakeIdp, identity: Identity, mail: RecordingSender, db: Database
 ) -> None:
+    # A browser still holding 0.1.0a8's invitation cookie signs in as usual.
     user_id, token = await invite(identity, mail)
     response = await client.get("/auth/sso/start")
     started = Started(dict(httpx.URL(response.headers["location"]).params.items()), response)
-    client.cookies.set(INVITATION_COOKIE_NAME, token, domain="app.example.com", path="/auth/sso")
+    client.cookies.set(A8_INVITATION_COOKIE, token, domain="app.example.com", path="/auth/sso")
     landed = await callback(
         client, provider_code(idp, started, sub="s-invitee", email=INVITEE), started.state
     )
@@ -420,18 +513,99 @@ async def test_an_invitation_cookie_does_not_turn_a_sign_in_into_an_acceptance(
     await still_usable(identity, db, user_id, token)
 
 
-async def test_a_malformed_invitation_fails_at_the_start(
-    client: httpx.AsyncClient, db: Database
+FORM = "application/x-www-form-urlencoded"
+JSON = "application/json"
+MULTIPART = "multipart/form-data; boundary=b"
+
+
+def _bodies(token: str) -> list[tuple[str | None, bytes]]:
+    """Start bodies that must each be refused: (Content-Type, body).
+
+    Most carry a well-formed, live token, so only the body's shape is wrong.
+    """
+    dumped = json.dumps
+    part = f'--b\r\nContent-Disposition: form-data; name="invitation"\r\n\r\n{token}\r\n--b--'
+    return [
+        # A urlencoded form: missing, empty, malformed or repeated.
+        (FORM, b""),
+        (FORM, b"other=1"),
+        (FORM, b"invitation="),
+        (FORM, b"invitation=nope"),
+        (FORM, f"invitation={'A' * 44}".encode()),
+        (FORM, f"invitation={token}&invitation={token}".encode()),
+        (FORM, f"invitation={token}&junk".encode()),
+        (FORM, f"invitation={token}%0A".encode()),
+        (FORM, f"invitation={token}\xff".encode("latin-1")),
+        (FORM, dumped({"invitation": token}).encode()),
+        (FORM, f"invitation={token}&pad={'x' * 4096}".encode()),
+        # A JSON object: missing, mistyped, malformed or repeated.
+        (JSON, b""),
+        (JSON, b"{"),
+        (JSON, b"{}"),
+        (JSON, b"null"),
+        (JSON, dumped([token]).encode()),
+        (JSON, dumped(token).encode()),
+        (JSON, dumped({"invitation": None}).encode()),
+        (JSON, dumped({"invitation": 42}).encode()),
+        (JSON, dumped({"invitation": [token]}).encode()),
+        (JSON, dumped({"invitation": "nope"}).encode()),
+        (JSON, dumped({"invitation": token + "\n"}).encode()),
+        (JSON, f'{{"invitation": "{token}", "invitation": "{token}"}}'.encode()),
+        (JSON, f"invitation={token}".encode()),
+        (JSON, dumped({"invitation": token, "pad": "x" * 4096}).encode()),
+        # Anything else.
+        (None, f"invitation={token}".encode()),
+        ("text/plain", f"invitation={token}".encode()),
+        ("application/jsonx", dumped({"invitation": token}).encode()),
+        (MULTIPART, part.encode()),
+    ]
+
+
+async def test_a_malformed_start_body_fails_at_the_start(
+    client: httpx.AsyncClient, identity: Identity, mail: RecordingSender, db: Database
 ) -> None:
-    for body in ({"invitation": "nope"}, {}, {"invitation": "A" * 44}):
-        response = await client.post("/auth/sso/start", data=body)
-        assert response.status_code in (302, 303)
-        assert response.headers["location"] == f"{COMPLETION}?error=sso_failed"
-        assert (await sso_reasons(db))[-1] == "invitation_malformed"
-    async with db.connection() as conn:
-        cur = await conn.execute("SELECT count(*) FROM warden.sso_login_transactions")
-        row = await cur.fetchone()
-    assert row is not None and row[0] == 0
+    user_id, token = await invite(identity, mail)
+    cases = _bodies(token)
+    for content_type, content in cases:
+        headers = {} if content_type is None else {"content-type": content_type}
+        response = await client.post("/auth/sso/start", content=content, headers=headers)
+        case = (content_type, content[:80])
+        assert response.status_code in (302, 303), case
+        assert response.headers["location"] == f"{COMPLETION}?error=sso_failed", case
+        assert (await sso_reasons(db))[-1] == "invitation_malformed", case
+    assert len(await sso_reasons(db)) == len(cases)
+    assert await transaction_count(db) == 0
+    await still_usable(identity, db, user_id, token)
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "application/json",
+        "application/json; charset=utf-8",
+        "Application/JSON",
+        "application/x-www-form-urlencoded",
+        "application/x-www-form-urlencoded; charset=UTF-8",
+    ],
+)
+async def test_the_start_body_is_chosen_by_content_type(
+    client: httpx.AsyncClient,
+    identity: Identity,
+    mail: RecordingSender,
+    db: Database,
+    content_type: str,
+) -> None:
+    _, token = await invite(identity, mail)
+    if "json" in content_type.lower():
+        content = json.dumps({"invitation": token, "other": "ignored"}).encode()
+    else:
+        content = f"invitation={token}&other=ignored".encode()
+    response = await client.post(
+        "/auth/sso/start", content=content, headers={"content-type": content_type}
+    )
+    assert response.status_code == 303, response.text
+    assert token not in response.headers["location"]
+    assert await transaction_count(db) == 1
 
 
 # Single consume under concurrency (#127)
@@ -453,7 +627,6 @@ async def prepared_callback(
         code=code,
         error=None,
         binding=begun.binding,
-        invitation=token,
         invitations=identity.invitations,
     )
 
@@ -475,6 +648,10 @@ async def test_concurrent_sso_and_password_acceptances_use_an_invitation_once(
             if r not in succeeded
         ), results
         sso_won = isinstance(results[0], str)
+        if not sso_won:
+            # The callback lost the race at lifecycle's consume, and not
+            # earlier for some other reason (which would make the race vacuous).
+            assert (await sso_reasons(db))[-1] == "invitation_refused"
         # Exactly one method's effects: a pin and a handoff code, or a password.
         assert (await pin_of(db, user_id) is not None) is sso_won
         assert (await handoffs_of(db, user_id) == 1) is sso_won
