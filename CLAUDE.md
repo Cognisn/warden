@@ -110,11 +110,12 @@ The integration session works in the main clone on the release branch and merges
 
 ## Worktrees and the sandbox
 
-`dev/worktree.json` is warden's worktree recipe for the workstation's shared worktree setup script, and `dev/sandbox-compose.yml` is its Compose template. Each worktree's ports come from its slot plus the recipe's offsets: `postgres`, `syslog` (UDP and TCP), `syslog_tls`, and `stub_idp` (reserved; no stub identity provider exists yet). Every port binds to `127.0.0.1`.
+`dev/worktree.json` is warden's worktree recipe for the workstation's shared worktree setup script, and `dev/sandbox-compose.yml` is its Compose template. Each worktree's ports come from its slot plus the recipe's offsets: `postgres`, `syslog` (UDP and TCP), `syslog_tls`, and `stub_idp` (the stub OIDC provider). Every port binds to `127.0.0.1`.
 
 - The test suites use testcontainers, not the sandbox. Testcontainers runs count against the workstation's heavy-workload cap; run a session's database suites one at a time.
 - The sandbox Postgres is for manual checks only.
 - The live syslog check (`tests/syslogfwd/test_syslog_live.py`, marked `integration`) runs against the sandbox's `syslog` service. Write the certificates with `python tests/syslogfwd/live/make_certs.py <sandbox>/certs`, start the stack with `--profile syslog` added to the sandbox's start command, and set `WARDEN_IT_SANDBOX`, `WARDEN_IT_SYSLOG_PORT` and `WARDEN_IT_SYSLOG_TLS_PORT` from the sandbox's ports. That check also starts a testcontainers Postgres.
+- The live single sign-on checks (`tests/identity/sso/test_sso_live.py`, `test_sso_invitation_live.py` and `test_sso_break_glass_live.py`, marked `integration`) run against the sandbox's `idp` service, navikt mock-oauth2-server over TLS. Write its keystore with `python tests/identity/sso/live/make_certs.py <sandbox>/idp-certs`, start the stack with `--profile idp` added to the sandbox's start command, and set `WARDEN_IT_SANDBOX` and `WARDEN_IT_IDP_PORT` (the `stub_idp` port). Run the sign-in and invitation checks with the provider up, then the break-glass check after stopping it. These checks also start a testcontainers Postgres, so the stack plus a run count as two heavy workloads.
 
 ## Parallel sessions
 
