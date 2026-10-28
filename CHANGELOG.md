@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Invitations accepted through single sign-on now keep the token sealed in the login transaction instead of in a second cookie (a change to 0.1.0a8). `POST <auth>/sso/start` seals it with AES-256-GCM under a key derived with HKDF-SHA256 from the browser's login binding (the value in `__Secure-warden-sso`, which the database holds only as a hash), with the transaction's state hash as associated data. So someone who can read the database cannot open it, and a sealed value moved to another transaction does not open there. Neither the token nor its hash is stored in clear. At the callback, after the binding check, the token is opened with the browser's binding; a value that does not open is refused (`invitation_not_bound`, audited) and leaves the invitation usable. No server key is involved, so there is nothing new to configure or rotate.
+- `POST <auth>/sso/start` reads `invitation` from a urlencoded form (`application/x-www-form-urlencoded`) or a JSON object (`application/json`), chosen by `Content-Type` (a change to 0.1.0a8, which took a form only). Any other type, or a missing, repeated, mistyped or malformed `invitation` (including a repeated JSON member), lands on the fixed failure as `invitation_malformed` before any transaction is stored. It still answers 303 to the provider, and the token still appears in no URL.
+- Migration `7b2e9d4c1f08`, which follows `a6d3f0b8e21c`, replaces the `invitation_hash` column of `warden.sso_login_transactions` with `invitation_sealed` (exactly 71 bytes when set). Neither form can be converted into the other inside the database, so upgrading removes in-flight acceptances that carry a hash and downgrading removes those that carry a sealed token; their browsers land on the fixed failure and can start again. A plain sign-in's transaction is kept. Reversible.
+
+### Removed
+
+- The `__Secure-warden-sso-invitation` cookie, `INVITATION_COOKIE_NAME`, and the `invitation=` parameter of `SingleSignOn.complete()`, all introduced in 0.1.0a8. Upgrade note: a product that drives single sign-on without warden's router passes the invitation token only to `SingleSignOn.begin(invitation=...)`, stops setting and reading the invitation cookie, and calls `complete(...)` without `invitation=` (still with `invitations=`). Nothing here changes the 0.1.0a3 API, which had no invitation acceptance through single sign-on.
+
 ## [0.1.0a8] - 2026-10-28
 
 Eighth pre-release: invitations accepted through single sign-on, joining the single sign-on callback to the identity lifecycle's acceptance service, with the live single sign-on suite extended to cover it.

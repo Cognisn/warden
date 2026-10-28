@@ -26,13 +26,16 @@ as ``warden.identity.sso.sign_in`` with its reason; the browser always gets
 the same failure.
 
 An invitation link can complete through single sign-on. ``begin`` is given
-the invitation token, records its SHA-256 hash in the login transaction (the
-token itself is never stored), and the browser keeps the token in a second
-cookie, ``__Secure-warden-sso-invitation``. At the callback the token must
-come back from that browser and match the hash; once the provider's identity
-is verified (email verified and in an allowed domain), it goes to identity
-lifecycle's ``accept_with_sso``, which requires the invited address (ignoring
-case) and decides method, status and the single consume. The pin it calls
+the invitation token and seals it into the login transaction
+(``warden.identity.sso.sealing``): AES-256-GCM under a key derived from the
+browser's binding, which the database holds only as a hash, with the
+transaction's state hash as associated data. Neither the token nor its hash
+is stored in clear. At the callback, after the binding check, the token is
+opened with the browser's binding; a value that does not open is refused
+and leaves the invitation usable. Once the provider's identity is verified
+(email verified and in an allowed domain), the token goes to identity
+lifecycle's ``accept_with_sso``, which requires the invited address
+(ignoring case) and decides method, status and the single consume. The pin it calls
 inside its transaction pins the subject and stores the handoff code, so the
 acceptance, the pin and the sign-in commit together or not at all. The
 session is then issued at the handoff as for any SSO sign-in.
@@ -41,7 +44,6 @@ session is then issued at the handoff as for any SSO sign-in.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import re
 import secrets
 import time
@@ -75,6 +77,7 @@ from warden.identity.sso.schema import (
     SSO_LOGIN_TRANSACTIONS,
     SSO_SETTINGS_LOCK_KEY,
 )
+from warden.identity.sso.sealing import open_invitation, seal_invitation
 from warden.identity.sso.settings import SSO_AMR, SsoSettings, SsoSettingsStore
 from warden.identity.sso.validation import IdTokenClaims, IdTokenValidator
 from warden.identity.tokens import NewSession, Sessions, TokenPair
@@ -83,7 +86,6 @@ from warden.identity.users import UserStatus, is_email
 __all__ = [
     "COOKIE_NAME",
     "DEFAULT_CLIENT_SECRET_NAME",
-    "INVITATION_COOKIE_NAME",
     "SSO_FAILURE_MESSAGE",
     "ConfigurationCheck",
     "ConfigurationReport",
@@ -93,7 +95,6 @@ __all__ = [
 ]
 
 COOKIE_NAME = "__Secure-warden-sso"
-INVITATION_COOKIE_NAME = "__Secure-warden-sso-invitation"
 SSO_FAILURE_MESSAGE = "Single sign-on did not complete. Try again, or contact your administrator."
 """The one message a product shows when single sign-on fails, whatever the reason."""
 
@@ -241,18 +242,17 @@ class SingleSignOn:
     async def begin(self, *, source_ip: SourceIp = None, invitation: object = None) -> LoginStart:
         """Start a sign-in; with ``invitation`` (the link's token), an invitation acceptance.
 
-        The browser must hold the invitation token in ``INVITATION_COOKIE_NAME``
-        when it returns to the callback; only its hash is stored here.
+        The token is sealed into the login transaction to the binding this
+        returns, so it opens only at a callback from the browser holding it.
         """
         settings = await self.settings.current()
         if not settings.enabled or settings.issuer_url is None or settings.client_id is None:
             await self._refuse("sso_disabled", source_ip)
-        invitation_hash: bytes | None = None
+        offered: str | None = None
         if invitation is not None:
             offered = _token(invitation)
             if offered is None:
                 await self._refuse("invitation_malformed", source_ip)
-            invitation_hash = _hash(offered)
         discovery, _, _ = self._provider()
         try:
             metadata = await discovery.get(settings.issuer_url)
@@ -262,23 +262,21 @@ class SingleSignOn:
         nonce = secrets.token_urlsafe(32)
         verifier = secrets.token_urlsafe(48)
         binding = secrets.token_urlsafe(32)
+        state_hash = _hash(state)
+        sealed = (
+            None
+            if offered is None
+            else seal_invitation(offered, binding=binding, state_hash=state_hash)
+        )
         ttl = self.config.sso.login_transaction_ttl_seconds
         async with self.db.connection() as conn:
             await conn.execute(
                 sql.SQL(
                     "INSERT INTO {} (state_hash, binding_hash, nonce, code_verifier, issuer,"
-                    " invitation_hash, expires_at)"
+                    " invitation_sealed, expires_at)"
                     " VALUES (%s, %s, %s, %s, %s, %s, now() + %s * interval '1 second')"
                 ).format(_TRANSACTIONS),
-                (
-                    _hash(state),
-                    _hash(binding),
-                    nonce,
-                    verifier,
-                    settings.issuer_url,
-                    invitation_hash,
-                    ttl,
-                ),
+                (state_hash, _hash(binding), nonce, verifier, settings.issuer_url, sealed, ttl),
             )
         query = urlencode(
             {
@@ -305,14 +303,13 @@ class SingleSignOn:
         error: object,
         binding: object,
         source_ip: SourceIp = None,
-        invitation: object = None,
         invitations: InvitationAcceptance | None = None,
     ) -> str:
         """Finish at the provider and match the account; returns a one-time handoff code.
 
-        If the login transaction was started with an invitation, ``invitation``
-        (the browser's invitation cookie) must be that token, and the verified
-        identity accepts it through ``invitations`` instead of being matched.
+        If the login transaction was started with an invitation, its sealed
+        token must open with ``binding``, and the verified identity accepts
+        it through ``invitations`` instead of being matched.
         """
         settings = await self.settings.current()
         if not settings.enabled or settings.issuer_url is None or settings.client_id is None:
@@ -324,17 +321,14 @@ class SingleSignOn:
         if checked_state is None:
             await self._refuse("transaction_unknown", source_ip)
         transaction = await self._use_transaction(checked_state, bound, source_ip)
-        nonce, verifier, issuer, invitation_hash = transaction
+        nonce, verifier, issuer, sealed = transaction
         accepting: tuple[str, InvitationAcceptance] | None = None
-        if invitation_hash is not None:
-            offered = _token(invitation)
-            if (
-                offered is None
-                or invitations is None
-                or not hmac.compare_digest(_hash(offered), invitation_hash)
-            ):
+        if sealed is not None:
+            # After the binding check, so the transaction is this browser's.
+            token = open_invitation(sealed, binding=bound, state_hash=_hash(checked_state))
+            if token is None or invitations is None:
                 await self._refuse("invitation_not_bound", source_ip)
-            accepting = (offered, invitations)
+            accepting = (token, invitations)
         if error is not None:
             shown = (
                 error if isinstance(error, str) and _PROVIDER_ERROR.fullmatch(error) else "other"
@@ -371,14 +365,14 @@ class SingleSignOn:
                 sql.SQL(
                     "UPDATE {} SET consumed_at = now() WHERE state_hash = %s AND binding_hash = %s"
                     " AND consumed_at IS NULL AND expires_at > now()"
-                    " RETURNING nonce, code_verifier, issuer, invitation_hash"
+                    " RETURNING nonce, code_verifier, issuer, invitation_sealed"
                 ).format(_TRANSACTIONS),
                 (_hash(state), _hash(binding)),
             )
             row = await cur.fetchone()
             if row is not None:
-                invitation_hash = None if row[3] is None else bytes(row[3])
-                return str(row[0]), str(row[1]), str(row[2]), invitation_hash
+                sealed = None if row[3] is None else bytes(row[3])
+                return str(row[0]), str(row[1]), str(row[2]), sealed
             cur = await tx.execute(
                 sql.SQL(
                     "SELECT binding_hash = %s, consumed_at IS NOT NULL, expires_at <= now()"
