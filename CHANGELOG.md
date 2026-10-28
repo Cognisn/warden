@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- OIDC single sign-on (`warden.identity.sso`), one provider per deployment. `Identity` builds a `SingleSignOn` as `identity.sso`; the product mounts `identity.sso_router()` under its auth prefix and `identity.sso_settings_router(authorise=...)` under its admin prefix.
+- Discovery cached for `sso.discovery_cache_seconds`, whose `issuer` must equal the configured issuer exactly (no case folding, trailing-slash tolerance or prefix match), with every endpoint on https. The provider's JWKS is cached for `sso.jwks_cache_seconds`; a token naming an unknown key id forces a refetch at most once every `sso.jwks_refetch_min_seconds`. Only asymmetric signing keys are kept.
+- The authorisation code flow with PKCE (S256), state and nonce. `GET /sso/start` stores a login transaction bound to a random value in an HttpOnly, Secure, SameSite=Lax cookie (`__Secure-warden-sso`, path `<auth prefix>/sso`) and sends the browser to the provider. `GET /sso/callback` uses the transaction up with one guarded write that also checks the cookie, redeems the code with the verifier, validates the id_token, matches the account, and sends the browser to `http.sso_completion_link` with only a one-time handoff code (`?code=`). The product's screen posts it with the cookie to `POST /sso/handoff` and gets the session's tokens in the response body, in the same shape as password sign-in. No token, verifier or secret ever appears in a URL, and the redirects carry `Referrer-Policy: no-referrer`.
+- id_token validation with pyjwt: the algorithm must be in `sso.allowed_algorithms` and in the provider's advertised set, never `none` or HS*; the key comes from the JWKS by key id and is used only with its own algorithm; `iss`, `aud`, `azp` (required to be the client when there are several audiences, and checked whenever present), `exp` and `iat` (within `sso.clock_skew_seconds`) and `nonce` are each checked.
+- Account matching for pre-provisioned users only. The first sign-in matches a verified email (`email_verified` must be `true`), ignoring case, and pins the provider's (issuer, subject) to the user; later sign-ins match by subject, and the email must still agree. A disagreeing subject or email is refused and audited. `sso.allowed_email_domains` is checked on every sign-in, and users who are not active (including invited users) get nothing. Two first sign-ins racing for one user pin one subject.
+- Sessions issued through identity's session issuance with `amr` `["sso"]`, recorded as `warden.identity.sign_in`. Single sign-on never asks for a second factor, so `require_mfa`'s forced TOTP enrolment applies to password sign-in only.
+- Run-time single sign-on settings. `sso.*` configuration supplies the defaults; an administrator may override `enabled`, `issuer_url`, `client_id`, `scopes`, `allowed_email_domains` and `provider_preset`, stored in `warden.settings` and validated by the configuration's rules. Turning single sign-on off ends every SSO session in the same transaction, and an advisory lock (`SSO_SETTINGS_LOCK_KEY`, 0x...0201) between that change and session issuance means no SSO session survives a concurrent disable.
+- Administration routes: `GET` and `PUT /sso/settings`, `POST /sso/settings/reset`, `PUT /sso/client-secret` (written to konfig's secrets store under the name in `sso.client_secret`, default `warden.sso.client-secret`, and never returned), `POST /sso/test` (checks the settings, client secret, discovery, shared algorithms and JWKS; it signs nobody in and redeems nothing), and `DELETE /sso/users/{user_id}/pin`. The settings show the derived callback URI and setup guidance for each preset.
+- Provider presets (`entra`, `google`, `okta`, `generic`) are labels for setup guidance only; a tripwire test fails if any identity module that signs anyone in reads the preset.
+- Every refusal reaches the browser as the same redirect (`?error=sso_failed`; show `SSO_FAILURE_MESSAGE`), and a refused handoff gets the uniform 401. The reason is recorded only in the audit trail, as `warden.identity.sso.sign_in`. Other actions: `warden.identity.sso.subject_pinned`, `subject_unpinned`, `settings_changed`, `disabled`, `client_secret_set` and `configuration_tested`.
+- `identity.sso.prune()` removes expired login transactions and handoff codes.
+- Migration `e3a9c5d17f42`, which follows `c4a8e1f2d7b5`, creates `warden.sso_identities`, `sso_login_transactions` and `sso_handoff_codes`. Reversible.
+- Runtime dependency `pyjwt[crypto]` (MIT), from the agreed set, for id_token validation.
+- A stub OIDC provider for development workstations: navikt mock-oauth2-server (MIT) over TLS behind the sandbox's `idp` profile, published on loopback only, with its keystore written by `tests/identity/sso/live/make_certs.py`. Not part of the package.
+- Live single sign-on checks against it (marked `integration`): the round trip (sign-in, a forged subject, a forged email and a disallowed domain refused) in `tests/identity/sso/test_sso_live.py`, and break-glass password sign-in with the provider stopped in `tests/identity/sso/test_sso_break_glass_live.py`.
+
+### Changed
+
+- `httpx` (BSD-3-Clause) is now a runtime dependency, used to reach the identity provider; it was a development dependency only. Its CA bundle `certifi` (MPL-2.0) is a named licence exception.
+
 ## [0.1.0a5] - 2026-10-28
 
 Fifth pre-release: the identity lifecycle. Single-use tokens, invitations with a generic acceptance service, password reset, mail through a product-supplied sender, scoped API keys, administration routes and pruning.

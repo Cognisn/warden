@@ -1,0 +1,27 @@
+{
+  "interactiveLogin": true,
+  "httpServer": {
+    "type": "NettyWrapper",
+    "ssl": {
+      "keyPassword": "warden-dev-only",
+      "keystoreFile": "/certs/idp.p12",
+      "keystoreType": "PKCS12",
+      "keystorePassword": "warden-dev-only"
+    }
+  },
+  "tokenCallbacks": [
+    {
+      "issuerId": "warden",
+      "tokenExpiry": 300,
+      "requestMappings": [
+        {
+          "requestParam": "grant_type",
+          "match": "authorization_code",
+          "claims": {
+            "aud": ["warden-live-client"]
+          }
+        }
+      ]
+    }
+  ]
+}

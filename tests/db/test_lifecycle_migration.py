@@ -29,8 +29,8 @@ def _tables(dsn: str) -> set[str]:
     return {r[0] for r in rows}
 
 
-def _lifecycle_parent() -> str:
-    """The revision below the lifecycle migration, however the chain was re-ordered."""
+def _lifecycle_revisions() -> tuple[str, str]:
+    """The lifecycle migration and the revision below it, however the chain was re-ordered."""
     from alembic.script import ScriptDirectory
 
     from warden.db.migrate import _config
@@ -40,7 +40,7 @@ def _lifecycle_parent() -> str:
         if revision.path.endswith("_identity_lifecycle.py"):
             parent = revision.down_revision
             assert isinstance(parent, str)
-            return parent
+            return revision.revision, parent
     raise AssertionError("no identity lifecycle migration in the chain")
 
 
@@ -57,13 +57,18 @@ def test_lifecycle_tables_exist_at_head(migrated_dsn: str) -> None:
 
 
 def test_downgrade_removes_only_the_lifecycle_tables(migrated_dsn: str) -> None:
+    lifecycle, parent = _lifecycle_revisions()
+    # Later migrations may sit above this one; take them off first, so the
+    # check below sees the lifecycle downgrade alone.
+    downgrade(migrated_dsn, lifecycle)
     before = _tables(migrated_dsn)
-    parent = _lifecycle_parent()
+    assert before >= LIFECYCLE_TABLES
     downgrade(migrated_dsn, parent)
     assert current_revision(migrated_dsn) == parent
     assert _tables(migrated_dsn) == before - LIFECYCLE_TABLES
-    migrate(migrated_dsn)
+    migrate(migrated_dsn, lifecycle)
     assert _tables(migrated_dsn) == before
+    migrate(migrated_dsn)
     assert current_revision(migrated_dsn) == heads()[0]
 
 
