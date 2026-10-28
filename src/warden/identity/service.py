@@ -36,6 +36,7 @@ from warden.identity.mfa import Challenge, ChallengePurpose, Enrolment, Mfa
 from warden.identity.passwords import MAX_PASSWORD_LENGTH, PasswordHasher
 from warden.identity.policy import PolicyStore, SessionPolicy
 from warden.identity.roles import PermissionRegistry, Roles
+from warden.identity.sso.service import SingleSignOn
 from warden.identity.throttle import SignInThrottle
 from warden.identity.tokens import NewSession, Sessions, TokenPair
 from warden.identity.users import SignInMethod, Users, UserStatus, is_email
@@ -145,6 +146,16 @@ class Identity:
             else sign_in_window_seconds,
         )
         self.sessions = Sessions(db, keys, self.policy, issuer=issuer, clock=clock)
+        # Single sign-on (warden.identity.sso). Built even while disabled, since an
+        # administrator may enable it at run time.
+        self.sso = SingleSignOn(
+            config,
+            db,
+            self.sessions,
+            self.policy,
+            secrets,
+            settings_max_age=settings.policy_cache_seconds,
+        )
 
     @property
     def permissions(self) -> PermissionRegistry:
@@ -159,6 +170,22 @@ class Identity:
         from warden.identity.routers.auth import build_auth_router
 
         return build_auth_router(self)
+
+    def sso_router(self) -> APIRouter:
+        """The single sign-on routes; mount under ``config.http.auth_prefix`` too."""
+        from warden.identity.routers.sso import build_sso_router
+
+        return build_sso_router(self)
+
+    def sso_settings_router(self, *, authorise: Callable[..., Any]) -> APIRouter:
+        """Single sign-on administration; mount under ``config.http.admin_prefix``.
+
+        ``authorise`` is a FastAPI dependency that refuses the caller or returns
+        their actor id (for example a ``require_permission`` the product chose).
+        """
+        from warden.identity.routers.sso_settings import build_sso_settings_router
+
+        return build_sso_settings_router(self, authorise=authorise)
 
     @contextlib.asynccontextmanager
     async def running(self) -> AsyncIterator[None]:
@@ -183,6 +210,7 @@ class Identity:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+            await self.sso.aclose()
 
     async def prune_sign_in_attempts(self) -> int:
         """Delete sign-in throttle records whose window has ended."""
