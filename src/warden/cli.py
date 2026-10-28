@@ -2,8 +2,9 @@
 
     warden [--config FILE] [--env-prefix PREFIX] migrate [--revision REV]
     warden [--config FILE] [--env-prefix PREFIX] keys rotate
-    warden [--config FILE] [--env-prefix PREFIX] audit verify
+    warden [--config FILE] [--env-prefix PREFIX] audit verify [--anchors FILE]
     warden [--config FILE] [--env-prefix PREFIX] audit purge [--retention-days N] [--actor NAME]
+    warden [--config FILE] [--env-prefix PREFIX] audit anchor [--actor NAME] [--min-rows N]
     warden audit grants --app-role ROLE [--forwarder-role ROLE] [--purger-role ROLE]
 
 Configuration is read through konfig exactly as a product reads it: the
@@ -15,6 +16,11 @@ needs no database.
 
 ``audit purge`` deletes audit rows, so it must connect as the purger role
 (see ``warden.audit.grants``); the application's role cannot delete them.
+
+``audit anchor`` appends a signed attestation of the chain head, for the
+product's scheduler to run (warden ships none); the application's role is
+enough. ``audit verify --anchors FILE`` also checks the chain against anchors
+exported from a SIEM, as NDJSON or as forwarded syslog messages, one per line.
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ import asyncio
 import sys
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import psycopg
@@ -32,11 +39,19 @@ from psycopg import AsyncConnection
 
 from warden import __version__
 from warden.audit.actions import register_audit_actions
+from warden.audit.anchor import (
+    MAX_ANCHOR_ACTOR,
+    AnchorError,
+    AnchorRecord,
+    ExternalAnchor,
+    anchor,
+    read_anchors,
+)
 from warden.audit.grants import grants_sql
 from warden.audit.recorder import AuditRecorder
 from warden.audit.registry import ActionRegistry
 from warden.audit.retention import PurgeResult, RetentionError, purge
-from warden.audit.verify import VerificationReport, verify_chain
+from warden.audit.verify import AnchorReport, VerificationReport, verify_anchors, verify_chain
 from warden.config import ConfigError, SecretSource, SettingsSource, WardenConfig, load_config
 from warden.db import Database, current_revision, migrate
 from warden.keys import KeyStore, KeyStoreError, SecretStore
@@ -104,17 +119,44 @@ def _parser() -> argparse.ArgumentParser:
 
     audit_cmd = commands.add_parser("audit", help="audit trail verification and retention")
     audit_sub = audit_cmd.add_subparsers(dest="audit_command", required=True)
-    audit_sub.add_parser("verify", help="verify the audit hash chain")
+    verify_cmd = audit_sub.add_parser("verify", help="verify the audit hash chain")
+    verify_cmd.add_argument(
+        "--anchors", help="also check anchors exported from a SIEM (NDJSON or syslog lines)"
+    )
     purge_cmd = audit_sub.add_parser("purge", help="delete audit rows past the retention period")
     purge_cmd.add_argument(
         "--retention-days", type=int, help="overrides warden.audit.retention_days"
     )
     purge_cmd.add_argument("--actor", help="who is running the purge, for its audit record")
+    anchor_cmd = audit_sub.add_parser("anchor", help="append a signed attestation of the head")
+    anchor_cmd.add_argument(
+        "--actor",
+        type=_anchor_actor,
+        help=f"who is anchoring, for the anchor's audit record (at most {MAX_ANCHOR_ACTOR})",
+    )
+    anchor_cmd.add_argument(
+        "--min-rows",
+        type=_positive,
+        help="anchor only if at least N rows were appended since the last anchor",
+    )
     grants_cmd = audit_sub.add_parser("grants", help="print the append-only grant SQL")
     grants_cmd.add_argument("--app-role", required=True)
     grants_cmd.add_argument("--forwarder-role")
     grants_cmd.add_argument("--purger-role")
     return parser
+
+
+def _positive(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return value
+
+
+def _anchor_actor(text: str) -> str:
+    if len(text) > MAX_ANCHOR_ACTOR:
+        raise argparse.ArgumentTypeError(f"must be at most {MAX_ANCHOR_ACTOR} characters")
+    return text
 
 
 def _dsn(config: WardenConfig) -> str:
@@ -160,6 +202,30 @@ async def _audit_verify(dsn: str, secrets: SecretStore, config: WardenConfig) ->
         await _close(db)
 
 
+async def _audit_verify_anchors(
+    dsn: str, secrets: SecretStore, config: WardenConfig, anchors: list[ExternalAnchor]
+) -> AnchorReport:
+    db = await _connect(dsn)
+    try:
+        return await verify_anchors(db, KeyStore(db, secrets, config.keys), anchors)
+    finally:
+        await _close(db)
+
+
+async def _audit_anchor(
+    dsn: str, secrets: SecretStore, config: WardenConfig, actor: str | None, min_rows: int | None
+) -> AnchorRecord | None:
+    db = await _connect(dsn)
+    try:
+        registry = ActionRegistry()
+        register_audit_actions(registry)
+        recorder = AuditRecorder(db, registry, details_max_bytes=config.audit.details_max_bytes)
+        keys = KeyStore(db, secrets, config.keys)
+        return await anchor(recorder, keys, actor=actor, min_rows=min_rows)
+    finally:
+        await _close(db)
+
+
 async def _audit_purge(
     dsn: str, secrets: SecretStore, config: WardenConfig, days: int, actor: str | None
 ) -> PurgeResult:
@@ -174,22 +240,94 @@ async def _audit_purge(
         await _close(db)
 
 
-def _audit(args: argparse.Namespace, dsn: str, secrets: SecretStore, config: WardenConfig) -> int:
-    if args.audit_command == "verify":
+def _print_chain(report: VerificationReport) -> None:
+    if report.broken is not None:
+        broken = report.broken
+        print(f"audit chain broken at row {broken.row_id}: {broken.description}")
+        return
+    print(
+        f"audit chain intact: {report.rows} rows, {report.checkpoints} checkpoints"
+        + ("" if report.last_id is None else f", head row {report.last_id}")
+    )
+
+
+def _print_anchors(report: AnchorReport) -> None:
+    checks = report.anchors
+    matched = sum(1 for c in checks if c.status == "matched")
+    covered = sum(1 for c in checks if c.status == "checkpointed")
+    failed = [c for c in checks if not c.ok]
+    print(
+        f"anchors: {len(checks)} checked, {matched} matched,"
+        f" {covered} behind checkpoints, {len(failed)} failed"
+    )
+    for check in failed:
+        where = "" if check.head_id is None else f" (head row {check.head_id})"
+        print(f"anchor on line {check.line}{where}: {check.description}")
+
+
+def _read_anchors_file(path: str) -> list[ExternalAnchor] | None:
+    try:
+        text = Path(path).read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return None
+    # Split on newlines only: str.splitlines() would also split on characters
+    # such as U+2028 that a syslog value or JSON string may legitimately hold.
+    return read_anchors(text.split("\n"))
+
+
+def _audit_verify_command(
+    args: argparse.Namespace, dsn: str, secrets: SecretStore, config: WardenConfig
+) -> int:
+    if args.anchors is None:
         try:
             report = _run_async(_audit_verify(dsn, secrets, config))
         except psycopg.OperationalError:
             print(AUDIT_CONNECTION_FAILED, file=sys.stderr)
             return EXIT_FAILED
-        if report.broken is not None:
-            broken = report.broken
-            print(f"audit chain broken at row {broken.row_id}: {broken.description}")
-            return EXIT_FAILED
-        print(
-            f"audit chain intact: {report.rows} rows, {report.checkpoints} checkpoints"
-            + ("" if report.last_id is None else f", head row {report.last_id}")
-        )
-        return EXIT_OK
+        _print_chain(report)
+        return EXIT_OK if report.ok else EXIT_FAILED
+
+    anchors = _read_anchors_file(args.anchors)
+    if anchors is None:
+        # The path is the operator's own, but it is kept out of the output all the same.
+        print("warden audit verify: cannot read the anchors file", file=sys.stderr)
+        return EXIT_CONFIG
+    if not anchors:
+        print("warden audit verify: no anchors found in the anchors file", file=sys.stderr)
+        return EXIT_FAILED
+    try:
+        full = _run_async(_audit_verify_anchors(dsn, secrets, config, anchors))
+    except psycopg.OperationalError:
+        print(AUDIT_CONNECTION_FAILED, file=sys.stderr)
+        return EXIT_FAILED
+    _print_chain(full.chain)
+    _print_anchors(full)
+    return EXIT_OK if full.ok else EXIT_FAILED
+
+
+def _audit_anchor_command(
+    args: argparse.Namespace, dsn: str, secrets: SecretStore, config: WardenConfig
+) -> int:
+    try:
+        written = _run_async(_audit_anchor(dsn, secrets, config, args.actor, args.min_rows))
+    except psycopg.OperationalError:
+        print(AUDIT_CONNECTION_FAILED, file=sys.stderr)
+        return EXIT_FAILED
+    except (AnchorError, KeyStoreError) as exc:
+        print(exc, file=sys.stderr)
+        return EXIT_FAILED
+    if written is None:
+        print("nothing to anchor")
+    else:
+        print(f"anchored head row {written.anchor.head_id} in audit row {written.row_id}")
+    return EXIT_OK
+
+
+def _audit(args: argparse.Namespace, dsn: str, secrets: SecretStore, config: WardenConfig) -> int:
+    if args.audit_command == "verify":
+        return _audit_verify_command(args, dsn, secrets, config)
+    if args.audit_command == "anchor":
+        return _audit_anchor_command(args, dsn, secrets, config)
 
     days = args.retention_days or config.audit.retention_days
     if days is None:

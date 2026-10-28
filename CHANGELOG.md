@@ -12,10 +12,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `warden.audit.read_anchors()` reads anchors back from a SIEM export, one record per line: NDJSON rows as `warden.audit.export` writes them, or RFC 5424 messages as the forwarder sends them under any SD-ID, with or without an octet count or a collector's prefix. Other lines are skipped; an anchor row whose anchor cannot be read is kept and reported as malformed.
 - `warden.audit.verify_anchors()` verifies the chain and checks each external anchor against it in one snapshot, returning an `AnchorReport` that names, by line and `head_id` and never by row contents, an anchor that is malformed, has a bad signature, was signed by a revoked key (retired keys stay valid, through `verify_historical`), whose head row is missing (tail deletion, or rows removed without a checkpoint), or whose head row's hash differs (a rewrite, including one from genesis). An anchor whose head was purged is checked against the earliest valid checkpoint covering it, so anchors survive retention.
 - `warden.audit.register_audit_actions()` also registers `warden.audit.anchor`.
+- `warden audit anchor [--actor NAME] [--min-rows N]` writes an anchor, for the product's scheduler to run (warden ships none); the application's role is enough. `warden audit verify --anchors FILE` also checks the chain against the anchors in a SIEM export, exits 0 only if the chain verifies and every anchor matches or is covered by a checkpoint, and reports failing anchors by line and head row, never row contents. A connection failure prints the fixed audit message and exits 1; an unreadable anchors file exits 2 and a file without anchors exits 1, neither naming the path.
 
 ### Changed
 
 - The audit recorder never truncates an anchor's details, as it already never truncated a retention checkpoint's: either, cut short, could not vouch for the chain.
+- The tripwire that keeps warden from reading files or the environment directly now names one exemption: the anchors file an operator passes to `warden audit verify --anchors`, which is input data rather than configuration. A companion test fails unless the exemption matches exactly that one read.
 
 ## [0.1.0a4] - 2026-10-28
 
