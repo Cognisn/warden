@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a9] - 2026-10-28
+
+Ninth pre-release: the invitation token is sealed in the single sign-on login transaction instead of a separate cookie, and `POST /sso/start` accepts a form or JSON body.
+
 ### Changed
 
 - Invitations accepted through single sign-on now keep the token sealed in the login transaction instead of in a second cookie (a change to 0.1.0a8). `POST <auth>/sso/start` seals it with AES-256-GCM under a key derived with HKDF-SHA256 from the browser's login binding (the value in `__Secure-warden-sso`, which the database holds only as a hash), with the transaction's state hash as associated data. So someone who can read the database cannot open it, and a sealed value moved to another transaction does not open there. Neither the token nor its hash is stored in clear. At the callback, after the binding check, the token is opened with the browser's binding; a value that does not open is refused (`invitation_not_bound`, audited) and leaves the invitation usable. No server key is involved, so there is nothing new to configure or rotate.
