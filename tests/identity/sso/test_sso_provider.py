@@ -384,3 +384,21 @@ async def test_email_verified_must_be_a_real_true(
             token, metadata=metadata, client_id=CLIENT_ID, nonce="nonce-1"
         )
         assert claims.email_verified is False
+
+
+async def test_none_and_hs_are_never_usable_whatever_the_lists_say(
+    idp: FakeIdp, http: ProviderHttp
+) -> None:
+    # Configuration refuses these at start-up; the validator refuses them again,
+    # so a mistake upstream cannot admit them.
+    idp.algorithms = ["RS256", "none", "HS256", "HS384", "HS512"]
+    metadata = await Discovery(http).get(ISSUER)
+    lax = IdTokenValidator(
+        JwksCache(http),
+        allowed_algorithms=("RS256", "none", "HS256", "HS384", "HS512"),
+        clock_skew_seconds=60,
+    )
+    assert lax.usable_algorithms(metadata) == {"RS256"}
+    del idp.keys[0].public_jwk["alg"]  # a key that does not pin its algorithm
+    token = _unsigned(idp.claims(), {"alg": "none", "kid": "rsa-1", "typ": "JWT"})
+    assert await check(lax, metadata, token) == "algorithm_not_allowed"

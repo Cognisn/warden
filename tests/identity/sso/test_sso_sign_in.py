@@ -274,6 +274,17 @@ async def test_a_user_who_is_not_active_gets_nothing(
     assert await pin_of(db, alice.id) is None
 
 
+async def test_a_pinned_user_who_is_suspended_gets_no_handoff(
+    client: httpx.AsyncClient, idp: FakeIdp, alice: User, identity: Identity, db: Database
+) -> None:
+    await tokens(await sign_in(client, idp, sub="s-alice", email=ALICE))
+    await identity.users.set_status(alice.id, UserStatus.SUSPENDED, actor="test")
+    started = await start(client)
+    code = provider_code(idp, started, sub="s-alice", email=ALICE)
+    assert completion(await callback(client, code, started.state)) == {"error": "sso_failed"}
+    assert (await refusals(db))[-1] == "user_inactive"
+
+
 async def test_an_invited_user_gets_nothing(
     client: httpx.AsyncClient, idp: FakeIdp, make_user: UserFactory, db: Database
 ) -> None:
@@ -451,6 +462,9 @@ async def test_a_handoff_needs_the_login_cookie(
     )
     transport = httpx.ASGITransport(app=app, client=("198.51.100.7", 40000))
     async with httpx.AsyncClient(transport=transport, base_url="https://app.example.com") as other:
+        assert (await handoff(other, landed["code"])).status_code == 401
+        # A well-formed cookie from another browser does not bind either.
+        other.cookies.set(COOKIE_NAME, "A" * 43, domain="app.example.com", path="/auth/sso")
         assert (await handoff(other, landed["code"])).status_code == 401
     assert await sessions_of(db, alice.id) == 0
     await tokens(await handoff(client, landed["code"]))
