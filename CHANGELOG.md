@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `Users.list(status=None, conn=None)`: every user, oldest first with ties broken by id, optionally only those of one status, and inside a caller's transaction when given `conn`. `GET <admin>/users` now uses it instead of querying the table itself; its response is unchanged.
+
 ### Changed
 
 - `sso.issuer_url` is kept exactly as configured, trailing slash included, in start-up configuration and in run-time settings. 0.1.0a9 removed a trailing slash, so exact issuer equality refused every provider whose issuer ends in `/` (`issuer_mismatch`). The issuer is still validated as before: https only, no credentials, query, fragment, spaces or control characters, checked with `fullmatch`. Discovery still fetches `<issuer without trailing slash>/.well-known/openid-configuration`, and the discovery document's `issuer` and the id_token's `iss` must equal the configured value character for character. Upgrade note: a deployment whose configured issuer differs from the provider's advertised issuer only by a trailing slash (which 0.1.0a9 accepted after stripping it) must configure the issuer exactly as the provider advertises it. Subjects pinned under the stripped form do not match an issuer configured with the slash.
