@@ -96,29 +96,43 @@ It is written from scratch. The design draws on the identity and audit implement
 - Idle session timeout (a later setting).
 - Product-specific resource scoping, entitlements and licensing.
 
-## 4. Package layout (proposed)
+## 4. Package layout
+
+The layout as built for 0.1.0. The public API is what each package exports in `__all__` (pinned by `tests/test_public_api.py`), plus the HTTP contract and the database schema; every other name is internal. `warden/__init__.py` exports only `__version__` and imports no subpackage, so `import warden.audit` never loads identity (D11).
 
 ```
 src/warden/
-  config.py            typed configuration, konfig binding, start-up validation
-  keys.py              Ed25519 key store, rotation, public-key publication
-  proxy.py             trusted-proxy middleware
-  cli.py               warden migrate, keys rotate, audit verify, audit purge
-  db/                  pool adapter, schema helpers, Alembic environment (schema "warden")
-  audit/               recorder, event registry, hash chain, syslog forwarder,
-                       query and export, retention and checkpoints, routers
-  identity/
-    users.py           user model and lifecycle
+  __init__.py          __version__ only; names the subpackages
+  config.py            typed configuration, konfig binding, start-up validation    (public)
+  keys.py              Ed25519 key store, rotation, public-key publication          (public)
+  proxy.py             trusted-proxy middleware                                     (public)
+  cli.py               warden migrate, keys rotate, audit verify, purge, anchor, grants
+  db/                  pool adapter, schema names and lock keys, migrations         (public)
+    schema.py          every table name, settings key and advisory lock key
+    migrate.py         Alembic chain in schema "warden"
+    migrations/        one chain, new files only
+  audit/               recorder, registry, hash chain, query, export, retention     (public)
+                       and checkpoints, anchors, verification, router
+    syslog/            RFC 5424 forwarding over UDP, TCP or TLS, routes             (public)
+  identity/            Identity, users, sign-in, sessions, roles, lifecycle, SSO    (public)
+    service.py         Identity: the object a product constructs and mounts
+    users.py           user model, statuses, sign-in methods, listing
     passwords.py       Argon2id, legacy PBKDF2 verify, rehash on sign-in
-    totp.py            TOTP with step replay guard, recovery codes
-    tokens.py          access and refresh tokens, families, session policy
-    single_use.py      invitation and reset tokens (atomic consume)
-    apikeys.py         API keys
+    totp.py, mfa.py    TOTP with step replay guard, recovery codes, challenges
+    tokens.py          EdDSA access tokens, rotating refresh-token families
+    policy.py          session policy and its run-time overrides
     roles.py           permission registry, role sets, assignments
+    throttle.py        sign-in throttle per identifier and source address
+    single_use.py      invitation and reset tokens (atomic consume)
+    invitations.py     invitations, staged grants, acceptance by password or SSO
+    reset.py           password reset by emailed link
     mail.py            sender protocol, templates
+    apikeys.py         API keys
+    prune.py           removal of rows that can never be used again
     dependencies.py    require_user, require_permission, resource hook
-    sso/               discovery, JWKS, PKCE client, id_token validation, matching
-    routers/           public sign-in routes, administration routes
+    sso/               discovery, JWKS, PKCE client, id_token validation,
+                       matching and pinning, settings, label-only presets
+    routers/           sign-in, lifecycle, administration and SSO routes
 ```
 
 ## 5. Acceptance tests
