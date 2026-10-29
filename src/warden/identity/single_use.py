@@ -26,10 +26,10 @@ from typing import Any, TypeGuard
 from psycopg import AsyncConnection, sql
 
 from warden.db import Database, table
+from warden.db.schema import SINGLE_USE_TOKENS
 
 __all__ = ["SINGLE_USE_TOKENS", "IssuedToken", "LiveToken", "Purpose", "SingleUseTokens"]
 
-SINGLE_USE_TOKENS = "single_use_tokens"
 
 # secrets.token_urlsafe(32): 43 base64url characters.
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{43}")

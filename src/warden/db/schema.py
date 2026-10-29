@@ -10,12 +10,12 @@ bytes and a 16-bit number allocated by owner.
 |---|---|---|
 | 0x...00xx | db and audit | 0001 migrations, 0002 syslog forwarder, 0003 audit chain |
 | 0x...01xx | identity | 0101 last administrator |
-| 0x...02xx | single sign-on | none yet |
+| 0x...02xx | single sign-on | 0201 single sign-on settings |
 
-A key may be defined in the module that owns it, inside its owner's range;
-``tests/test_db_schema.py`` scans every ``*_LOCK_KEY`` in ``src/warden`` and
-fails on a collision or a key outside the table. Never change an allocated
-key: a replica still running the old value would no longer be excluded.
+Every allocated key is defined here. ``tests/test_db_schema.py`` scans every
+``*_LOCK_KEY`` in ``src/warden`` and fails on a collision, a key outside the
+table, or a key not recorded in it. Never change an allocated key: a replica
+still running the old value would no longer be excluded.
 
 Identity's session-policy writes lock ``hashtext(POLICY_SETTING)``, a 32-bit
 value that cannot meet a key above, which all carry the prefix.
@@ -55,6 +55,25 @@ IDENTITY_TABLES = frozenset(
     }
 )
 
+# Identity lifecycle's tables.
+# Invitation and password reset tokens, each usable once.
+SINGLE_USE_TOKENS = "single_use_tokens"
+# The roles an invitation grants when it is accepted.
+INVITATION_GRANTS = "invitation_grants"
+API_KEYS = "api_keys"
+
+LIFECYCLE_TABLES = frozenset({SINGLE_USE_TOKENS, INVITATION_GRANTS, API_KEYS})
+
+# Single sign-on's tables.
+# Each user's pinned (issuer, subject); at most one per user and per subject.
+SSO_IDENTITIES = "sso_identities"
+# Started sign-ins (state, nonce, PKCE verifier), each usable once.
+SSO_LOGIN_TRANSACTIONS = "sso_login_transactions"
+# One-time codes handed to the product's completion screen.
+SSO_HANDOFF_CODES = "sso_handoff_codes"
+
+SSO_TABLES = frozenset({SSO_IDENTITIES, SSO_LOGIN_TRANSACTIONS, SSO_HANDOFF_CODES})
+
 # Transaction-scoped advisory lock taken by every migration run, so replicas
 # that start together apply the chain one at a time. ASCII "warden" + 0x0001.
 MIGRATION_LOCK_KEY = 0x7761_7264_656E_0001
@@ -73,6 +92,12 @@ CHAIN_LOCK_KEY = 0x7761_7264_656E_0003
 # check. ASCII "warden" + 0x0101.
 ADMINISTRATOR_LOCK_KEY = 0x7761_7264_656E_0101
 
+# Transaction-scoped advisory lock between changing the single sign-on
+# settings (exclusive) and issuing a session through single sign-on
+# (shared), so a session issued while SSO is being disabled is either
+# refused or revoked by the disable. ASCII "warden" + 0x0201.
+SSO_SETTINGS_LOCK_KEY = 0x7761_7264_656E_0201
+
 # The recorder NOTIFYs this channel in the same transaction as each audit
 # insert, so a signal arrives only once the row has committed. The payload is
 # the row id and nothing else.
@@ -85,6 +110,9 @@ SYSLOG_CURSOR_SETTING = "syslog.cursor"
 # overrides, and the channel a change is announced on.
 POLICY_SETTING = "identity.session_policy"
 POLICY_CHANNEL = "warden_identity_policy"
+
+# ``warden.settings`` key holding the administrator's single sign-on overrides.
+SSO_SETTING = "identity.sso"
 
 
 def table(name: str) -> sql.Identifier:

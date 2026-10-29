@@ -32,6 +32,7 @@ from warden.audit import ActionRegistry, AuditEvent, Severity, record_audit
 from warden.audit.registry import register_warden_action
 from warden.config import IdentityConfig
 from warden.db import Database, schema, table
+from warden.db.schema import API_KEYS
 from warden.identity.dependencies import Principal
 from warden.identity.errors import AuthenticationRefused
 from warden.identity.http import SourceIp
@@ -48,7 +49,6 @@ __all__ = [
     "register_actions",
 ]
 
-API_KEYS = "api_keys"
 
 API_KEY_ACTIONS: tuple[tuple[str, Severity, str], ...] = (
     (
