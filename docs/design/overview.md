@@ -1,7 +1,7 @@
 # warden: Design Overview
 
 **Status:** Design agreed; implementation in progress (0.1.0 pre-releases).
-**Last updated:** 28 October 2026
+**Last updated:** 30 October 2026
 
 This is the design document the code is built against. Decisions recorded here are standing; see `CLAUDE.md` for how they are changed.
 
@@ -82,7 +82,7 @@ It is written from scratch. The design draws on the identity and audit implement
 
 **Shared**
 
-- Ed25519 key management with rotation, and a public-keys route.
+- Ed25519 key management with rotation, and key publication: `keys_router` (from `warden.jwks`), which the product mounts at `http.keys_prefix`, serves RFC 7517 JWK Sets of RFC 8037 OKP keys, unauthenticated, read-only and publicly cacheable for five minutes, with no audit event per request. `<keys>/jwks.json` carries the keys that sign and verify live credentials (neither retired nor revoked); `<keys>/jwks-historical.json` adds retired keys, for verifying audit checkpoints. A revoked key is in neither, and no private member is ever published. Importing `warden.keys` does not load FastAPI.
 - konfig-backed configuration with start-up validation.
 - Cache invalidation across replicas for settings and session policy, over Postgres `LISTEN/NOTIFY` (no Redis dependency).
 - A documented HTTP contract: OpenAPI plus a client-behaviour guide.
@@ -104,7 +104,8 @@ The layout as built for 0.1.0. The public API is what each package exports in `_
 src/warden/
   __init__.py          __version__ only; names the subpackages
   config.py            typed configuration, konfig binding, start-up validation    (public)
-  keys.py              Ed25519 key store, rotation, public-key publication          (public)
+  keys.py              Ed25519 key store, rotation, published key lists             (public)
+  jwks.py              key publication router: jwks.json, jwks-historical.json      (public)
   proxy.py             trusted-proxy middleware                                     (public)
   cli.py               warden migrate, keys rotate, audit verify, purge, anchor, grants
   db/                  pool adapter, schema names and lock keys, migrations         (public)

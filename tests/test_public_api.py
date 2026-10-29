@@ -194,6 +194,7 @@ SNAPSHOT: dict[str, list[str]] = {
         "require_permission",
         "require_user",
     ],
+    "warden.jwks": ["keys_router"],
     "warden.keys": [
         "KeyStore",
         "KeyStoreError",
