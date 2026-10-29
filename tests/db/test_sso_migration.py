@@ -12,9 +12,8 @@ import psycopg
 import pytest
 from alembic.script import ScriptDirectory
 
-from warden.db import SCHEMA, current_revision, downgrade, migrate
+from warden.db import SCHEMA, SSO_TABLES, current_revision, downgrade, migrate
 from warden.db.migrate import _config
-from warden.identity.sso.schema import SSO_TABLES
 
 pytestmark = pytest.mark.db
 

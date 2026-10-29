@@ -57,6 +57,7 @@ def test_the_scan_finds_every_known_lock_key() -> None:
         "SYSLOG_FORWARDER_LOCK_KEY",
         "CHAIN_LOCK_KEY",
         "ADMINISTRATOR_LOCK_KEY",
+        "SSO_SETTINGS_LOCK_KEY",
     }
 
 
@@ -85,6 +86,7 @@ def test_the_known_keys_keep_their_values() -> None:
     assert schema.SYSLOG_FORWARDER_LOCK_KEY == 0x7761_7264_656E_0002
     assert schema.CHAIN_LOCK_KEY == 0x7761_7264_656E_0003
     assert schema.ADMINISTRATOR_LOCK_KEY == 0x7761_7264_656E_0101
+    assert schema.SSO_SETTINGS_LOCK_KEY == 0x7761_7264_656E_0201
 
 
 def test_moved_names_are_importable_from_warden_db() -> None:
@@ -102,6 +104,73 @@ def test_moved_names_are_importable_from_warden_db() -> None:
         "role_assignments",
         "sign_in_attempts",
     } == db.IDENTITY_TABLES
+
+
+def test_lifecycle_and_sso_names_are_importable_from_warden_db() -> None:
+    assert db.SINGLE_USE_TOKENS == "single_use_tokens"
+    assert db.INVITATION_GRANTS == "invitation_grants"
+    assert db.API_KEYS == "api_keys"
+    assert {"single_use_tokens", "invitation_grants", "api_keys"} == db.LIFECYCLE_TABLES
+    assert db.SSO_IDENTITIES == "sso_identities"
+    assert db.SSO_LOGIN_TRANSACTIONS == "sso_login_transactions"
+    assert db.SSO_HANDOFF_CODES == "sso_handoff_codes"
+    assert {"sso_identities", "sso_login_transactions", "sso_handoff_codes"} == db.SSO_TABLES
+    assert db.SSO_SETTING == "identity.sso"
+    assert db.SSO_SETTINGS_LOCK_KEY == 0x7761_7264_656E_0201
+
+
+def test_table_sets_are_disjoint() -> None:
+    sets = [db.IDENTITY_TABLES, db.LIFECYCLE_TABLES, db.SSO_TABLES]
+    assert sum(len(t) for t in sets) == len(frozenset().union(*sets))
+
+
+def test_old_import_paths_resolve_to_the_schema_module_values() -> None:
+    from warden.identity import apikeys, invitations, single_use
+    from warden.identity.sso import schema as sso_schema
+    from warden.identity.sso import settings as sso_settings
+
+    assert apikeys.API_KEYS is schema.API_KEYS
+    assert invitations.INVITATION_GRANTS is schema.INVITATION_GRANTS
+    assert single_use.SINGLE_USE_TOKENS is schema.SINGLE_USE_TOKENS
+    for name in sso_schema.__all__:
+        assert getattr(sso_schema, name) is getattr(schema, name), name
+    assert sso_settings.SSO_SETTINGS_LOCK_KEY is schema.SSO_SETTINGS_LOCK_KEY
+
+
+def _schema_names() -> dict[str, str]:
+    """String values ``warden.db.schema`` owns: table names and settings keys."""
+    owned: dict[str, str] = {}
+    for name in dir(schema):
+        value = getattr(schema, name)
+        if name.isupper() and isinstance(value, str) and name not in ("SCHEMA", "VERSION_TABLE"):
+            owned[value] = name
+    return owned
+
+
+def test_no_module_defines_a_schema_name_of_its_own() -> None:
+    # String constants are interned, so ``is`` cannot show that a module
+    # imports a name rather than repeating its literal; scan the source.
+    owned = _schema_names()
+    strays = []
+    for path in sorted(SRC.rglob("*.py")):
+        relative = path.relative_to(SRC).as_posix()
+        if relative == "db/schema.py" or relative.startswith("db/migrations/"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:
+            if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None:
+                value = node.value
+                if isinstance(value, ast.Constant) and value.value in owned:
+                    strays.append(f"{relative}:{node.lineno} repeats {owned[value.value]}")
+    assert not strays, strays
+
+
+def test_every_allocated_key_is_recorded_in_the_allocation_table() -> None:
+    doc = schema.__doc__ or ""
+    table_rows = [line for line in doc.splitlines() if line.startswith("| 0x...")]
+    for path, name, value in _lock_keys():
+        number = f"{value & 0xFFFF:04x}"
+        assert any(number in row for row in table_rows), f"{path}:{name} ({number}) is not recorded"
 
 
 def test_modules_use_the_schema_module_values() -> None:

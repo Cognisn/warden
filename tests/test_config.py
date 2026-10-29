@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from warden.config import ConfigError, WardenConfig, load_config
+from warden.config import ConfigError, SsoConfig, WardenConfig, load_config
 
 BASE: dict[str, Any] = {
     "http": {
@@ -226,10 +227,11 @@ def test_sso_enabled_requires_issuer_client_and_completion_link() -> None:
     for field in (
         "warden.sso.issuer_url",
         "warden.sso.client_id",
-        "warden.sso.client_secret",
         "warden.http.sso_completion_link",
     ):
         assert field in message
+    # The client secret's name has a declared default, so it is never missing.
+    assert "warden.sso.client_secret" not in message
 
 
 def test_sso_issuer_must_be_https() -> None:
@@ -258,6 +260,77 @@ def test_complete_sso_configuration_loads() -> None:
     )
     assert config.sso.enabled
     assert "openid" in config.sso.scopes
+
+
+def _sso_tree(*, secret_name: bool = True, **overrides: Any) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "sso__enabled": True,
+        "sso__issuer_url": "https://idp.example.com/tenant",
+        "sso__client_id": "c",
+        "http__sso_completion_link": "/signed-in",
+    }
+    if secret_name:
+        fields["sso__client_secret"] = "s"
+    return _tree(**{**fields, **overrides})
+
+
+@pytest.mark.parametrize(
+    "issuer",
+    [
+        "https://idp.example.com/tenant/",
+        "https://idp.example.com/",
+        "https://idp.example.com/tenant",
+        "https://idp.example.com",
+    ],
+)
+def test_sso_issuer_is_kept_exactly_as_given(issuer: str) -> None:
+    # The issuer is compared by exact string equality with the provider's
+    # advertised value, so a trailing slash is part of it and must survive.
+    assert _load(_sso_tree(sso__issuer_url=issuer)).sso.issuer_url == issuer
+
+
+@pytest.mark.parametrize(
+    "issuer",
+    [
+        "http://idp.example.com/",
+        "http://localhost/",
+        "https://user:pw@idp.example.com/",
+        "https://idp.example.com/\n",
+        "https://idp.example.com/tenant/\n",
+        "https://idp.example.com/\x7f",
+        "https://idp.example.com/ tenant/",
+        "https://idp.example.com/?a=1",
+        "https://idp.example.com/#frag",
+        "idp.example.com/",
+    ],
+)
+def test_sso_issuer_is_still_validated(issuer: str) -> None:
+    with pytest.raises(ConfigError) as caught:
+        _load(_sso_tree(sso__issuer_url=issuer))
+    assert "warden.sso.issuer_url" in str(caught.value)
+
+
+def test_sso_client_secret_name_has_a_declared_default() -> None:
+    config = _load(_sso_tree(secret_name=False))
+    assert config.sso.client_secret == "warden.sso.client-secret"
+    assert SsoConfig().client_secret == "warden.sso.client-secret"
+
+
+def test_the_sso_client_secret_name_default_is_declared_only_in_config() -> None:
+    # Single sign-on reads the name from configuration; a second default in
+    # identity/sso could silently disagree with the declared one.
+    src = Path(__file__).resolve().parents[1] / "src" / "warden"
+    holders = sorted(
+        str(path.relative_to(src)).replace("\\", "/")
+        for path in src.rglob("*.py")
+        if "warden.sso.client-secret" in path.read_text(encoding="utf-8")
+    )
+    assert holders == ["config.py"]
+
+
+def test_sso_client_secret_name_can_be_overridden() -> None:
+    config = _load(_sso_tree(sso__client_secret="product/sso-secret"))
+    assert config.sso.client_secret == "product/sso-secret"
 
 
 def test_syslog_enabled_requires_destination() -> None:

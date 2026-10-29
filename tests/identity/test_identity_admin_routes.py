@@ -108,6 +108,45 @@ async def test_separate_permissions_per_area(
 # Users
 
 
+async def test_listing_users_keeps_its_response(
+    client: httpx.AsyncClient,
+    admin: tuple[User, dict[str, str]],
+    make_user: UserFactory,
+    identity: Identity,
+) -> None:
+    # Pins the whole response, oldest first, so moving the query into
+    # Users.list cannot change what the route returns.
+    admin_user, headers = admin
+    olive = await make_user("olive@example.com", display_name="Olive")
+    sam = await make_user("sam@example.com")
+    await identity.users.set_status(sam.id, UserStatus.SUSPENDED, actor="test")
+    sam_now = await identity.users.get(sam.id)
+    assert sam_now is not None
+
+    def view(user: User) -> dict[str, object]:
+        return {
+            "id": str(user.id),
+            "email": user.email,
+            "display_name": user.display_name,
+            "status": user.status.value,
+            "sign_in_method": user.sign_in_method.value,
+            "has_password": user.has_password,
+            "created_at": user.created_at.isoformat(),
+            "updated_at": user.updated_at.isoformat(),
+        }
+
+    listed = await client.get("/admin/users", headers=headers)
+    assert listed.status_code == 200
+    assert listed.json() == {"users": [view(admin_user), view(olive), view(sam_now)]}
+    suspended = await client.get("/admin/users?status=suspended", headers=headers)
+    assert suspended.json() == {"users": [view(sam_now)]}
+    active = await client.get("/admin/users?status=active", headers=headers)
+    assert active.json() == {"users": [view(admin_user), view(olive)]}
+    assert (await client.get("/admin/users?status=invited", headers=headers)).json() == {
+        "users": []
+    }
+
+
 async def test_list_and_show_users(
     client: httpx.AsyncClient, admin: tuple[User, dict[str, str]], make_user: UserFactory
 ) -> None:

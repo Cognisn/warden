@@ -35,9 +35,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
-from psycopg import sql
 
-from warden.db import schema, table
 from warden.identity.apikeys import ApiKey, ApiKeyError
 from warden.identity.dependencies import Principal, require_permission
 from warden.identity.http import NO_STORE, SourceIp, client_ip, json_response, read_object
@@ -133,20 +131,6 @@ def _when(value: object) -> datetime | None:
     return moment
 
 
-async def _list_users(identity: "Identity", status: UserStatus | None) -> list[User]:
-    """Every user, oldest first, optionally of one status."""
-    async with identity.db.transaction() as tx:
-        cur = await tx.execute(
-            sql.SQL(
-                "SELECT id FROM {} WHERE %(status)s::text IS NULL OR status = %(status)s"
-                " ORDER BY created_at, id"
-            ).format(table(schema.USERS)),
-            {"status": None if status is None else status.value},
-        )
-        found = [await identity.users.get(row[0], conn=tx) for row in await cur.fetchall()]
-    return [user for user in found if user is not None]
-
-
 def _detail(message: str, status_code: int) -> Response:
     return json_response({"detail": message}, status_code)
 
@@ -210,7 +194,7 @@ def build_admin_router(
                 wanted = UserStatus(status)
             except ValueError:
                 return _invalid()
-        found = await _list_users(identity, wanted)
+        found = await identity.users.list(status=wanted)
         return json_response({"users": [_user(u) for u in found]})
 
     @router.get("/users/{user_id}")

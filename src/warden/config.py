@@ -145,7 +145,11 @@ def _check_secret_name(value: str | None) -> str | None:
 
 
 def _check_url(value: str, *, allow_path: bool = True) -> str:
-    """Validate an absolute http(s) URL; plain http only for loopback hosts."""
+    """Validate an absolute http(s) URL; plain http only for loopback hosts.
+
+    The value is returned exactly as given: a caller that joins paths onto it
+    strips a trailing slash itself, and an OIDC issuer must keep one.
+    """
     if _PRINTABLE.fullmatch(value) is None:
         raise ValueError("must be a URL without spaces or control characters")
     parts = urlsplit(value)
@@ -159,7 +163,7 @@ def _check_url(value: str, *, allow_path: bool = True) -> str:
         raise ValueError("must use https unless the host is loopback")
     if not allow_path and parts.path not in ("", "/"):
         raise ValueError("must not carry a path")
-    return value.rstrip("/")
+    return value
 
 
 def _check_template(value: str, *, placeholders: frozenset[str]) -> str:
@@ -396,9 +400,9 @@ class SsoConfig(_Section):
     enabled: bool = False
     issuer_url: str | None = None
     client_id: str | None = None
-    client_secret: str | None = None
+    client_secret: str = "warden.sso.client-secret"  # noqa: S105 - a secret's name
     """Name of the konfig secret holding the OIDC client secret, never the
-    secret itself."""
+    secret itself. The secret is stored through ``PUT <admin>/sso/client-secret``."""
     scopes: Annotated[tuple[str, ...], BeforeValidator(_split_list)] = (
         "openid",
         "email",
@@ -431,8 +435,9 @@ class SsoConfig(_Section):
 
     @field_validator("client_secret")
     @classmethod
-    def _client_secret_name(cls, value: str | None) -> str | None:
-        return _check_secret_name(value)
+    def _client_secret_name(cls, value: str) -> str:
+        _check_secret_name(value)
+        return value
 
     @field_validator("allowed_algorithms")
     @classmethod
@@ -455,6 +460,8 @@ class SsoConfig(_Section):
     @field_validator("issuer_url")
     @classmethod
     def _issuer_shape(cls, value: str | None) -> str | None:
+        # Kept verbatim, trailing slash included: discovery and id_token
+        # checks compare it with the provider's issuer by exact equality.
         if value is None:
             return None
         checked = _check_url(value)
@@ -546,7 +553,7 @@ class HttpConfig(_Section):
     @field_validator("public_base_url")
     @classmethod
     def _base_url_shape(cls, value: str) -> str:
-        return _check_url(value)
+        return _check_url(value).rstrip("/")
 
     @field_validator("auth_prefix", "admin_prefix", "audit_prefix", "keys_prefix")
     @classmethod
@@ -624,7 +631,7 @@ class WardenConfig(_Section):
         if self.sso.enabled:
             if not self.identity.enabled:
                 problems.append((("sso", "enabled"), "requires identity to be enabled"))
-            for name in ("issuer_url", "client_id", "client_secret"):
+            for name in ("issuer_url", "client_id"):
                 if getattr(self.sso, name) is None:
                     problems.append((("sso", name), "is required while sso is enabled"))
             if self.http.sso_completion_link is None:

@@ -170,6 +170,21 @@ class Users:
             row = await cur.fetchone()
         return None if row is None else _row_to_user(row)
 
+    async def list(
+        self, *, status: UserStatus | None = None, conn: AsyncConnection[Any] | None = None
+    ) -> list[User]:
+        """Every user, oldest first (ties by id), optionally only those of one status."""
+        async with self._db.transaction(conn) as tx:
+            cur = await tx.execute(
+                sql.SQL(
+                    "SELECT {} FROM {} WHERE %(status)s::text IS NULL OR status = %(status)s"
+                    " ORDER BY created_at, id"
+                ).format(_COLUMNS, _USERS),
+                {"status": None if status is None else status.value},
+            )
+            rows = await cur.fetchall()
+        return [_row_to_user(row) for row in rows]
+
     async def set_status(
         self,
         user_id: uuid.UUID,

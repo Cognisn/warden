@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- The public import surface for 0.1.0b1. `warden.identity` now also exports the user lifecycle (`Invitations`, `Invitation`, `PendingInvitation`, `AcceptedInvitation`, `StagedGrant`, `InvitationError`, `InvitationMismatch`, `VerifiedIdentity`, `SubjectPin`; `PasswordResets`; the mail sender protocol and templates `MailSender`, `MailMessage`, `MailTemplate`, `MailKind`, `DEFAULT_TEMPLATES`, `MailError`, `MailDeliveryError`; `ApiKeys`, `ApiKey`, `NewApiKey`, `ApiKeyError`; `Pruner`, `PruneReport`), single sign-on (`SingleSignOn`, `LoginStart`, `ConfigurationReport`, `ConfigurationCheck`, `InvitationAcceptance`, `SSO_FAILURE_MESSAGE`, `SsoSettings`, `SsoSettingsStore`, `SsoSettingsError`, `SsoError`) and `Verification`, the result of `PasswordHasher.verify`. The provider presets stay in `warden.identity.sso.presets`, outside every identity module that signs anyone in. `warden` itself still exports only `__version__` and imports no subpackage (D11); its docstring names the subpackages. `tests/test_public_api.py` pins each public package's `__all__`, so a change to the public surface fails until the snapshot changes in the same commit. Design overview section 4 now describes the layout as built.
+
+- `Users.list(status=None, conn=None)`: every user, oldest first with ties broken by id, optionally only those of one status, and inside a caller's transaction when given `conn`. `GET <admin>/users` now uses it instead of querying the table itself; its response is unchanged.
+- A tripwire fails when a warden module imports, or reaches through a module for, another module's underscore-prefixed name. The single sign-on handoff and every sign-in route now build the signed-in body with one internal helper (`warden.identity.routers.tokens.token_body`) instead of the handoff importing the sign-in router's private function; the bodies are unchanged.
+
+### Changed
+
+- `sso.issuer_url` is kept exactly as configured, trailing slash included, in start-up configuration and in run-time settings. 0.1.0a9 removed a trailing slash, so exact issuer equality refused every provider whose issuer ends in `/` (`issuer_mismatch`). The issuer is still validated as before: https only, no credentials, query, fragment, spaces or control characters, checked with `fullmatch`. Discovery still fetches `<issuer without trailing slash>/.well-known/openid-configuration`, and the discovery document's `issuer` and the id_token's `iss` must equal the configured value character for character. Upgrade note: a deployment whose configured issuer differs from the provider's advertised issuer only by a trailing slash (which 0.1.0a9 accepted after stripping it) must configure the issuer exactly as the provider advertises it. Subjects pinned under the stripped form do not match an issuer configured with the slash.
+- `sso.client_secret` defaults to `warden.sso.client-secret`, the name single sign-on already used when it was unset, and is no longer required while single sign-on is enabled. Single sign-on reads the name only from configuration. A secret missing from the store is still reported by the configuration test (`client_secret: missing`) and refused at sign-in (`client_secret_missing`). `http.public_base_url` still drops a trailing slash.
+- Identity lifecycle's and single sign-on's schema names are defined in `warden.db.schema` and exported from `warden.db`, beside identity's: `SINGLE_USE_TOKENS` (from `warden.identity.single_use`), `INVITATION_GRANTS` (from `warden.identity.invitations`), `API_KEYS` (from `warden.identity.apikeys`), and `SSO_IDENTITIES`, `SSO_LOGIN_TRANSACTIONS`, `SSO_HANDOFF_CODES`, `SSO_TABLES`, `SSO_SETTING` and `SSO_SETTINGS_LOCK_KEY` (from `warden.identity.sso.schema`). The new `LIFECYCLE_TABLES` names lifecycle's three tables. The advisory lock key `0x7761_7264_656E_0201` (single sign-on settings) is recorded in the allocation table, and a test fails on any allocated key the table does not record or any module that repeats a schema name as its own literal. Values are unchanged. Upgrade note: import these names from `warden.db`; the old modules still re-export the same objects for now, but `warden.identity.sso.schema` and `warden.identity.schema` are compatibility shims only.
+
+### Removed
+
+- `warden.identity.sso.service.DEFAULT_CLIENT_SECRET_NAME`. Upgrade note: read the configured name from `config.sso.client_secret`; its default is `SsoConfig().client_secret`.
+
 ## [0.1.0a9] - 2026-10-28
 
 Ninth pre-release: the invitation token is sealed in the single sign-on login transaction instead of a separate cookie, and `POST /sso/start` accepts a form or JSON body.

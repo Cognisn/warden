@@ -43,6 +43,7 @@ from warden.audit import ActionRegistry, AuditEvent, Severity, record_audit
 from warden.audit.registry import register_warden_action
 from warden.config import WardenConfig
 from warden.db import Database, schema, table
+from warden.db.schema import INVITATION_GRANTS
 from warden.identity.errors import AuthenticationRefused
 from warden.identity.http import SourceIp
 from warden.identity.mail import MailDeliveryError, Mailer, MailError, MailKind
@@ -66,7 +67,6 @@ __all__ = [
     "register_actions",
 ]
 
-INVITATION_GRANTS = "invitation_grants"
 
 INVITATION_ACTIONS: tuple[tuple[str, Severity, str], ...] = (
     (

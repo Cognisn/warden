@@ -21,7 +21,7 @@ Tokens are ``{"status": "signed_in", "access_token", "token_type": "Bearer",
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
@@ -29,7 +29,7 @@ from fastapi.responses import Response
 from warden.identity.dependencies import Principal, bearer_token
 from warden.identity.errors import AuthenticationRefused, MfaError
 from warden.identity.http import SourceIp, client_ip, json_response, read_object, refusal
-from warden.identity.tokens import TokenPair
+from warden.identity.routers.tokens import token_body
 
 if TYPE_CHECKING:
     from warden.identity.service import Identity
@@ -37,18 +37,6 @@ if TYPE_CHECKING:
 __all__ = ["build_auth_router"]
 
 _CHALLENGE_STATUS = {"verify": "mfa_required", "enrol": "mfa_enrolment_required"}
-
-
-def _tokens(pair: TokenPair, **extra: Any) -> dict[str, Any]:
-    return {
-        "status": "signed_in",
-        "access_token": pair.access_token,
-        "token_type": "Bearer",
-        "expires_in": pair.expires_in,
-        "refresh_token": pair.refresh_token,
-        "refresh_expires_in": pair.refresh_expires_in,
-        **extra,
-    }
 
 
 def build_auth_router(identity: Identity) -> APIRouter:
@@ -86,7 +74,7 @@ def build_auth_router(identity: Identity) -> APIRouter:
             )
         if result.tokens is None:
             raise RuntimeError("sign-in produced neither tokens nor a challenge")
-        return json_response(_tokens(result.tokens))
+        return json_response(token_body(result.tokens))
 
     @router.post("/totp/verify")
     async def totp_verify(request: Request) -> Response:
@@ -97,7 +85,7 @@ def build_auth_router(identity: Identity) -> APIRouter:
             )
         except AuthenticationRefused:
             return refusal()
-        return json_response(_tokens(pair))
+        return json_response(token_body(pair))
 
     @router.post("/recovery-code")
     async def recovery_code(request: Request) -> Response:
@@ -108,7 +96,7 @@ def build_auth_router(identity: Identity) -> APIRouter:
             )
         except AuthenticationRefused:
             return refusal()
-        return json_response(_tokens(pair))
+        return json_response(token_body(pair))
 
     @router.post("/refresh")
     async def refresh(request: Request) -> Response:
@@ -117,7 +105,7 @@ def build_auth_router(identity: Identity) -> APIRouter:
             pair = await identity.refresh(body.get("refresh_token"), source_ip=source(request))
         except AuthenticationRefused:
             return refusal()
-        return json_response(_tokens(pair))
+        return json_response(token_body(pair))
 
     @router.post("/sign-out")
     async def sign_out(request: Request) -> Response:
@@ -187,6 +175,6 @@ def build_auth_router(identity: Identity) -> APIRouter:
             return json_response({"detail": "code not accepted"}, 400)
         if pair is None:
             return json_response({"recovery_codes": codes})
-        return json_response(_tokens(pair, recovery_codes=codes))
+        return json_response(token_body(pair, recovery_codes=codes))
 
     return router

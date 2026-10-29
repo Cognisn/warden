@@ -124,3 +124,66 @@ async def test_an_administrator_can_be_suspended_while_another_remains(
     await make_user(roles=("admin",))
     updated = await identity.users.set_status(first.id, UserStatus.SUSPENDED, actor="t")
     assert updated.status is UserStatus.SUSPENDED
+
+
+# Listing
+
+
+async def _set_created(db: Database, user_id: object, moment: str) -> None:
+    async with db.transaction() as tx:
+        await tx.execute(
+            "UPDATE warden.users SET created_at = %s::timestamptz WHERE id = %s", (moment, user_id)
+        )
+
+
+async def test_list_returns_every_user_oldest_first(identity: Identity, db: Database) -> None:
+    first = await identity.users.create("first@example.com", actor="t")
+    second = await identity.users.create("second@example.com", actor="t")
+    third = await identity.users.create("third@example.com", actor="t")
+    await _set_created(db, first.id, "2026-01-03T00:00:00Z")
+    await _set_created(db, second.id, "2026-01-01T00:00:00Z")
+    await _set_created(db, third.id, "2026-01-02T00:00:00Z")
+    listed = await identity.users.list()
+    assert [u.id for u in listed] == [second.id, third.id, first.id]
+    assert listed == [await identity.users.get(u.id) for u in listed]
+
+
+async def test_list_breaks_ties_by_id(identity: Identity, db: Database) -> None:
+    made = [await identity.users.create(f"tie-{n}@example.com", actor="t") for n in range(4)]
+    for user in made:
+        await _set_created(db, user.id, "2026-01-01T00:00:00Z")
+    listed = await identity.users.list()
+    assert [u.id for u in listed] == sorted(u.id for u in made)
+    assert await identity.users.list() == listed
+
+
+async def test_list_filters_by_status(identity: Identity) -> None:
+    active = await identity.users.create("active@example.com", actor="t")
+    suspended = await identity.users.create("suspended@example.com", actor="t")
+    deactivated = await identity.users.create("gone@example.com", actor="t")
+    await identity.users.set_status(suspended.id, UserStatus.SUSPENDED, actor="t")
+    await identity.users.set_status(deactivated.id, UserStatus.DEACTIVATED, actor="t")
+    by_status = {s: [u.id for u in await identity.users.list(status=s)] for s in UserStatus}
+    assert by_status == {
+        UserStatus.ACTIVE: [active.id],
+        UserStatus.SUSPENDED: [suspended.id],
+        UserStatus.DEACTIVATED: [deactivated.id],
+        UserStatus.INVITED: [],
+    }
+    assert len(await identity.users.list()) == 3
+
+
+class _Undo(Exception):
+    pass
+
+
+async def test_list_reads_inside_a_callers_transaction(identity: Identity, db: Database) -> None:
+    with pytest.raises(_Undo):
+        async with db.transaction() as tx:
+            await tx.execute(
+                "INSERT INTO warden.users (email, status) VALUES ('inside@example.com', 'active')"
+            )
+            inside = await identity.users.list(conn=tx)
+            assert [u.email for u in inside] == ["inside@example.com"]
+            raise _Undo
+    assert await identity.users.list() == []
