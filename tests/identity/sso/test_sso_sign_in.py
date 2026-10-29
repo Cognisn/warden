@@ -133,6 +133,19 @@ async def test_a_pre_provisioned_user_signs_in(
     assert pinned[0]["resource_id"] == str(alice.id)
 
 
+async def test_the_handoff_body_has_the_shape_of_a_password_sign_in(
+    client: httpx.AsyncClient, idp: FakeIdp, alice: User
+) -> None:
+    # Products handle both the same way, so the bodies match field for field.
+    sso = await tokens(await sign_in(client, idp, sub="s-alice", email=ALICE))
+    password = await tokens(
+        await client.post("/auth/sign-in", json={"email": ALICE, "password": PASSWORD})
+    )
+    assert list(sso) == list(password)
+    assert {k: type(v) for k, v in sso.items()} == {k: type(v) for k, v in password.items()}
+    assert (sso["status"], sso["token_type"]) == (password["status"], password["token_type"])
+
+
 async def test_the_start_sends_pkce_state_and_nonce(client: httpx.AsyncClient) -> None:
     started = await start(client)
     params = started.params

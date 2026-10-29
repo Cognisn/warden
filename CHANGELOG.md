@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - `Users.list(status=None, conn=None)`: every user, oldest first with ties broken by id, optionally only those of one status, and inside a caller's transaction when given `conn`. `GET <admin>/users` now uses it instead of querying the table itself; its response is unchanged.
+- A tripwire fails when a warden module imports, or reaches through a module for, another module's underscore-prefixed name. The single sign-on handoff and every sign-in route now build the signed-in body with one internal helper (`warden.identity.routers.tokens.token_body`) instead of the handoff importing the sign-in router's private function; the bodies are unchanged.
 
 ### Changed
 

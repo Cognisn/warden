@@ -42,7 +42,7 @@ from warden.identity.errors import AuthenticationRefused
 from warden.identity.http import NO_STORE, SourceIp, client_ip, json_response, read_object, refusal
 
 # The same token body as password sign-in, so a client handles both alike.
-from warden.identity.routers.auth import _tokens as tokens_body
+from warden.identity.routers.tokens import token_body
 from warden.identity.sso.errors import SsoError
 from warden.identity.sso.service import COOKIE_NAME, SSO_FAILURE_MESSAGE, LoginStart
 
@@ -187,7 +187,7 @@ def build_sso_router(identity: Identity) -> APIRouter:
             )
         except AuthenticationRefused:
             return refusal()
-        response = json_response(tokens_body(pair))
+        response = json_response(token_body(pair))
         clear_cookie(response, COOKIE_NAME)
         return response
 
