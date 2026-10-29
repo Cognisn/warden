@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a10] - 2026-10-29
+
+Tenth pre-release: the public import surface for 0.1.0b1, the single sign-on issuer kept verbatim, every schema name and lock key in `warden.db.schema`, and `Users.list`.
+
 ### Added
 
 - The public import surface for 0.1.0b1. `warden.identity` now also exports the user lifecycle (`Invitations`, `Invitation`, `PendingInvitation`, `AcceptedInvitation`, `StagedGrant`, `InvitationError`, `InvitationMismatch`, `VerifiedIdentity`, `SubjectPin`; `PasswordResets`; the mail sender protocol and templates `MailSender`, `MailMessage`, `MailTemplate`, `MailKind`, `DEFAULT_TEMPLATES`, `MailError`, `MailDeliveryError`; `ApiKeys`, `ApiKey`, `NewApiKey`, `ApiKeyError`; `Pruner`, `PruneReport`), single sign-on (`SingleSignOn`, `LoginStart`, `ConfigurationReport`, `ConfigurationCheck`, `InvitationAcceptance`, `SSO_FAILURE_MESSAGE`, `SsoSettings`, `SsoSettingsStore`, `SsoSettingsError`, `SsoError`) and `Verification`, the result of `PasswordHasher.verify`. The provider presets stay in `warden.identity.sso.presets`, outside every identity module that signs anyone in. `warden` itself still exports only `__version__` and imports no subpackage (D11); its docstring names the subpackages. `tests/test_public_api.py` pins each public package's `__all__`, so a change to the public surface fails until the snapshot changes in the same commit. Design overview section 4 now describes the layout as built.
