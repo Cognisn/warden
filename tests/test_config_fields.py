@@ -302,7 +302,7 @@ def test_invalid_mail_template_values_are_refused(field: str, value: Any) -> Non
 
 def test_sso_defaults() -> None:
     sso = _parse().sso
-    assert sso.client_secret is None
+    assert sso.client_secret == "warden.sso.client-secret"
     assert sso.jwks_cache_seconds == 3600
     assert sso.jwks_refetch_min_seconds == 60
     assert sso.login_transaction_ttl_seconds == 600

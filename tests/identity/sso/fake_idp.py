@@ -69,12 +69,17 @@ class FakeIdp:
 
     # Documents
 
+    @property
+    def base(self) -> str:
+        """The issuer without a trailing slash, as discovery appends paths to it."""
+        return self.issuer.rstrip("/")
+
     def discovery(self) -> dict[str, Any]:
         doc = {
             "issuer": self.issuer,
-            "authorization_endpoint": f"{self.issuer}/authorize",
-            "token_endpoint": f"{self.issuer}/token",
-            "jwks_uri": f"{self.issuer}/jwks",
+            "authorization_endpoint": f"{self.base}/authorize",
+            "token_endpoint": f"{self.base}/token",
+            "jwks_uri": f"{self.base}/jwks",
             "response_types_supported": ["code"],
             "subject_types_supported": ["public"],
             "id_token_signing_alg_values_supported": list(self.algorithms),
@@ -144,7 +149,7 @@ class FakeIdp:
         if self.fail_all:
             raise httpx.ConnectError("provider stopped", request=request)
         path = request.url.path
-        base = httpx.URL(self.issuer).path
+        base = httpx.URL(self.base).path
         if path == f"{base}/.well-known/openid-configuration":
             return httpx.Response(200, json=self.discovery())
         if path == f"{base}/jwks":

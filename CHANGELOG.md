@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- `sso.issuer_url` is kept exactly as configured, trailing slash included, in start-up configuration and in run-time settings. 0.1.0a9 removed a trailing slash, so exact issuer equality refused every provider whose issuer ends in `/` (`issuer_mismatch`). The issuer is still validated as before: https only, no credentials, query, fragment, spaces or control characters, checked with `fullmatch`. Discovery still fetches `<issuer without trailing slash>/.well-known/openid-configuration`, and the discovery document's `issuer` and the id_token's `iss` must equal the configured value character for character. Upgrade note: a deployment whose configured issuer differs from the provider's advertised issuer only by a trailing slash (which 0.1.0a9 accepted after stripping it) must configure the issuer exactly as the provider advertises it. Subjects pinned under the stripped form do not match an issuer configured with the slash.
+- `sso.client_secret` defaults to `warden.sso.client-secret`, the name single sign-on already used when it was unset, and is no longer required while single sign-on is enabled. Single sign-on reads the name only from configuration. A secret missing from the store is still reported by the configuration test (`client_secret: missing`) and refused at sign-in (`client_secret_missing`). `http.public_base_url` still drops a trailing slash.
+
+### Removed
+
+- `warden.identity.sso.service.DEFAULT_CLIENT_SECRET_NAME`. Upgrade note: read the configured name from `config.sso.client_secret`; its default is `SsoConfig().client_secret`.
+
 ## [0.1.0a9] - 2026-10-28
 
 Ninth pre-release: the invitation token is sealed in the single sign-on login transaction instead of a separate cookie, and `POST /sso/start` accepts a form or JSON body.

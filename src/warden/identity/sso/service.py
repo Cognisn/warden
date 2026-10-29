@@ -85,7 +85,6 @@ from warden.identity.users import UserStatus, is_email
 
 __all__ = [
     "COOKIE_NAME",
-    "DEFAULT_CLIENT_SECRET_NAME",
     "SSO_FAILURE_MESSAGE",
     "ConfigurationCheck",
     "ConfigurationReport",
@@ -97,8 +96,6 @@ __all__ = [
 COOKIE_NAME = "__Secure-warden-sso"
 SSO_FAILURE_MESSAGE = "Single sign-on did not complete. Try again, or contact your administrator."
 """The one message a product shows when single sign-on fails, whatever the reason."""
-
-DEFAULT_CLIENT_SECRET_NAME = "warden.sso.client-secret"  # noqa: S105 - a secret's name
 
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{43}")
 _PROVIDER_CODE = re.compile(r"[\x21-\x7e]{1,2048}")
@@ -207,7 +204,7 @@ class SingleSignOn:
         self._discovery: Discovery | None = None
         self._jwks: JwksCache | None = None
         self._validator: IdTokenValidator | None = None
-        self.client_secret_name = sso.client_secret or DEFAULT_CLIENT_SECRET_NAME
+        self.client_secret_name = sso.client_secret
         self.callback_url = config.http.sso_callback_url
 
     # Provider plumbing, created on first use so no client is opened unless needed.
