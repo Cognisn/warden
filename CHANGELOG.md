@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b1] - 2026-10-30
+
+First beta: feature complete. The same code as 0.1.0a11, which passed the b1 gate: the full suite and checks, and the live syslog (UDP, TCP and TLS, plus a collector outage) and live single sign-on (sign-in, invitation and break-glass) checks. From this build the library takes fixes only.
+
 ## [0.1.0a11] - 2026-10-30
 
 Eleventh pre-release: key publication, the last feature before 0.1.0b1.
