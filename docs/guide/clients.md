@@ -157,7 +157,7 @@ Identity's routes resolve the address themselves. The audit export reads the req
 
 The rest of the administration routes, each behind the permission the product named when it built the router, with the uniform refusal for a bad bearer and 403 for a missing permission:
 
-- users: [`GET /admin/users`](../contract/openapi.json) (every user, oldest first, optionally one `status`; not paged), [`GET /admin/users/{user_id}`](../contract/openapi.json), [`POST /admin/users/{user_id}/status`](../contract/openapi.json) and [`POST /admin/users/{user_id}/sign-in-method`](../contract/openapi.json);
+- users: [`GET /admin/users`](../contract/openapi.json) (oldest first, ties by id, optionally one `status`; every user unless `limit` or `after` is given, in which case the body also carries `next`, the cursor to pass as `after` for the following page, null on the last), [`GET /admin/users/{user_id}`](../contract/openapi.json), [`POST /admin/users/{user_id}/status`](../contract/openapi.json) and [`POST /admin/users/{user_id}/sign-in-method`](../contract/openapi.json);
 - roles: [`GET /admin/roles`](../contract/openapi.json), [`PUT /admin/users/{user_id}/roles/{role}`](../contract/openapi.json) (optionally until `expires_at`) and [`DELETE /admin/users/{user_id}/roles/{role}`](../contract/openapi.json).
 
 The last active administrator cannot be suspended, deactivated or lose their administrator role (409), even under concurrent requests. Times are ISO 8601 with a zone offset. Error bodies are fixed `detail` messages, listed in the contract for each route; none echoes the request.

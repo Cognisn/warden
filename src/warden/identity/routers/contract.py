@@ -165,7 +165,14 @@ class WardenUser(_Doc):
 
 
 class WardenUserList(_Doc):
-    users: list[WardenUser] = Field(description="Every matching user, oldest first.")
+    users: list[WardenUser] = Field(description="The matching users, oldest first.")
+    next: str | None = Field(
+        default=None,
+        description=(
+            "Only when `limit` or `after` was given: the cursor for the following page, "
+            "or null on the last page."
+        ),
+    )
 
 
 class WardenUserEnvelope(_Doc):

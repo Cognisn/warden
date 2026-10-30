@@ -1263,7 +1263,7 @@
           "warden: administration"
         ],
         "summary": "List users",
-        "description": "Every user, oldest first (ties by id), optionally only those of one `status` (`invited`, `active`, `suspended` or `deactivated`). The list is not paged.",
+        "description": "Users oldest first (ties by id), optionally only those of one `status` (`invited`, `active`, `suspended` or `deactivated`). Without `limit` or `after` this is every user and the body is `users` alone. With either, the body also carries `next`: pass it as `after` for the following page, until it is null.",
         "operationId": "list_users_admin_users_get",
         "parameters": [
           {
@@ -1281,6 +1281,42 @@
               ],
               "title": "Status"
             }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size, a whole number from 1 to 1000.",
+              "title": "Limit"
+            },
+            "description": "Page size, a whole number from 1 to 1000."
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The `next` cursor from the previous page.",
+              "title": "After"
+            },
+            "description": "The `next` cursor from the previous page."
           }
         ],
         "responses": {
@@ -1295,7 +1331,7 @@
             }
           },
           "400": {
-            "description": "`status` is not a user status.",
+            "description": "`status` is not a user status, `limit` is not 1 to 1000, or `after` is not a cursor this route returned.",
             "headers": {
               "cache-control": {
                 "description": "Always `no-store`.",
@@ -5859,7 +5895,19 @@
             },
             "type": "array",
             "title": "Users",
-            "description": "Every matching user, oldest first."
+            "description": "The matching users, oldest first."
+          },
+          "next": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next",
+            "description": "Only when `limit` or `after` was given: the cursor for the following page, or null on the last page."
           }
         },
         "additionalProperties": false,

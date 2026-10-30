@@ -7,6 +7,8 @@ whether one is set.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 import uuid
 from dataclasses import dataclass
@@ -28,6 +30,9 @@ __all__ = ["SignInMethod", "User", "UserError", "UserStatus", "Users"]
 # is the product's concern; this only keeps obvious garbage out.
 _EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 _MAX_EMAIL = 320
+
+# A page cursor is base64url (unpadded) of "<created_at ISO 8601>|<id>".
+_CURSOR = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 _USERS = table(schema.USERS)
 _COLUMNS = sql.SQL(
@@ -170,17 +175,58 @@ class Users:
             row = await cur.fetchone()
         return None if row is None else _row_to_user(row)
 
+    @staticmethod
+    def cursor(user: User) -> str:
+        """An opaque cursor for ``list(after=...)``: the users listed after ``user``."""
+        text = f"{user.created_at.isoformat()}|{user.id}"
+        return base64.urlsafe_b64encode(text.encode("ascii")).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _position(cursor: str) -> tuple[datetime, uuid.UUID]:
+        if _CURSOR.fullmatch(cursor) is None:
+            raise UserError("cursor is not valid")
+        try:
+            text = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode("ascii")
+            moment_text, _, id_text = text.partition("|")
+            moment = datetime.fromisoformat(moment_text)
+            user_id = uuid.UUID(id_text)
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            raise UserError("cursor is not valid") from None
+        if moment.tzinfo is None or str(user_id) != id_text:
+            raise UserError("cursor is not valid")
+        return moment, user_id
+
     async def list(
-        self, *, status: UserStatus | None = None, conn: AsyncConnection[Any] | None = None
+        self,
+        *,
+        status: UserStatus | None = None,
+        limit: int | None = None,
+        after: str | None = None,
+        conn: AsyncConnection[Any] | None = None,
     ) -> list[User]:
-        """Every user, oldest first (ties by id), optionally only those of one status."""
+        """Users oldest first (ties by id), optionally only those of one status.
+
+        Without ``limit`` or ``after`` this is every user. ``limit`` (at least
+        1) caps the page; ``after`` is a ``cursor()`` and starts the page
+        after that user.
+        """
+        if limit is not None and limit < 1:
+            raise UserError("limit must be at least 1")
+        moment, user_id = (None, None) if after is None else self._position(after)
         async with self._db.transaction(conn) as tx:
             cur = await tx.execute(
                 sql.SQL(
-                    "SELECT {} FROM {} WHERE %(status)s::text IS NULL OR status = %(status)s"
-                    " ORDER BY created_at, id"
+                    "SELECT {} FROM {} WHERE (%(status)s::text IS NULL OR status = %(status)s)"
+                    " AND (%(moment)s::timestamptz IS NULL"
+                    " OR (created_at, id) > (%(moment)s::timestamptz, %(id)s::uuid))"
+                    " ORDER BY created_at, id LIMIT %(limit)s"
                 ).format(_COLUMNS, _USERS),
-                {"status": None if status is None else status.value},
+                {
+                    "status": None if status is None else status.value,
+                    "moment": moment,
+                    "id": user_id,
+                    "limit": limit,
+                },
             )
             rows = await cur.fetchall()
         return [_row_to_user(row) for row in rows]

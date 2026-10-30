@@ -9,7 +9,7 @@ and every error is a fixed message.
 
 | Route | Body | Success |
 |---|---|---|
-| ``GET /users[?status=]`` | | ``{"users": [...]}`` |
+| ``GET /users[?status=&limit=&after=]`` | | ``{"users": [...]}`` (*) |
 | ``GET /users/{id}`` | | ``{"user", "roles"}`` |
 | ``POST /users/{id}/status`` | ``status`` | ``{"user"}`` |
 | ``POST /users/{id}/sign-in-method`` | ``sign_in_method`` | ``{"user"}`` |
@@ -26,14 +26,16 @@ and every error is a fixed message.
 | ``DELETE /api-keys/{id}`` | | 204 |
 
 (*) ``display_name``, ``sign_in_method``, ``roles`` and ``expires_at`` are optional.
+A user list paged with ``limit`` or ``after`` also carries ``next``.
 Times are ISO 8601 with a zone offset. A new API key is returned once, never again.
 """
 
+import re
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
 
 from warden.identity.apikeys import ApiKey, ApiKeyError
@@ -69,6 +71,9 @@ if TYPE_CHECKING:
     from warden.identity.service import Identity
 
 __all__ = ["build_admin_router"]
+
+_MAX_USER_PAGE = 1000
+_PAGE_SIZE = re.compile(r"[1-9][0-9]{0,3}")
 
 
 class _BadRequest(Exception):
@@ -209,18 +214,32 @@ def build_admin_router(
         "/users",
         summary="List users",
         description=(
-            "Every user, oldest first (ties by id), optionally only those of one `status` "
-            "(`invited`, `active`, `suspended` or `deactivated`). The list is not paged."
+            "Users oldest first (ties by id), optionally only those of one `status` "
+            "(`invited`, `active`, `suspended` or `deactivated`). Without `limit` or "
+            "`after` this is every user and the body is `users` alone. With either, the "
+            "body also carries `next`: pass it as `after` for the following page, until it "
+            "is null."
         ),
         responses={
             200: {"model": WardenUserList, "description": "The users."},
-            400: detail("`status` is not a user status.", "the request is not valid"),
+            400: detail(
+                "`status` is not a user status, `limit` is not 1 to 1000, or `after` is "
+                "not a cursor this route returned.",
+                "the request is not valid",
+            ),
             **REFUSED,
             **FORBIDDEN,
         },
     )
     async def list_users(
-        principal: Annotated[Principal, Depends(users_admin)], status: str | None = None
+        principal: Annotated[Principal, Depends(users_admin)],
+        status: str | None = None,
+        limit: Annotated[
+            str | None, Query(description="Page size, a whole number from 1 to 1000.")
+        ] = None,
+        after: Annotated[
+            str | None, Query(description="The `next` cursor from the previous page.")
+        ] = None,
     ) -> Response:
         wanted: UserStatus | None = None
         if status is not None:
@@ -228,8 +247,24 @@ def build_admin_router(
                 wanted = UserStatus(status)
             except ValueError:
                 return _invalid()
-        found = await identity.users.list(status=wanted)
-        return json_response({"users": [_user(u) for u in found]})
+        if limit is None and after is None:
+            found = await identity.users.list(status=wanted)
+            return json_response({"users": [_user(u) for u in found]})
+        size: int | None = None
+        if limit is not None:
+            if _PAGE_SIZE.fullmatch(limit) is None or int(limit) > _MAX_USER_PAGE:
+                return _invalid()
+            size = int(limit)
+        try:
+            found = await identity.users.list(
+                status=wanted, limit=None if size is None else size + 1, after=after
+            )
+        except UserError:
+            return _invalid()
+        more = size is not None and len(found) > size
+        page = found[:size] if more else found
+        following = identity.users.cursor(page[-1]) if more else None
+        return json_response({"users": [_user(u) for u in page], "next": following})
 
     @router.get(
         "/users/{user_id}",

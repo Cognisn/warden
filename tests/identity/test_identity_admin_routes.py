@@ -169,6 +169,54 @@ async def test_list_and_show_users(
     assert (await client.get("/admin/users?status=bogus", headers=headers)).status_code == 400
 
 
+async def test_listing_users_pages_with_limit_and_after(
+    client: httpx.AsyncClient,
+    admin: tuple[User, dict[str, str]],
+    make_user: UserFactory,
+    identity: Identity,
+) -> None:
+    _, headers = admin
+    for n in range(4):
+        await make_user(f"paged-{n}@example.com")
+    everyone = (await client.get("/admin/users", headers=headers)).json()["users"]
+    assert len(everyone) == 5
+    seen: list[dict[str, object]] = []
+    url = "/admin/users?limit=2"
+    pages = 0
+    while pages < 10:  # bounded, so a cursor that does not advance fails rather than hangs
+        response = await client.get(url, headers=headers)
+        assert response.status_code == 200
+        body = response.json()
+        assert set(body) == {"users", "next"}
+        assert len(body["users"]) <= 2
+        seen.extend(body["users"])
+        pages += 1
+        if body["next"] is None:
+            break
+        url = f"/admin/users?limit=2&after={body['next']}"
+    assert seen == everyone
+    assert pages == 3
+    last = await identity.users.get(uuid.UUID(everyone[-1]["id"]))
+    assert last is not None
+    tail = await client.get(f"/admin/users?after={identity.users.cursor(last)}", headers=headers)
+    assert tail.json() == {"users": [], "next": None}
+    exact = await client.get("/admin/users?limit=5", headers=headers)
+    assert exact.json() == {"users": everyone, "next": None}
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["limit=0", "limit=1001", "limit=-1", "limit=two", "limit=", "limit=01", "after=nonsense"],
+)
+async def test_listing_users_refuses_a_bad_page(
+    client: httpx.AsyncClient, admin: tuple[User, dict[str, str]], query: str
+) -> None:
+    _, headers = admin
+    response = await client.get(f"/admin/users?{query}", headers=headers)
+    assert response.status_code == 400
+    assert response.json() == {"detail": "the request is not valid"}
+
+
 async def test_change_status_and_method(
     client: httpx.AsyncClient,
     db: Database,
