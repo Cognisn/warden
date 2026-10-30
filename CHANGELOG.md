@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b3] - 2026-10-30
+
+Third beta: the sample console under `examples/console`. warden's behaviour is unchanged.
+
 ### Added
 
 - A sample console under `examples/console`, for local development only and not part of the package: a small FastAPI product that loads its `WardenConfig` through konfig, hands warden its own pool, declares sample permissions and roles with a resource-scope hook and product audit actions, and mounts every warden router under the configured prefixes. Its console (plain HTML, CSS and JavaScript modules, no build step, framework or CDN, a strict Content Security Policy, tokens held in memory only) exercises sign-in with TOTP and recovery codes, refresh and sign-out, single sign-on and break-glass, invitations and password reset through an in-memory outbox, users, roles, API keys, the session policy, single sign-on settings, and the audit trail with filters, CSV export, chain verification, anchors, syslog status and the published keys. `examples/console/README.md` gives the bootstrap steps and lists what warden's public surface does not yet provide. Tests in `tests/examples` run it against Postgres, and a tripwire fails if anything under `examples/` imports a private warden module or name. warden's behaviour is unchanged.
