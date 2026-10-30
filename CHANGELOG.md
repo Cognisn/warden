@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A sample console under `examples/console`, for local development only and not part of the package: a small FastAPI product that loads its `WardenConfig` through konfig, hands warden its own pool, declares sample permissions and roles with a resource-scope hook and product audit actions, and mounts every warden router under the configured prefixes. Its console (plain HTML, CSS and JavaScript modules, no build step, framework or CDN, a strict Content Security Policy, tokens held in memory only) exercises sign-in with TOTP and recovery codes, refresh and sign-out, single sign-on and break-glass, invitations and password reset through an in-memory outbox, users, roles, API keys, the session policy, single sign-on settings, and the audit trail with filters, CSV export, chain verification, anchors, syslog status and the published keys. `examples/console/README.md` gives the bootstrap steps and lists what warden's public surface does not yet provide. Tests in `tests/examples` run it against Postgres, and a tripwire fails if anything under `examples/` imports a private warden module or name. warden's behaviour is unchanged.
+- An optional `examples` extra (`uvicorn`, BSD-3-Clause; `psycopg[binary]` and `psycopg-pool`, LGPL-3.0) for running the sample. warden's runtime dependencies are unchanged.
+- The worktree recipe's `console` port (offset 40) for the sample console.
+
 ## [0.1.0b1] - 2026-10-30
 
 First beta: feature complete. The same code as 0.1.0a11, which passed the b1 gate: the full suite and checks, and the live syslog (UDP, TCP and TLS, plus a collector outage) and live single sign-on (sign-in, invitation and break-glass) checks. From this build the library takes fixes only.
