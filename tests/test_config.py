@@ -333,6 +333,14 @@ def test_sso_client_secret_name_can_be_overridden() -> None:
     assert config.sso.client_secret == "product/sso-secret"
 
 
+def test_sso_client_secret_refuses_an_explicit_null() -> None:
+    # Since 0.1.0a10 the name is a string with a default, not optional: an
+    # explicit null fails at start-up, naming the field (changelog note).
+    with pytest.raises(ConfigError) as caught:
+        _load(_sso_tree(sso__client_secret=None))
+    assert "warden.sso.client_secret" in str(caught.value)
+
+
 def test_syslog_enabled_requires_destination() -> None:
     with pytest.raises(ConfigError) as caught:
         _load(_tree(syslog__enabled=True))

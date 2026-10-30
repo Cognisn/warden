@@ -85,7 +85,7 @@ It is written from scratch. The design draws on the identity and audit implement
 - Ed25519 key management with rotation, and key publication: `keys_router` (from `warden.jwks`), which the product mounts at `http.keys_prefix`, serves RFC 7517 JWK Sets of RFC 8037 OKP keys, unauthenticated, read-only and publicly cacheable for five minutes, with no audit event per request. `<keys>/jwks.json` carries the keys that sign and verify live credentials (neither retired nor revoked); `<keys>/jwks-historical.json` adds retired keys, for verifying audit checkpoints. A revoked key is in neither, and no private member is ever published. Importing `warden.keys` does not load FastAPI.
 - konfig-backed configuration with start-up validation.
 - Cache invalidation across replicas for settings and session policy, over Postgres `LISTEN/NOTIFY` (no Redis dependency).
-- A documented HTTP contract: OpenAPI plus a client-behaviour guide.
+- A documented HTTP contract: the OpenAPI document [`docs/contract/openapi.json`](../contract/openapi.json), plus the client-behaviour guide [`docs/guide/clients.md`](../guide/clients.md).
 
 ### 3.2 Out of scope
 
@@ -98,7 +98,7 @@ It is written from scratch. The design draws on the identity and audit implement
 
 ## 4. Package layout
 
-The layout as built for 0.1.0. The public API is what each package exports in `__all__` (pinned by `tests/test_public_api.py`), plus the HTTP contract and the database schema; every other name is internal. `warden/__init__.py` exports only `__version__` and imports no subpackage, so `import warden.audit` never loads identity (D11).
+The layout as built for 0.1.0. The public API is what each package exports in `__all__` (pinned by `tests/test_public_api.py`), plus the HTTP contract ([`docs/contract/openapi.json`](../contract/openapi.json), pinned by `tests/test_openapi_contract.py`, with the client-behaviour guide [`docs/guide/clients.md`](../guide/clients.md)) and the database schema; every other name is internal. The compatibility modules the guide lists in section 14 are deprecated and kept until 1.0. `warden/__init__.py` exports only `__version__` and imports no subpackage, so `import warden.audit` never loads identity (D11).
 
 ```
 src/warden/
@@ -169,7 +169,7 @@ Each behaviour below is written as a failing test before the code that satisfies
 | M3 Identity core | Users, passwords, TOTP, sessions and refresh families, permissions and roles, dependencies, public sign-in routes. | Acceptance tests #124, #125, #126, #130, #131, #132 and #133 green. |
 | M4 Lifecycle | Invitations, password reset, mail protocol and templates, administration routes, API keys, pruning. | #127, #128, #129, #134 and #154 green. |
 | M5 Single sign-on | OIDC client, discovery and JWKS caching, account matching, settings and test-configuration routes. | Live round trip against a stub identity provider, including break-glass sign-in with the provider stopped. |
-| M6 Contract and release | OpenAPI contract, client-behaviour guide, examples, `0.1.0` release candidate. | A consuming product integrates on a feature branch; contract reviewed. |
+| M6 Contract and release | OpenAPI contract ([`docs/contract/openapi.json`](../contract/openapi.json), exported by `scripts/export_openapi.py`), client-behaviour guide ([`docs/guide/clients.md`](../guide/clients.md)), examples, `0.1.0` release candidate. | A consuming product integrates on a feature branch; contract reviewed. |
 
 ## 7. Adoption
 
