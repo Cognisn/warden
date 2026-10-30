@@ -5,7 +5,8 @@ The public API lives in the subpackages, each exporting its names in
 
 - ``warden.config``: the typed configuration and its loaders.
 - ``warden.db``: the pool adapter, schema names and migrations.
-- ``warden.keys``: the Ed25519 key store.
+- ``warden.keys``: the Ed25519 key store; ``warden.jwks``: its publication
+  router.
 - ``warden.proxy``: the trusted-proxy middleware.
 - ``warden.audit``: the audit recorder, chain, query, retention and anchors;
   ``warden.audit.syslog``: syslog forwarding.

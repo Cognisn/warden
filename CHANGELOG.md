@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Key publication (design D14). `warden.jwks.keys_router(keys=...)` is a router the product mounts at `http.keys_prefix` (default `/keys`), so components outside the process can verify warden's access tokens and audit checkpoints without being able to sign. `GET <keys>/jwks.json` serves an RFC 7517 JWK Set of the keys that sign and verify live credentials (neither retired nor revoked); `GET <keys>/jwks-historical.json` adds retired keys, for verifying audit checkpoints. A revoked key is in neither. Each key is an RFC 8037 OKP key with exactly `kty`, `crv`, `x`, `kid`, `alg` (`EdDSA`) and `use` (`sig`); no private member is ever published. Both routes are unauthenticated and read-only, answer `application/jwk-set+json` with `Cache-Control: public, max-age=300` (a verifier that meets an unknown key id should fetch again), and record no audit event. Identity mounts nothing new by itself. The router lives in its own module, so importing `warden.keys` (as audit does) still loads no FastAPI; a tripwire fails if it does. `warden.jwks` is added to the public surface snapshot, and the root docstring names it.
+
 ## [0.1.0a10] - 2026-10-29
 
 Tenth pre-release: the public import surface for 0.1.0b1, the single sign-on issuer kept verbatim, every schema name and lock key in `warden.db.schema`, and `Users.list`.
