@@ -33,6 +33,12 @@ __all__ = [
 
 SYSLOG_TEST_ACTION = "warden.syslog.test_sent"
 
+_PRODUCT_REFUSAL = "Refused by the product's `authorise` dependency; the body is the product's."
+_REFUSED: dict[int | str, dict[str, Any]] = {
+    401: {"description": _PRODUCT_REFUSAL},
+    403: {"description": _PRODUCT_REFUSAL},
+}
+
 
 class TestSendResult(BaseModel):
     """Whether the test message reached the transport, and if not, why (a fixed category)."""
@@ -80,14 +86,34 @@ def syslog_router(
     returns the caller's actor id. With ``recorder``, each test send is
     audited as ``SYSLOG_TEST_ACTION`` (see ``register_syslog_actions``).
     """
-    router = APIRouter()
+    router = APIRouter(tags=["warden: syslog"])
     Actor = Annotated[Any, Depends(authorise)]
 
-    @router.get("/syslog/status", response_model=ForwarderStatus)
+    @router.get(
+        "/syslog/status",
+        response_model=ForwarderStatus,
+        summary="Show the syslog forwarder's status",
+        description=(
+            "This replica's role (`leader`, `standby` or `stopped`), its connection, the "
+            "stored cursor, the lag (committed rows not yet forwarded) and the last error, as "
+            "a fixed category."
+        ),
+        responses=_REFUSED,
+    )
     async def syslog_status(actor: Actor) -> ForwarderStatus:
         return await forwarder.status()
 
-    @router.post("/syslog/test", response_model=TestSendResult)
+    @router.post(
+        "/syslog/test",
+        response_model=TestSendResult,
+        summary="Send one syslog test message",
+        description=(
+            "Over a fresh connection with the forwarder's settings; `error` is a fixed "
+            "category, never the underlying error text. With a recorder, the send is audited "
+            "as `warden.syslog.test_sent`."
+        ),
+        responses=_REFUSED,
+    )
     async def syslog_test(actor: Actor) -> TestSendResult:
         result = await send_test_message(forwarder)
         if recorder is not None:

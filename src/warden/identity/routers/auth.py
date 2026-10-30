@@ -29,6 +29,23 @@ from fastapi.responses import Response
 from warden.identity.dependencies import Principal, bearer_token
 from warden.identity.errors import AuthenticationRefused, MfaError
 from warden.identity.http import SourceIp, client_ip, json_response, read_object, refusal
+from warden.identity.routers.contract import (
+    REFUSED,
+    ChallengeBody,
+    ChangePasswordBody,
+    CodeBody,
+    EnrolmentBody,
+    EnrolmentConfirmBody,
+    RefreshBody,
+    SignInBody,
+    WardenEnrolmentConfirmed,
+    WardenSignedIn,
+    WardenSignInAnswer,
+    WardenTotpEnrolment,
+    detail,
+    json_body,
+    no_store,
+)
 from warden.identity.routers.tokens import token_body
 
 if TYPE_CHECKING:
@@ -55,7 +72,23 @@ def build_auth_router(identity: Identity) -> APIRouter:
             return None
         return await identity.authenticate(token)
 
-    @router.post("/sign-in")
+    @router.post(
+        "/sign-in",
+        summary="Sign in with an email address and password",
+        description=(
+            "Answers with a new session (`status` `signed_in`), or with a challenge when a "
+            "second factor is needed: `mfa_required` (send a TOTP code to `/totp/verify` or a "
+            "recovery code to `/recovery-code`) or `mfa_enrolment_required` (enrol through "
+            "`/totp/enrolment` under the challenge). An unknown address, a wrong password, an "
+            "`sso_only` user, a user who is not active and a throttled attempt all get the "
+            "uniform refusal, in the same time."
+        ),
+        responses={
+            200: {"model": WardenSignInAnswer, "description": "Signed in, or challenged."},
+            **REFUSED,
+        },
+        openapi_extra=json_body(SignInBody),
+    )
     async def sign_in(request: Request) -> Response:
         body = await read_object(request) or {}
         try:
@@ -76,7 +109,16 @@ def build_auth_router(identity: Identity) -> APIRouter:
             raise RuntimeError("sign-in produced neither tokens nor a challenge")
         return json_response(token_body(result.tokens))
 
-    @router.post("/totp/verify")
+    @router.post(
+        "/totp/verify",
+        summary="Complete sign-in with a TOTP code",
+        description=(
+            "Sends the `mfa_required` challenge with a six-digit code. A code is accepted at "
+            "most once per time step; too many wrong codes end the challenge."
+        ),
+        responses={200: {"model": WardenSignedIn, "description": "Signed in."}, **REFUSED},
+        openapi_extra=json_body(ChallengeBody),
+    )
     async def totp_verify(request: Request) -> Response:
         body = await read_object(request) or {}
         try:
@@ -87,7 +129,16 @@ def build_auth_router(identity: Identity) -> APIRouter:
             return refusal()
         return json_response(token_body(pair))
 
-    @router.post("/recovery-code")
+    @router.post(
+        "/recovery-code",
+        summary="Complete sign-in with a recovery code",
+        description=(
+            "Sends the `mfa_required` challenge with one unused recovery code, which is used "
+            "up, even under concurrent requests."
+        ),
+        responses={200: {"model": WardenSignedIn, "description": "Signed in."}, **REFUSED},
+        openapi_extra=json_body(CodeBody),
+    )
     async def recovery_code(request: Request) -> Response:
         body = await read_object(request) or {}
         try:
@@ -98,7 +149,19 @@ def build_auth_router(identity: Identity) -> APIRouter:
             return refusal()
         return json_response(token_body(pair))
 
-    @router.post("/refresh")
+    @router.post(
+        "/refresh",
+        summary="Exchange a refresh token for a new session pair",
+        description=(
+            "Refresh tokens rotate: each is single-use and the answer carries its replacement. "
+            "Presenting a token that was already used ends its whole family (every token "
+            "descended from the same sign-in), except that the immediate predecessor presented "
+            "within the session policy's reuse grace window is refused without ending it. "
+            "Refused for a user who is no longer active."
+        ),
+        responses={200: {"model": WardenSignedIn, "description": "A new pair."}, **REFUSED},
+        openapi_extra=json_body(RefreshBody),
+    )
     async def refresh(request: Request) -> Response:
         body = await read_object(request) or {}
         try:
@@ -107,7 +170,13 @@ def build_auth_router(identity: Identity) -> APIRouter:
             return refusal()
         return json_response(token_body(pair))
 
-    @router.post("/sign-out")
+    @router.post(
+        "/sign-out",
+        status_code=204,
+        summary="End the current session",
+        description="Needs an access token as the bearer token (not an API key).",
+        responses={204: {"description": "Signed out.", "headers": no_store()}, **REFUSED},
+    )
     async def sign_out(request: Request) -> Response:
         try:
             principal = await principal_or_none(request)
@@ -118,7 +187,26 @@ def build_auth_router(identity: Identity) -> APIRouter:
         await identity.sign_out(principal, source_ip=source(request))
         return Response(status_code=204, headers={"cache-control": "no-store"})
 
-    @router.post("/password")
+    @router.post(
+        "/password",
+        status_code=204,
+        summary="Change the signed-in user's password",
+        description=(
+            "Needs an access token as the bearer token. Ends the user's other sessions; the "
+            "current one stays. A wrong current password, or a user without a password "
+            "(`sso_only`), gets the fixed 400 message `password change refused`."
+        ),
+        responses={
+            204: {"description": "Changed.", "headers": no_store()},
+            400: detail(
+                "Refused, or the new password is too short.",
+                "password change refused",
+                "the new password must be at least 12 characters",
+            ),
+            **REFUSED,
+        },
+        openapi_extra=json_body(ChangePasswordBody),
+    )
     async def change_password(request: Request) -> Response:
         try:
             principal = await principal_or_none(request)
@@ -142,7 +230,21 @@ def build_auth_router(identity: Identity) -> APIRouter:
             return json_response({"detail": "password change refused"}, 400)
         return Response(status_code=204, headers={"cache-control": "no-store"})
 
-    @router.post("/totp/enrolment")
+    @router.post(
+        "/totp/enrolment",
+        summary="Begin TOTP enrolment",
+        description=(
+            "Under an access token (bearer) for a signed-in user, or under an "
+            "`mfa_enrolment_required` challenge during a forced enrolment. The enrolment counts "
+            "as a second factor only once confirmed."
+        ),
+        responses={
+            200: {"model": WardenTotpEnrolment, "description": "The secret to enrol."},
+            409: detail("TOTP is already enrolled.", "TOTP is already enrolled"),
+            **REFUSED,
+        },
+        openapi_extra=json_body(EnrolmentBody, required=False),
+    )
     async def begin_enrolment(request: Request) -> Response:
         body = await read_object(request) or {}
         try:
@@ -158,7 +260,24 @@ def build_auth_router(identity: Identity) -> APIRouter:
             return json_response({"detail": "TOTP is already enrolled"}, 409)
         return json_response({"secret": enrolment.secret_base32, "uri": enrolment.uri})
 
-    @router.post("/totp/enrolment/confirm")
+    @router.post(
+        "/totp/enrolment/confirm",
+        summary="Confirm TOTP enrolment with a first code",
+        description=(
+            "Answers with the recovery codes, shown once. Under a challenge (a forced "
+            "enrolment) the answer is also the new session. A wrong code from a signed-in user "
+            "is a 400, so a client does not take it for a sign-out."
+        ),
+        responses={
+            200: {
+                "model": WardenEnrolmentConfirmed,
+                "description": "Confirmed: the recovery codes, with a session under a challenge.",
+            },
+            400: detail("The code was not accepted.", "code not accepted"),
+            **REFUSED,
+        },
+        openapi_extra=json_body(EnrolmentConfirmBody),
+    )
     async def confirm_enrolment(request: Request) -> Response:
         body = await read_object(request) or {}
         try:

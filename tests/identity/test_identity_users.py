@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from identity_support import FAST_HASHER, PASSWORD, UserFactory, audit_rows
 
@@ -187,3 +189,84 @@ async def test_list_reads_inside_a_callers_transaction(identity: Identity, db: D
             assert [u.email for u in inside] == ["inside@example.com"]
             raise _Undo
     assert await identity.users.list() == []
+
+
+# Paging
+
+
+async def _paged(
+    identity: Identity, limit: int, status: UserStatus | None = None
+) -> list[list[uuid.UUID]]:
+    pages: list[list[uuid.UUID]] = []
+    after: str | None = None
+    # Bounded, so a cursor that does not advance fails rather than hangs.
+    for _ in range(20):
+        page = await identity.users.list(status=status, limit=limit, after=after)
+        assert len(page) <= limit
+        if not page:
+            return pages
+        pages.append([u.id for u in page])
+        after = identity.users.cursor(page[-1])
+    raise AssertionError("paging did not reach the end")
+
+
+async def test_pages_follow_the_full_order_across_ties(identity: Identity, db: Database) -> None:
+    made = [await identity.users.create(f"page-{n}@example.com", actor="t") for n in range(7)]
+    moments = ["2026-01-02", "2026-01-01", "2026-01-02", "2026-01-03", "2026-01-02", "2026-01-01"]
+    for user, moment in zip(made, moments, strict=False):
+        await _set_created(db, user.id, f"{moment}T00:00:00Z")
+    everyone = [u.id for u in await identity.users.list()]
+    pages = await _paged(identity, 2)
+    assert [len(p) for p in pages] == [2, 2, 2, 1]
+    assert [i for p in pages for i in p] == everyone
+
+
+async def test_a_limit_alone_returns_the_oldest(identity: Identity, db: Database) -> None:
+    made = [await identity.users.create(f"limit-{n}@example.com", actor="t") for n in range(4)]
+    for user, day in zip(made, ["04", "02", "03", "01"], strict=True):
+        await _set_created(db, user.id, f"2026-01-{day}T00:00:00Z")
+    first = await identity.users.list(limit=3)
+    assert [u.id for u in first] == [made[3].id, made[1].id, made[2].id]
+    assert len(await identity.users.list(limit=10)) == 4
+
+
+async def test_after_alone_returns_the_rest(identity: Identity, db: Database) -> None:
+    made = [await identity.users.create(f"after-{n}@example.com", actor="t") for n in range(3)]
+    for user, day in zip(made, ["03", "01", "02"], strict=True):
+        await _set_created(db, user.id, f"2026-01-{day}T00:00:00Z")
+    oldest = await identity.users.get(made[1].id)
+    assert oldest is not None
+    rest = await identity.users.list(after=identity.users.cursor(oldest))
+    assert [u.id for u in rest] == [made[2].id, made[0].id]
+
+
+async def test_pages_keep_the_status_filter(identity: Identity) -> None:
+    made = [await identity.users.create(f"filter-{n}@example.com", actor="t") for n in range(5)]
+    for user in made[1::2]:
+        await identity.users.set_status(user.id, UserStatus.SUSPENDED, actor="t")
+    pages = await _paged(identity, 1, status=UserStatus.ACTIVE)
+    assert [i for p in pages for i in p] == [
+        u.id for u in await identity.users.list(status=UserStatus.ACTIVE)
+    ]
+    assert len(pages) == 3
+
+
+@pytest.mark.parametrize("limit", [0, -1])
+async def test_a_limit_below_one_is_refused(identity: Identity, limit: int) -> None:
+    with pytest.raises(UserError, match="limit"):
+        await identity.users.list(limit=limit)
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [
+        "",
+        "not a cursor",
+        "MjAyNi0wMS0wMVQwMDowMDowMCswMDowMHxub3QtYS11dWlk",
+        "MjAyNi0wMS0wMVQwMDowMDowMHwwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwMDA",
+        "x" * 400,
+    ],
+)
+async def test_a_malformed_cursor_is_refused(identity: Identity, cursor: str) -> None:
+    with pytest.raises(UserError, match="cursor"):
+        await identity.users.list(after=cursor)
