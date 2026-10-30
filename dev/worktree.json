@@ -9,6 +9,7 @@
     { "name": "syslog", "offset": 14 },
     { "name": "syslog_tls", "offset": 15 },
     { "name": "postgres", "offset": 32 },
+    { "name": "console", "offset": 40 },
     { "name": "stub_idp", "offset": 81 }
   ],
   "compose_template": "dev/sandbox-compose.yml",

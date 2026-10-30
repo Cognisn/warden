@@ -1,0 +1,51 @@
+# The sample console's configuration for one sandbox, written by
+#   python -m examples.console init --sandbox <sandbox> --ports-file <sandbox>/ports.txt
+# For local development only: every secret here is a fixed -dev-only value,
+# and this is not a deployment template.
+#
+# konfig reads this file. warden's own settings live under "warden" and are
+# validated at start-up into one WardenConfig; "console" holds the sample's
+# own; "secrets" points konfig's secrets store at an encrypted file in the
+# sandbox, shared with the warden CLI (warden --config <this file> ...).
+
+secrets:
+  backend: encrypted_file
+  file_path: "${sandbox}/console-secrets.enc"
+  master_key: console-master-key-dev-only
+
+console:
+  port: ${console}
+  # The stub identity provider's CA (written by
+  # tests/identity/sso/live/make_certs.py); see README.md, "Single sign-on".
+  provider_ca_file: "${sandbox}/idp-certs/ca.pem"
+
+warden:
+  db:
+    dsn: postgresql://warden:warden-dev-only@127.0.0.1:${postgres}/warden
+  http:
+    public_base_url: http://localhost:${console}
+    accept_invitation_link: /accept?t={token}
+    reset_password_link: /reset?t={token}
+    sso_completion_link: /signed-in
+  identity:
+    require_mfa: true
+    totp_issuer: warden sample console
+  mail:
+    from_address: console@example.com
+    from_name: warden sample console
+  sso:
+    # Enabled from the console's single sign-on screen once the stub provider
+    # is up. The provider accepts any client secret.
+    enabled: false
+    issuer_url: https://localhost:${stub_idp}/warden
+    client_id: warden-live-client
+    allowed_email_domains: example.com,example.org
+  syslog:
+    enabled: true
+    host: 127.0.0.1
+    port: ${syslog_tls}
+    transport: tls
+    framing: octet-counting
+    tls_ca_file: "${sandbox}/certs/ca.pem"
+    tls_server_name: localhost
+    app_name: warden-console

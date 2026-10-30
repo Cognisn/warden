@@ -49,6 +49,14 @@ dev = [
     "ruff>=0.6",
     "packaging>=24",
 ]
+# The sample console under examples/console (not part of the package): uvicorn
+# serves it, and it opens its own pool, as a product does. Never a runtime
+# dependency of warden.
+examples = [
+    "uvicorn>=0.30",
+    "psycopg[binary]>=3.2",
+    "psycopg-pool>=3.2",
+]
 
 [project.scripts]
 warden = "warden.cli:main"
@@ -91,7 +99,7 @@ ignore_missing_imports = true
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["src", "tests", "scripts"]
+src = ["src", "tests", "scripts", "."]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "S", "RUF"]

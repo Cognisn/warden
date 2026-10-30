@@ -41,6 +41,10 @@ The audit half works on its own, so an application with its own authentication c
 - [Changelog](CHANGELOG.md)
 - [Security policy](SECURITY.md)
 
+## Sample console
+
+[`examples/console`](examples/console/README.md) is a small sample product that mounts warden's routers in FastAPI and exercises them from a plain HTML and JavaScript console: sign-in with TOTP, single sign-on, invitations and password reset (with an in-memory outbox), administration, API keys, and the audit trail with export, verification, anchors and syslog. It shows how a product integrates warden, using only warden's public surface. It is for local development only, not a deployment template, and it is not part of the published package.
+
 ## Licence
 
 Licensed under the [Apache License, Version 2.0](LICENSE). Copyright 2026 Cognisn Pty Ltd. See [NOTICE](NOTICE).
