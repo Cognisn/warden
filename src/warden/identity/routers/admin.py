@@ -42,6 +42,27 @@ from warden.identity.http import NO_STORE, SourceIp, client_ip, json_response, r
 from warden.identity.invitations import InvitationError, PendingInvitation, StagedGrant
 from warden.identity.mail import MailDeliveryError, MailError
 from warden.identity.roles import LastAdministratorError, RoleAssignment, RoleError
+from warden.identity.routers.contract import (
+    FORBIDDEN,
+    REFUSED,
+    InvitationCreateBody,
+    NewApiKeyBody,
+    RoleAssignBody,
+    SignInMethodBody,
+    StatusBody,
+    WardenApiKeyList,
+    WardenInvitationIssued,
+    WardenInvitationList,
+    WardenNewApiKeyIssued,
+    WardenResetSent,
+    WardenRoleList,
+    WardenUserDetail,
+    WardenUserEnvelope,
+    WardenUserList,
+    detail,
+    json_body,
+    no_store,
+)
 from warden.identity.users import SignInMethod, User, UserError, UserStatus
 
 if TYPE_CHECKING:
@@ -184,7 +205,20 @@ def build_admin_router(
 
     # Users
 
-    @router.get("/users")
+    @router.get(
+        "/users",
+        summary="List users",
+        description=(
+            "Every user, oldest first (ties by id), optionally only those of one `status` "
+            "(`invited`, `active`, `suspended` or `deactivated`). The list is not paged."
+        ),
+        responses={
+            200: {"model": WardenUserList, "description": "The users."},
+            400: detail("`status` is not a user status.", "the request is not valid"),
+            **REFUSED,
+            **FORBIDDEN,
+        },
+    )
     async def list_users(
         principal: Annotated[Principal, Depends(users_admin)], status: str | None = None
     ) -> Response:
@@ -197,7 +231,17 @@ def build_admin_router(
         found = await identity.users.list(status=wanted)
         return json_response({"users": [_user(u) for u in found]})
 
-    @router.get("/users/{user_id}")
+    @router.get(
+        "/users/{user_id}",
+        summary="Show a user and their roles",
+        description=("`user_id` is the user's UUID; anything else is a 404."),
+        responses={
+            200: {"model": WardenUserDetail, "description": "The user."},
+            404: detail("No such user.", "not found"),
+            **REFUSED,
+            **FORBIDDEN,
+        },
+    )
     async def show_user(
         user_id: str, principal: Annotated[Principal, Depends(users_admin)]
     ) -> Response:
@@ -208,7 +252,28 @@ def build_admin_router(
         assignments = await identity.roles.assignments_of(user.id)
         return json_response({"user": _user(user), "roles": [_assignment(a) for a in assignments]})
 
-    @router.post("/users/{user_id}/status")
+    @router.post(
+        "/users/{user_id}/status",
+        summary="Set a user's status",
+        description=(
+            "While a user is not `active`, every credential check refuses them: their "
+            "access tokens, refresh tokens and API keys stop being honoured at once. The "
+            "last active administrator cannot be suspended or deactivated, even by "
+            "concurrent requests."
+        ),
+        responses={
+            200: {"model": WardenUserEnvelope, "description": "The updated user."},
+            400: detail("The request is not valid.", "the request is not valid"),
+            404: detail("No such user.", "not found"),
+            409: detail(
+                "This would leave no active administrator.",
+                "this would leave no active administrator",
+            ),
+            **REFUSED,
+            **FORBIDDEN,
+        },
+        openapi_extra=json_body(StatusBody),
+    )
     async def set_status(
         user_id: str, request: Request, principal: Annotated[Principal, Depends(users_admin)]
     ) -> Response:
@@ -228,7 +293,22 @@ def build_admin_router(
             return _not_found()
         return json_response({"user": _user(user)})
 
-    @router.post("/users/{user_id}/sign-in-method")
+    @router.post(
+        "/users/{user_id}/sign-in-method",
+        summary="Set a user's sign-in method",
+        description=(
+            "`password_and_sso` or `sso_only`. An `sso_only` user cannot sign in with, "
+            "reset or change a password."
+        ),
+        responses={
+            200: {"model": WardenUserEnvelope, "description": "The updated user."},
+            400: detail("The request is not valid.", "the request is not valid"),
+            404: detail("No such user.", "not found"),
+            **REFUSED,
+            **FORBIDDEN,
+        },
+        openapi_extra=json_body(SignInMethodBody),
+    )
     async def set_method(
         user_id: str, request: Request, principal: Annotated[Principal, Depends(users_admin)]
     ) -> Response:
@@ -248,7 +328,28 @@ def build_admin_router(
             return _not_found()
         return json_response({"user": _user(user)})
 
-    @router.post("/users/{user_id}/password-reset")
+    @router.post(
+        "/users/{user_id}/password-reset",
+        status_code=202,
+        summary="Send a user a password reset link",
+        description=(
+            "Mails a reset link at once and reports the outcome, unlike the public reset "
+            "request. Refused (409) for a user who is not active or is `sso_only`."
+        ),
+        responses={
+            202: {"model": WardenResetSent, "description": "Sent.", "headers": no_store()},
+            404: detail("No such user.", "not found"),
+            409: detail(
+                "A link cannot be sent to this user.", "a reset link cannot be sent to this user"
+            ),
+            502: detail(
+                "The mail sender refused the message.", "the message could not be delivered"
+            ),
+            503: detail("No mail sender is configured.", "mail is not configured"),
+            **REFUSED,
+            **FORBIDDEN,
+        },
+    )
     async def send_reset(
         user_id: str, request: Request, principal: Annotated[Principal, Depends(users_admin)]
     ) -> Response:
@@ -270,7 +371,16 @@ def build_admin_router(
 
     # Roles
 
-    @router.get("/roles")
+    @router.get(
+        "/roles",
+        summary="List roles and permissions",
+        description=("The roles and permissions the product registered."),
+        responses={
+            200: {"model": WardenRoleList, "description": "The registry."},
+            **REFUSED,
+            **FORBIDDEN,
+        },
+    )
     async def list_roles(principal: Annotated[Principal, Depends(roles_admin)]) -> Response:
         registry = identity.permissions
         return json_response(
@@ -287,7 +397,23 @@ def build_admin_router(
             }
         )
 
-    @router.put("/users/{user_id}/roles/{role}")
+    @router.put(
+        "/users/{user_id}/roles/{role}",
+        status_code=204,
+        summary="Assign a role",
+        description=(
+            "Assigns `role`, optionally until `expires_at`. Assigning a role the user "
+            "already holds replaces its expiry. An administrator role cannot expire."
+        ),
+        responses={
+            204: {"description": "Assigned.", "headers": no_store()},
+            400: detail("Not a defined role, or a bad expiry.", "the request is not valid"),
+            404: detail("No such user.", "not found"),
+            **REFUSED,
+            **FORBIDDEN,
+        },
+        openapi_extra=json_body(RoleAssignBody, required=False),
+    )
     async def assign_role(
         user_id: str,
         role: str,
@@ -312,7 +438,25 @@ def build_admin_router(
             return _not_found() if "does not exist" in str(exc) else _invalid()
         return _no_content()
 
-    @router.delete("/users/{user_id}/roles/{role}")
+    @router.delete(
+        "/users/{user_id}/roles/{role}",
+        status_code=204,
+        summary="Revoke a role",
+        description=(
+            "The last active administrator keeps their administrator role, even under "
+            "concurrent requests."
+        ),
+        responses={
+            204: {"description": "Revoked.", "headers": no_store()},
+            404: detail("The user does not hold the role.", "not found"),
+            409: detail(
+                "This would leave no active administrator.",
+                "this would leave no active administrator",
+            ),
+            **REFUSED,
+            **FORBIDDEN,
+        },
+    )
     async def revoke_role(
         user_id: str, role: str, principal: Annotated[Principal, Depends(roles_admin)]
     ) -> Response:
@@ -327,14 +471,49 @@ def build_admin_router(
 
     # Invitations
 
-    @router.get("/invitations")
+    @router.get(
+        "/invitations",
+        summary="List pending invitations",
+        description=("Invited users, with their current link's expiry and staged roles."),
+        responses={
+            200: {"model": WardenInvitationList, "description": "The invitations."},
+            **REFUSED,
+            **FORBIDDEN,
+        },
+    )
     async def list_invitations(
         principal: Annotated[Principal, Depends(invitations_admin)],
     ) -> Response:
         pending = await identity.invitations.pending()
         return json_response({"invitations": [_invitation(p) for p in pending]})
 
-    @router.post("/invitations")
+    @router.post(
+        "/invitations",
+        status_code=201,
+        summary="Invite a user",
+        description=(
+            "Creates the user in the `invited` status, stages the roles and mails the link "
+            "in one transaction: if the mail fails, nothing is left behind."
+        ),
+        responses={
+            201: {
+                "model": WardenInvitationIssued,
+                "description": "Invited.",
+                "headers": no_store(),
+            },
+            400: detail("The request is not valid.", "the request is not valid"),
+            409: detail(
+                "A user with that address exists.", "a user with that email address already exists"
+            ),
+            502: detail(
+                "The mail sender refused the message.", "the invitation could not be delivered"
+            ),
+            503: detail("No mail sender is configured.", "mail is not configured"),
+            **REFUSED,
+            **FORBIDDEN,
+        },
+        openapi_extra=json_body(InvitationCreateBody),
+    )
     async def invite(
         request: Request, principal: Annotated[Principal, Depends(invitations_admin)]
     ) -> Response:
@@ -383,7 +562,25 @@ def build_admin_router(
             201,
         )
 
-    @router.post("/invitations/{user_id}/resend")
+    @router.post(
+        "/invitations/{user_id}/resend",
+        summary="Resend an invitation",
+        description=(
+            "Mails a new link and revokes the old one, keeping the staged roles. If the "
+            "mail fails, the old link still works."
+        ),
+        responses={
+            200: {"model": WardenInvitationIssued, "description": "Resent."},
+            404: detail("No such user.", "not found"),
+            409: detail("The user is not invited.", "the invitation is not pending"),
+            502: detail(
+                "The mail sender refused the message.", "the invitation could not be delivered"
+            ),
+            503: detail("No mail sender is configured.", "mail is not configured"),
+            **REFUSED,
+            **FORBIDDEN,
+        },
+    )
     async def resend(
         user_id: str, request: Request, principal: Annotated[Principal, Depends(invitations_admin)]
     ) -> Response:
@@ -409,7 +606,22 @@ def build_admin_router(
             }
         )
 
-    @router.delete("/invitations/{user_id}")
+    @router.delete(
+        "/invitations/{user_id}",
+        status_code=204,
+        summary="Revoke an invitation",
+        description=(
+            "Deletes the invited user. It never removes a user who accepted concurrently: "
+            "that is a 409."
+        ),
+        responses={
+            204: {"description": "Revoked.", "headers": no_store()},
+            404: detail("No such user.", "not found"),
+            409: detail("The user is not invited.", "the invitation is not pending"),
+            **REFUSED,
+            **FORBIDDEN,
+        },
+    )
     async def revoke_invitation(
         user_id: str, request: Request, principal: Annotated[Principal, Depends(invitations_admin)]
     ) -> Response:
@@ -426,7 +638,20 @@ def build_admin_router(
 
     # API keys
 
-    @router.get("/api-keys")
+    @router.get(
+        "/api-keys",
+        summary="List API keys",
+        description=(
+            "Every key, or only one user's (`user_id`, a UUID), revoked keys included. A "
+            "key itself is never shown again; `hint` identifies it."
+        ),
+        responses={
+            200: {"model": WardenApiKeyList, "description": "The keys."},
+            400: detail("`user_id` is not a UUID.", "the request is not valid"),
+            **REFUSED,
+            **FORBIDDEN,
+        },
+    )
     async def list_keys(
         principal: Annotated[Principal, Depends(keys_admin)], user_id: str | None = None
     ) -> Response:
@@ -436,7 +661,23 @@ def build_admin_router(
         found = await identity.api_keys.list(user_id=uid)
         return json_response({"api_keys": [_api_key(k) for k in found]})
 
-    @router.post("/api-keys")
+    @router.post(
+        "/api-keys",
+        status_code=201,
+        summary="Create an API key",
+        description=(
+            "A key acts as its user, limited to `scopes`, which must be registered "
+            "permissions the user holds now. It is refused once it expires or is revoked, "
+            "or while its user is not active. The key is in this answer only."
+        ),
+        responses={
+            201: {"model": WardenNewApiKeyIssued, "description": "Created.", "headers": no_store()},
+            400: detail("The request is not valid.", "the request is not valid"),
+            **REFUSED,
+            **FORBIDDEN,
+        },
+        openapi_extra=json_body(NewApiKeyBody),
+    )
     async def create_key(
         request: Request, principal: Annotated[Principal, Depends(keys_admin)]
     ) -> Response:
@@ -467,7 +708,18 @@ def build_admin_router(
             return _invalid()
         return json_response({"key": new.key, "api_key": _api_key(new.api_key)}, 201)
 
-    @router.delete("/api-keys/{key_id}")
+    @router.delete(
+        "/api-keys/{key_id}",
+        status_code=204,
+        summary="Revoke an API key",
+        description=("A revoked key stays listed, with `revoked_at`."),
+        responses={
+            204: {"description": "Revoked.", "headers": no_store()},
+            404: detail("No such key, or already revoked.", "not found"),
+            **REFUSED,
+            **FORBIDDEN,
+        },
+    )
     async def revoke_key(
         key_id: str, request: Request, principal: Annotated[Principal, Depends(keys_admin)]
     ) -> Response:

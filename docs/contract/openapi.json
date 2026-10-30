@@ -1,0 +1,5874 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "warden",
+    "description": "The HTTP contract of warden, the identity and audit library for Cognisn products. A product mounts warden's routers under prefixes it chooses; this document shows them under the defaults (`/auth`, `/admin`, `/audit` and `/keys`). What a client must do with these routes (token storage, refresh, the uniform refusal, single sign-on, the throttle) is in `docs/guide/clients.md`.\n\nRoutes under `/audit` and the single sign-on administration routes under `/admin/sso` are guarded by an authorisation dependency the product supplies; their refusals are the product's own.\n",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    },
+    "version": "0.1"
+  },
+  "paths": {
+    "/auth/sign-in": {
+      "post": {
+        "tags": [
+          "warden: sign-in"
+        ],
+        "summary": "Sign in with an email address and password",
+        "description": "Answers with a new session (`status` `signed_in`), or with a challenge when a second factor is needed: `mfa_required` (send a TOTP code to `/totp/verify` or a recovery code to `/recovery-code`) or `mfa_enrolment_required` (enrol through `/totp/enrolment` under the challenge). An unknown address, a wrong password, an `sso_only` user, a user who is not active and a throttled attempt all get the uniform refusal, in the same time.",
+        "operationId": "sign_in_auth_sign_in_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "title": "Email"
+                  },
+                  "password": {
+                    "type": "string",
+                    "title": "Password"
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "email",
+                  "password"
+                ],
+                "title": "SignInBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in, or challenged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSignInAnswer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/totp/verify": {
+      "post": {
+        "tags": [
+          "warden: sign-in"
+        ],
+        "summary": "Complete sign-in with a TOTP code",
+        "description": "Sends the `mfa_required` challenge with a six-digit code. A code is accepted at most once per time step; too many wrong codes end the challenge.",
+        "operationId": "totp_verify_auth_totp_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "challenge": {
+                    "type": "string",
+                    "title": "Challenge"
+                  },
+                  "code": {
+                    "type": "string",
+                    "title": "Code",
+                    "description": "Six ASCII digits."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "challenge",
+                  "code"
+                ],
+                "title": "ChallengeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSignedIn"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/recovery-code": {
+      "post": {
+        "tags": [
+          "warden: sign-in"
+        ],
+        "summary": "Complete sign-in with a recovery code",
+        "description": "Sends the `mfa_required` challenge with one unused recovery code, which is used up, even under concurrent requests.",
+        "operationId": "recovery_code_auth_recovery_code_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "challenge": {
+                    "type": "string",
+                    "title": "Challenge"
+                  },
+                  "code": {
+                    "type": "string",
+                    "title": "Code",
+                    "description": "One unused recovery code."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "challenge",
+                  "code"
+                ],
+                "title": "CodeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSignedIn"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "tags": [
+          "warden: sign-in"
+        ],
+        "summary": "Exchange a refresh token for a new session pair",
+        "description": "Refresh tokens rotate: each is single-use and the answer carries its replacement. Presenting a token that was already used ends its whole family (every token descended from the same sign-in), except that the immediate predecessor presented within the session policy's reuse grace window is refused without ending it. Refused for a user who is no longer active.",
+        "operationId": "refresh_auth_refresh_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "refresh_token": {
+                    "type": "string",
+                    "title": "Refresh Token"
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "refresh_token"
+                ],
+                "title": "RefreshBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A new pair.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSignedIn"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/sign-out": {
+      "post": {
+        "tags": [
+          "warden: sign-in"
+        ],
+        "summary": "End the current session",
+        "description": "Needs an access token as the bearer token (not an API key).",
+        "operationId": "sign_out_auth_sign_out_post",
+        "responses": {
+          "204": {
+            "description": "Signed out.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/password": {
+      "post": {
+        "tags": [
+          "warden: sign-in"
+        ],
+        "summary": "Change the signed-in user's password",
+        "description": "Needs an access token as the bearer token. Ends the user's other sessions; the current one stays. A wrong current password, or a user without a password (`sso_only`), gets the fixed 400 message `password change refused`.",
+        "operationId": "change_password_auth_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "current_password": {
+                    "type": "string",
+                    "title": "Current Password"
+                  },
+                  "new_password": {
+                    "type": "string",
+                    "title": "New Password"
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "current_password",
+                  "new_password"
+                ],
+                "title": "ChangePasswordBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Changed.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused, or the new password is too short.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "password change refused"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "the new password must be at least 12 characters"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/totp/enrolment": {
+      "post": {
+        "tags": [
+          "warden: sign-in"
+        ],
+        "summary": "Begin TOTP enrolment",
+        "description": "Under an access token (bearer) for a signed-in user, or under an `mfa_enrolment_required` challenge during a forced enrolment. The enrolment counts as a second factor only once confirmed.",
+        "operationId": "begin_enrolment_auth_totp_enrolment_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "challenge": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Challenge",
+                    "description": "The `mfa_enrolment_required` challenge; omit when sending a bearer token."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "title": "EnrolmentBody"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "The secret to enrol.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenTotpEnrolment"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "TOTP is already enrolled.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "TOTP is already enrolled"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/totp/enrolment/confirm": {
+      "post": {
+        "tags": [
+          "warden: sign-in"
+        ],
+        "summary": "Confirm TOTP enrolment with a first code",
+        "description": "Answers with the recovery codes, shown once. Under a challenge (a forced enrolment) the answer is also the new session. A wrong code from a signed-in user is a 400, so a client does not take it for a sign-out.",
+        "operationId": "confirm_enrolment_auth_totp_enrolment_confirm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "title": "Code",
+                    "description": "Six ASCII digits from the newly enrolled authenticator."
+                  },
+                  "challenge": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Challenge",
+                    "description": "The `mfa_enrolment_required` challenge; omit when sending a bearer token."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "title": "EnrolmentConfirmBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Confirmed: the recovery codes, with a session under a challenge.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenEnrolmentConfirmed"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The code was not accepted.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "code not accepted"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/invitations/accept": {
+      "post": {
+        "tags": [
+          "warden: invitations and password reset"
+        ],
+        "summary": "Accept an invitation with a password",
+        "description": "Sets the password, activates the user and applies the staged roles, using the link up. It does not sign the user in: sign in next. A bad, used or expired token, or a user who is no longer invited (which uses the link up), gets the uniform refusal. A password that is too short is a 400 and an invitation that must be accepted through single sign-on is a 409; both leave the link usable.",
+        "operationId": "accept_invitation_auth_invitations_accept_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "title": "Token",
+                    "description": "The token from the invitation link."
+                  },
+                  "password": {
+                    "type": "string",
+                    "title": "Password"
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "token",
+                  "password"
+                ],
+                "title": "InvitationAcceptBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenInvitationAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The password is too short.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the password must be at least 12 characters"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This invitation is accepted through single sign-on (`POST /sso/start`).",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "use single sign-on to accept this invitation"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/password-reset": {
+      "post": {
+        "tags": [
+          "warden: invitations and password reset"
+        ],
+        "summary": "Request a password reset link",
+        "description": "Always 202, answered before any work is done, identically for every address, so neither the answer nor its timing reveals whether an account exists. A link is mailed only to an active user who signs in with a password; earlier links stop working.",
+        "operationId": "request_reset_auth_password_reset_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "title": "Email"
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "email"
+                ],
+                "title": "ResetRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted for processing.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenResetRequested"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/password-reset/complete": {
+      "post": {
+        "tags": [
+          "warden: invitations and password reset"
+        ],
+        "summary": "Set a new password from a reset link",
+        "description": "Uses the link up and ends every session of the user. A bad, used or expired token, or a user who has since become inactive or `sso_only` (which uses the link up), gets the uniform refusal. A password that is too short is a 400 and leaves the link usable.",
+        "operationId": "complete_reset_auth_password_reset_complete_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "title": "Token",
+                    "description": "The token from the reset link."
+                  },
+                  "new_password": {
+                    "type": "string",
+                    "title": "New Password"
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "token",
+                  "new_password"
+                ],
+                "title": "ResetCompleteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The password is set.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The password is too short.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the password must be at least 12 characters"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/sso/start": {
+      "get": {
+        "tags": [
+          "warden: single sign-on"
+        ],
+        "summary": "Begin single sign-on",
+        "description": "A top-level browser navigation. Stores a login transaction (PKCE S256, state and nonce), sets the login binding cookie and redirects to the identity provider. Every failure lands the browser on `http.sso_completion_link` with `?error=sso_failed` and nothing else, clearing the cookie; show `SSO_FAILURE_MESSAGE`. The reason is recorded only in the audit trail (`warden.identity.sso.sign_in`).",
+        "operationId": "start_auth_sso_start_get",
+        "responses": {
+          "302": {
+            "description": "To the provider; on failure, to the completion link.",
+            "headers": {
+              "location": {
+                "description": "The provider's authorisation endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "set-cookie": {
+                "description": "`__Secure-warden-sso`, the login binding: HttpOnly, Secure, SameSite=Lax, path `<auth prefix>/sso`, for `sso.login_transaction_ttl_seconds`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "referrer-policy": {
+                "description": "`no-referrer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A failure while `http.sso_completion_link` is not configured: the fixed failure message as plain text.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Single sign-on did not complete. Try again, or contact your administrator."
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "warden: single sign-on"
+        ],
+        "summary": "Accept an invitation through single sign-on",
+        "description": "The product's accept-invitation screen submits the link's token as `invitation`, a urlencoded form (a top-level form submission) or a JSON object, chosen by `Content-Type`, so the token appears in no URL. The token is sealed into the login transaction to this browser's binding. At the callback the verified identity accepts the invitation (it must be the invited address), and the browser lands like any sign-in. Any other content type, or a missing, repeated or malformed `invitation`, is a failure. Every failure lands the browser on `http.sso_completion_link` with `?error=sso_failed` and nothing else, clearing the cookie; show `SSO_FAILURE_MESSAGE`. The reason is recorded only in the audit trail (`warden.identity.sso.sign_in`).",
+        "operationId": "start_with_invitation_auth_sso_start_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "invitation": {
+                    "type": "string",
+                    "title": "Invitation",
+                    "description": "The token from the invitation link."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "invitation"
+                ],
+                "title": "SsoInvitationBody"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "properties": {
+                  "invitation": {
+                    "type": "string",
+                    "title": "Invitation",
+                    "description": "The token from the invitation link."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "invitation"
+                ],
+                "title": "SsoInvitationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "303": {
+            "description": "To the provider (the browser follows with GET); on failure, a 302 to the completion link.",
+            "headers": {
+              "location": {
+                "description": "The provider's authorisation endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "set-cookie": {
+                "description": "`__Secure-warden-sso`, the login binding: HttpOnly, Secure, SameSite=Lax, path `<auth prefix>/sso`, for `sso.login_transaction_ttl_seconds`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "referrer-policy": {
+                "description": "`no-referrer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A failure while `http.sso_completion_link` is not configured: the fixed failure message as plain text.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Single sign-on did not complete. Try again, or contact your administrator."
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/sso/callback": {
+      "get": {
+        "tags": [
+          "warden: single sign-on"
+        ],
+        "summary": "The identity provider's redirect back",
+        "description": "The redirect URI registered with the provider: `http.public_base_url` + `http.auth_prefix` + `/sso/callback`. Uses the login transaction up, redeems the code with the PKCE verifier, validates the id_token and matches a pre-provisioned active user, then lands the browser on `http.sso_completion_link` with only a one-time handoff code (`?code=`). Every failure lands the browser on `http.sso_completion_link` with `?error=sso_failed` and nothing else, clearing the cookie; show `SSO_FAILURE_MESSAGE`. The reason is recorded only in the audit trail (`warden.identity.sso.sign_in`).",
+        "operationId": "callback_auth_sso_callback_get",
+        "responses": {
+          "302": {
+            "description": "To the completion link: `?code=` on success, `?error=sso_failed` on failure.",
+            "headers": {
+              "location": {
+                "description": "Where the browser goes next.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "referrer-policy": {
+                "description": "`no-referrer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A failure while `http.sso_completion_link` is not configured: the fixed failure message as plain text.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Single sign-on did not complete. Try again, or contact your administrator."
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "description": "From the provider.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "description": "From the provider.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "required": false,
+            "description": "From the provider, when it refused.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "__Secure-warden-sso",
+            "in": "cookie",
+            "required": false,
+            "description": "The login binding set by `/sso/start`; the browser sends it.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/auth/sso/handoff": {
+      "post": {
+        "tags": [
+          "warden: single sign-on"
+        ],
+        "summary": "Exchange the handoff code for a session",
+        "description": "The product's completion screen posts the `code` from its URL, from the same browser, so the login binding cookie goes with it. The code is single-use and expires after `sso.handoff_code_ttl_seconds`. The answer is the same body as password sign-in, and clears the cookie.",
+        "operationId": "handoff_auth_sso_handoff_post",
+        "responses": {
+          "200": {
+            "description": "Signed in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSignedIn"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "description": "The `code` the callback put on the completion link.",
+                    "title": "Code",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "title": "HandoffBody",
+                "type": "object"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "__Secure-warden-sso",
+            "in": "cookie",
+            "required": true,
+            "description": "The login binding set by `/sso/start`; the browser sends it.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/admin/users": {
+      "get": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "List users",
+        "description": "Every user, oldest first (ties by id), optionally only those of one `status` (`invited`, `active`, `suspended` or `deactivated`). The list is not paged.",
+        "operationId": "list_users_admin_users_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The users.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenUserList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`status` is not a user status.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}": {
+      "get": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "Show a user and their roles",
+        "description": "`user_id` is the user's UUID; anything else is a 404.",
+        "operationId": "show_user_admin_users__user_id__get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenUserDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}/status": {
+      "post": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "Set a user's status",
+        "description": "While a user is not `active`, every credential check refuses them: their access tokens, refresh tokens and API keys stop being honoured at once. The last active administrator cannot be suspended or deactivated, even by concurrent requests.",
+        "operationId": "set_status_admin_users__user_id__status_post",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The updated user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenUserEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This would leave no active administrator.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "this would leave no active administrator"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "invited",
+                      "active",
+                      "suspended",
+                      "deactivated"
+                    ],
+                    "title": "Status",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "title": "StatusBody",
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}/sign-in-method": {
+      "post": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "Set a user's sign-in method",
+        "description": "`password_and_sso` or `sso_only`. An `sso_only` user cannot sign in with, reset or change a password.",
+        "operationId": "set_method_admin_users__user_id__sign_in_method_post",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The updated user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenUserEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "sign_in_method": {
+                    "enum": [
+                      "password_and_sso",
+                      "sso_only"
+                    ],
+                    "title": "Sign In Method",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "sign_in_method"
+                ],
+                "title": "SignInMethodBody",
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}/password-reset": {
+      "post": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "Send a user a password reset link",
+        "description": "Mails a reset link at once and reports the outcome, unlike the public reset request. Refused (409) for a user who is not active or is `sso_only`.",
+        "operationId": "send_reset_admin_users__user_id__password_reset_post",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Sent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenResetSent"
+                }
+              }
+            },
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A link cannot be sent to this user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "a reset link cannot be sent to this user"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The mail sender refused the message.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the message could not be delivered"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No mail sender is configured.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "mail is not configured"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/roles": {
+      "get": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "List roles and permissions",
+        "description": "The roles and permissions the product registered.",
+        "operationId": "list_roles_admin_roles_get",
+        "responses": {
+          "200": {
+            "description": "The registry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRoleList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                },
+                "example": {
+                  "detail": "forbidden"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}/roles/{role}": {
+      "put": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "Assign a role",
+        "description": "Assigns `role`, optionally until `expires_at`. Assigning a role the user already holds replaces its expiry. An administrator role cannot expire.",
+        "operationId": "assign_role_admin_users__user_id__roles__role__put",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Role"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Assigned.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a defined role, or a bad expiry.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expires_at": {
+                    "anyOf": [
+                      {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "ISO 8601 with a zone offset; an administrator role cannot expire.",
+                    "title": "Expires At"
+                  }
+                },
+                "title": "RoleAssignBody",
+                "type": "object"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "Revoke a role",
+        "description": "The last active administrator keeps their administrator role, even under concurrent requests.",
+        "operationId": "revoke_role_admin_users__user_id__roles__role__delete",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Role"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The user does not hold the role.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This would leave no active administrator.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "this would leave no active administrator"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/invitations": {
+      "get": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "List pending invitations",
+        "description": "Invited users, with their current link's expiry and staged roles.",
+        "operationId": "list_invitations_admin_invitations_get",
+        "responses": {
+          "200": {
+            "description": "The invitations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenInvitationList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                },
+                "example": {
+                  "detail": "forbidden"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "Invite a user",
+        "description": "Creates the user in the `invited` status, stages the roles and mails the link in one transaction: if the mail fails, nothing is left behind.",
+        "operationId": "invite_admin_invitations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "title": "Email"
+                  },
+                  "display_name": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Display Name"
+                  },
+                  "sign_in_method": {
+                    "type": "string",
+                    "enum": [
+                      "password_and_sso",
+                      "sso_only"
+                    ],
+                    "title": "Sign In Method",
+                    "default": "password_and_sso"
+                  },
+                  "roles": {
+                    "items": {
+                      "properties": {
+                        "role": {
+                          "type": "string",
+                          "title": "Role"
+                        },
+                        "expires_at": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "title": "Expires At",
+                          "description": "ISO 8601 with a zone offset."
+                        }
+                      },
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "role"
+                      ],
+                      "title": "StagedGrantBody"
+                    },
+                    "type": "array",
+                    "title": "Roles"
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "email"
+                ],
+                "title": "InvitationCreateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Invited.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenInvitationIssued"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A user with that address exists.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "a user with that email address already exists"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The mail sender refused the message.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the invitation could not be delivered"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No mail sender is configured.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "mail is not configured"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                },
+                "example": {
+                  "detail": "forbidden"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/invitations/{user_id}/resend": {
+      "post": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "Resend an invitation",
+        "description": "Mails a new link and revokes the old one, keeping the staged roles. If the mail fails, the old link still works.",
+        "operationId": "resend_admin_invitations__user_id__resend_post",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenInvitationIssued"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The user is not invited.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the invitation is not pending"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The mail sender refused the message.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the invitation could not be delivered"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No mail sender is configured.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "mail is not configured"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/invitations/{user_id}": {
+      "delete": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "Revoke an invitation",
+        "description": "Deletes the invited user. It never removes a user who accepted concurrently: that is a 409.",
+        "operationId": "revoke_invitation_admin_invitations__user_id__delete",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The user is not invited.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the invitation is not pending"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/api-keys": {
+      "get": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "List API keys",
+        "description": "Every key, or only one user's (`user_id`, a UUID), revoked keys included. A key itself is never shown again; `hint` identifies it.",
+        "operationId": "list_keys_admin_api_keys_get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The keys.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenApiKeyList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`user_id` is not a UUID.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "Create an API key",
+        "description": "A key acts as its user, limited to `scopes`, which must be registered permissions the user holds now. It is refused once it expires or is revoked, or while its user is not active. The key is in this answer only.",
+        "operationId": "create_key_admin_api_keys_post",
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenNewApiKeyIssued"
+                }
+              }
+            },
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "user_id": {
+                    "description": "UUID of the user the key acts as.",
+                    "title": "User Id",
+                    "type": "string"
+                  },
+                  "name": {
+                    "title": "Name",
+                    "type": "string"
+                  },
+                  "scopes": {
+                    "description": "Registered permissions the user holds now.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Scopes",
+                    "type": "array"
+                  },
+                  "expires_at": {
+                    "anyOf": [
+                      {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "ISO 8601 with a zone offset; at most `identity.api_key_max_lifetime_days` ahead.",
+                    "title": "Expires At"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "name",
+                  "scopes"
+                ],
+                "title": "NewApiKeyBody",
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/api-keys/{key_id}": {
+      "delete": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "Revoke an API key",
+        "description": "A revoked key stays listed, with `revoked_at`.",
+        "operationId": "revoke_key_admin_api_keys__key_id__delete",
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such key, or already revoked.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/sso/settings": {
+      "get": {
+        "tags": [
+          "warden: single sign-on administration"
+        ],
+        "summary": "Show the single sign-on settings",
+        "description": "The effective settings (run-time overrides over the configuration), the derived callback URI to register with the provider, whether a client secret is stored (never the secret), and setup guidance for each provider preset.",
+        "operationId": "get_settings_admin_sso_settings_get",
+        "responses": {
+          "200": {
+            "description": "The effective settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSsoSettingsView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          },
+          "403": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "warden: single sign-on administration"
+        ],
+        "summary": "Change the single sign-on settings",
+        "description": "Only the fields given change; each is checked by the configuration's rules, and the 400 names the fields, never their values. Turning `enabled` off ends every session issued through single sign-on, in the same transaction.",
+        "operationId": "put_settings_admin_sso_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "enabled": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Enabled"
+                  },
+                  "issuer_url": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Issuer Url"
+                  },
+                  "client_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Client Id"
+                  },
+                  "scopes": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Scopes"
+                  },
+                  "allowed_email_domains": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Allowed Email Domains"
+                  },
+                  "provider_preset": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Provider Preset",
+                    "description": "A label for setup guidance: one of `presets[].preset`."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "title": "SsoSettingsBody",
+                "description": "Only the fields to change; each is validated by the configuration's rules."
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The effective settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSsoSettingsView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a JSON object, an unknown or invalid field, or a field missing while enabled.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the body must be a JSON object"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "invalid settings: issuer_url"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          },
+          "403": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          }
+        }
+      }
+    },
+    "/admin/sso/settings/reset": {
+      "post": {
+        "tags": [
+          "warden: single sign-on administration"
+        ],
+        "summary": "Drop the run-time overrides",
+        "description": "Back to the configuration's settings.",
+        "operationId": "reset_settings_admin_sso_settings_reset_post",
+        "responses": {
+          "200": {
+            "description": "The effective settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSsoSettingsView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          },
+          "403": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          }
+        }
+      }
+    },
+    "/admin/sso/client-secret": {
+      "put": {
+        "tags": [
+          "warden: single sign-on administration"
+        ],
+        "summary": "Store the OIDC client secret",
+        "description": "Written to konfig's secrets store under the name in `sso.client_secret`; never returned or logged.",
+        "operationId": "put_client_secret_admin_sso_client_secret_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "client_secret": {
+                    "type": "string",
+                    "title": "Client Secret",
+                    "description": "1 to 4096 printable characters; never returned."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "client_secret"
+                ],
+                "title": "SsoClientSecretBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a usable secret.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the client secret must be 1 to 4096 printable characters"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          },
+          "403": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          }
+        }
+      }
+    },
+    "/admin/sso/test": {
+      "post": {
+        "tags": [
+          "warden: single sign-on administration"
+        ],
+        "summary": "Test the single sign-on configuration",
+        "description": "Checks the settings, the client secret, discovery, the shared signing algorithms and the provider's JWKS. It signs nobody in and redeems nothing.",
+        "operationId": "test_configuration_admin_sso_test_post",
+        "responses": {
+          "200": {
+            "description": "Each check and its reason.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSsoReport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          },
+          "403": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          }
+        }
+      }
+    },
+    "/admin/sso/users/{user_id}/pin": {
+      "delete": {
+        "tags": [
+          "warden: single sign-on administration"
+        ],
+        "summary": "Remove a user's single sign-on subject pin",
+        "description": "The user's next single sign-on matches by verified email again and pins the new subject, for example after the provider re-created the account.",
+        "operationId": "unpin_admin_sso_users__user_id__pin_delete",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Unpinned.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The user has no pin.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "no such pin"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          },
+          "403": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audit/events": {
+      "get": {
+        "tags": [
+          "warden: audit"
+        ],
+        "summary": "List audit events",
+        "description": "Matching events, newest first, `limit` at a time (1 to 1000, default 100). Pass a page's `next_before_id` as `before_id` for the next one.",
+        "operationId": "list_audit_events_audit_events_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "before_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before Id"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`occurred_at` on or after, ISO 8601 with a zone offset.",
+              "title": "Since"
+            },
+            "description": "`occurred_at` on or after, ISO 8601 with a zone offset."
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`occurred_at` before, ISO 8601 with a zone offset.",
+              "title": "Until"
+            },
+            "description": "`occurred_at` before, ISO 8601 with a zone offset."
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Any of these actions; repeatable.",
+              "title": "Action"
+            },
+            "description": "Any of these actions; repeatable."
+          },
+          {
+            "name": "actor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exactly this actor.",
+              "title": "Actor"
+            },
+            "description": "Exactly this actor."
+          },
+          {
+            "name": "resource_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource Type"
+            }
+          },
+          {
+            "name": "resource_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource Id"
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "success",
+                    "failure"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Outcome"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Audit Events Audit Events Get",
+                  "$ref": "#/components/schemas/AuditEventPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          },
+          "403": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          },
+          "422": {
+            "description": "A filter is not valid: FastAPI's validation error (`detail` a list of errors), or `{\"detail\": \"invalid audit filter\"}` (for example `since` not before `until`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                },
+                "example": {
+                  "detail": "invalid audit filter"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audit/export": {
+      "get": {
+        "tags": [
+          "warden: audit"
+        ],
+        "summary": "Export audit events",
+        "description": "Every matching event, streamed in chain order from one snapshot. The export is itself recorded (`warden.audit.export`, with the filter, the caller's actor and address) before the first line. CSV cells that begin with `=`, `+`, `-`, `@`, a tab or a carriage return are prefixed with `'`; NDJSON is ASCII-escaped, one row per line, in the shape of `AuditEventView`.",
+        "operationId": "export_audit_events_audit_export_get",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "csv",
+                "ndjson"
+              ],
+              "type": "string",
+              "title": "Format"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`occurred_at` on or after, ISO 8601 with a zone offset.",
+              "title": "Since"
+            },
+            "description": "`occurred_at` on or after, ISO 8601 with a zone offset."
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`occurred_at` before, ISO 8601 with a zone offset.",
+              "title": "Until"
+            },
+            "description": "`occurred_at` before, ISO 8601 with a zone offset."
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Any of these actions; repeatable.",
+              "title": "Action"
+            },
+            "description": "Any of these actions; repeatable."
+          },
+          {
+            "name": "actor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exactly this actor.",
+              "title": "Actor"
+            },
+            "description": "Exactly this actor."
+          },
+          {
+            "name": "resource_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource Type"
+            }
+          },
+          {
+            "name": "resource_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource Id"
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "success",
+                    "failure"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Outcome"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An attachment, `audit-export.csv` or `audit-export.ndjson`.",
+            "headers": {
+              "content-disposition": {
+                "description": "`attachment`, with the file name.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          },
+          "403": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          },
+          "422": {
+            "description": "A filter is not valid: FastAPI's validation error (`detail` a list of errors), or `{\"detail\": \"invalid audit filter\"}` (for example `since` not before `until`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                },
+                "example": {
+                  "detail": "invalid audit filter"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audit/verify": {
+      "get": {
+        "tags": [
+          "warden: audit"
+        ],
+        "summary": "Verify the audit chain",
+        "description": "Verifies every row's hash and link, and every retention checkpoint's signature, from one consistent snapshot, and reports the first broken link by row id and reason, never by row contents.",
+        "operationId": "verify_audit_chain_audit_verify_get",
+        "responses": {
+          "200": {
+            "description": "The report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChainVerification",
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Verify Audit Chain Audit Verify Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          },
+          "403": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          }
+        }
+      }
+    },
+    "/audit/syslog/status": {
+      "get": {
+        "tags": [
+          "warden: syslog"
+        ],
+        "summary": "Show the syslog forwarder's status",
+        "description": "This replica's role (`leader`, `standby` or `stopped`), its connection, the stored cursor, the lag (committed rows not yet forwarded) and the last error, as a fixed category.",
+        "operationId": "syslog_status_audit_syslog_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForwarderStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          },
+          "403": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          }
+        }
+      }
+    },
+    "/audit/syslog/test": {
+      "post": {
+        "tags": [
+          "warden: syslog"
+        ],
+        "summary": "Send one syslog test message",
+        "description": "Over a fresh connection with the forwarder's settings; `error` is a fixed category, never the underlying error text. With a recorder, the send is audited as `warden.syslog.test_sent`.",
+        "operationId": "syslog_test_audit_syslog_test_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSendResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          },
+          "403": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          }
+        }
+      }
+    },
+    "/keys/jwks.json": {
+      "get": {
+        "tags": [
+          "warden: key publication"
+        ],
+        "summary": "The live signing keys",
+        "description": "The keys that sign and verify live credentials (neither retired nor revoked), to verify warden's access tokens. Unauthenticated; cacheable for five minutes, so a verifier that meets an unknown key id fetches again.",
+        "operationId": "live_keys_keys_jwks_json_get",
+        "responses": {
+          "200": {
+            "description": "The live keys.",
+            "headers": {
+              "cache-control": {
+                "description": "`public, max-age=300`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/jwk-set+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JwkSet"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/keys/jwks-historical.json": {
+      "get": {
+        "tags": [
+          "warden: key publication"
+        ],
+        "summary": "The live and retired signing keys",
+        "description": "Adds retired keys, to verify historical artefacts such as audit checkpoints and anchors. A revoked key is in neither set. Unauthenticated; cacheable for five minutes.",
+        "operationId": "historical_keys_keys_jwks_historical_json_get",
+        "responses": {
+          "200": {
+            "description": "The live and retired keys.",
+            "headers": {
+              "cache-control": {
+                "description": "`public, max-age=300`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/jwk-set+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JwkSet"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AuditEventPage": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/AuditEventView"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "next_before_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Before Id",
+            "description": "Pass as `before_id` for the next page; null on the last page."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "events",
+          "next_before_id"
+        ],
+        "title": "AuditEventPage",
+        "description": "A page of events, newest first (documentation only)."
+      },
+      "AuditEventView": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "recorded_at": {
+            "type": "string",
+            "title": "Recorded At",
+            "description": "Server time, ISO 8601 UTC; chain order follows it."
+          },
+          "occurred_at": {
+            "type": "string",
+            "title": "Occurred At",
+            "description": "When the event happened, ISO 8601 UTC."
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "success",
+              "failure"
+            ],
+            "title": "Outcome"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor"
+          },
+          "resource_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Type"
+          },
+          "resource_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Id"
+          },
+          "source_ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Ip"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          },
+          "key_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Id",
+            "description": "The signing key of a checkpoint or anchor row."
+          },
+          "prev_hash": {
+            "type": "string",
+            "title": "Prev Hash",
+            "description": "Hex SHA-256 of the previous row."
+          },
+          "row_hash": {
+            "type": "string",
+            "title": "Row Hash",
+            "description": "Hex SHA-256 of this row."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "recorded_at",
+          "occurred_at",
+          "action",
+          "outcome",
+          "actor",
+          "resource_type",
+          "resource_id",
+          "source_ip",
+          "details",
+          "key_id",
+          "prev_hash",
+          "row_hash"
+        ],
+        "title": "AuditEventView",
+        "description": "One audit row, as listed and as exported in NDJSON (documentation only)."
+      },
+      "BrokenLinkView": {
+        "properties": {
+          "row_id": {
+            "type": "integer",
+            "title": "Row Id"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "description": "A `BreakReason`."
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "row_id",
+          "reason",
+          "description"
+        ],
+        "title": "BrokenLinkView"
+      },
+      "ChainVerification": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          },
+          "first_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Id"
+          },
+          "last_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Id"
+          },
+          "head_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Hash",
+            "description": "Hex SHA-256 of the last row."
+          },
+          "checkpoints": {
+            "type": "integer",
+            "title": "Checkpoints"
+          },
+          "broken": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BrokenLinkView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The first broken link; null when intact."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok",
+          "rows",
+          "first_id",
+          "last_id",
+          "head_hash",
+          "checkpoints",
+          "broken"
+        ],
+        "title": "ChainVerification",
+        "description": "The verification report (documentation only)."
+      },
+      "ForwarderStatus": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "stopped",
+              "standby",
+              "leader"
+            ],
+            "title": "Role"
+          },
+          "connected": {
+            "type": "boolean",
+            "title": "Connected"
+          },
+          "sent": {
+            "type": "integer",
+            "title": "Sent"
+          },
+          "gaps_skipped": {
+            "type": "integer",
+            "title": "Gaps Skipped"
+          },
+          "notifications": {
+            "type": "integer",
+            "title": "Notifications"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_error_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error At"
+          },
+          "last_sent_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Sent At"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cursor"
+          },
+          "lag": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lag"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role",
+          "connected",
+          "sent",
+          "gaps_skipped",
+          "notifications",
+          "last_error",
+          "last_error_at",
+          "last_sent_at",
+          "cursor",
+          "lag"
+        ],
+        "title": "ForwarderStatus",
+        "description": "The snapshot plus the stored cursor and how many rows lie beyond it."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "JwkSet": {
+        "properties": {
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/OkpJwk"
+            },
+            "type": "array",
+            "title": "Keys"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "keys"
+        ],
+        "title": "JwkSet",
+        "description": "An RFC 7517 JWK Set (documentation only)."
+      },
+      "OkpJwk": {
+        "properties": {
+          "kty": {
+            "type": "string",
+            "title": "Kty",
+            "description": "`OKP`."
+          },
+          "crv": {
+            "type": "string",
+            "title": "Crv",
+            "description": "`Ed25519`."
+          },
+          "alg": {
+            "type": "string",
+            "title": "Alg",
+            "description": "`EdDSA`."
+          },
+          "use": {
+            "type": "string",
+            "title": "Use",
+            "description": "`sig`."
+          },
+          "kid": {
+            "type": "string",
+            "title": "Kid",
+            "description": "The key id, as in a token's or checkpoint's header."
+          },
+          "x": {
+            "type": "string",
+            "title": "X",
+            "description": "The public key, base64url without padding."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kty",
+          "crv",
+          "alg",
+          "use",
+          "kid",
+          "x"
+        ],
+        "title": "OkpJwk",
+        "description": "One published key, an RFC 8037 OKP JSON Web Key (documentation only)."
+      },
+      "TestSendResult": {
+        "properties": {
+          "delivered": {
+            "type": "boolean",
+            "title": "Delivered"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "delivered",
+          "error"
+        ],
+        "title": "TestSendResult",
+        "description": "Whether the test message reached the transport, and if not, why (a fixed category)."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "WardenApiKey": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "hint": {
+            "type": "string",
+            "title": "Hint",
+            "description": "A short, non-secret reminder of the key."
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scopes"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "user_id",
+          "name",
+          "hint",
+          "scopes",
+          "created_at",
+          "created_by",
+          "expires_at",
+          "revoked_at",
+          "last_used_at"
+        ],
+        "title": "WardenApiKey"
+      },
+      "WardenApiKeyList": {
+        "properties": {
+          "api_keys": {
+            "items": {
+              "$ref": "#/components/schemas/WardenApiKey"
+            },
+            "type": "array",
+            "title": "Api Keys"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "api_keys"
+        ],
+        "title": "WardenApiKeyList"
+      },
+      "WardenChallengeIssued": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "mfa_required",
+              "mfa_enrolment_required"
+            ],
+            "title": "Status"
+          },
+          "challenge": {
+            "type": "string",
+            "title": "Challenge",
+            "description": "Opaque; pass it to the next step."
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In",
+            "description": "Seconds until the challenge expires."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "challenge",
+          "expires_in"
+        ],
+        "title": "WardenChallengeIssued",
+        "description": "The password was right; a second factor, or TOTP enrolment, comes next."
+      },
+      "WardenDetail": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "WardenDetail",
+        "description": "A fixed message; never an echo of the request."
+      },
+      "WardenEnrolmentConfirmed": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/WardenRecoveryCodes"
+          },
+          {
+            "$ref": "#/components/schemas/WardenSignedInAfterEnrolment"
+          }
+        ],
+        "title": "WardenEnrolmentConfirmed",
+        "description": "The recovery codes; under a challenge, with the new session as well."
+      },
+      "WardenForbidden": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "const": "forbidden",
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "WardenForbidden",
+        "description": "A signed-in caller without the permission the route needs."
+      },
+      "WardenInvitationAccepted": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "accepted",
+            "title": "Status"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "email"
+        ],
+        "title": "WardenInvitationAccepted"
+      },
+      "WardenInvitationIssued": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/WardenStagedGrant"
+            },
+            "type": "array",
+            "title": "Roles"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_id",
+          "email",
+          "expires_at",
+          "roles"
+        ],
+        "title": "WardenInvitationIssued"
+      },
+      "WardenInvitationList": {
+        "properties": {
+          "invitations": {
+            "items": {
+              "$ref": "#/components/schemas/WardenPendingInvitation"
+            },
+            "type": "array",
+            "title": "Invitations"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "invitations"
+        ],
+        "title": "WardenInvitationList"
+      },
+      "WardenNewApiKeyIssued": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key",
+            "description": "The key itself: shown once, never again."
+          },
+          "api_key": {
+            "$ref": "#/components/schemas/WardenApiKey"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "api_key"
+        ],
+        "title": "WardenNewApiKeyIssued"
+      },
+      "WardenPendingInvitation": {
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/WardenUser"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At",
+            "description": "When the current link expires."
+          },
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/WardenStagedGrant"
+            },
+            "type": "array",
+            "title": "Roles"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user",
+          "expires_at",
+          "roles"
+        ],
+        "title": "WardenPendingInvitation"
+      },
+      "WardenPresetGuide": {
+        "properties": {
+          "preset": {
+            "type": "string",
+            "title": "Preset"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "issuer_hint": {
+            "type": "string",
+            "title": "Issuer Hint"
+          },
+          "notes": {
+            "type": "string",
+            "title": "Notes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "preset",
+          "label",
+          "issuer_hint",
+          "notes"
+        ],
+        "title": "WardenPresetGuide"
+      },
+      "WardenRecoveryCodes": {
+        "properties": {
+          "recovery_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Recovery Codes",
+            "description": "Each usable once; shown only now."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "recovery_codes"
+        ],
+        "title": "WardenRecoveryCodes"
+      },
+      "WardenRefusal": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "const": "authentication failed",
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "WardenRefusal",
+        "description": "The uniform refusal: the same bytes for every authentication failure."
+      },
+      "WardenResetRequested": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "requested",
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "WardenResetRequested"
+      },
+      "WardenResetSent": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "sent",
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "WardenResetSent"
+      },
+      "WardenRole": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Permissions"
+          },
+          "administrator": {
+            "type": "boolean",
+            "title": "Administrator"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "permissions",
+          "administrator"
+        ],
+        "title": "WardenRole"
+      },
+      "WardenRoleAssignment": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "granted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Granted At"
+          },
+          "granted_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Granted By"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "role",
+          "granted_at",
+          "granted_by",
+          "expires_at"
+        ],
+        "title": "WardenRoleAssignment"
+      },
+      "WardenRoleList": {
+        "properties": {
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/WardenRole"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "permissions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Permissions",
+            "description": "Every registered permission: its name to its description."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "roles",
+          "permissions"
+        ],
+        "title": "WardenRoleList"
+      },
+      "WardenSignInAnswer": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/WardenSignedIn"
+          },
+          {
+            "$ref": "#/components/schemas/WardenChallengeIssued"
+          }
+        ],
+        "title": "WardenSignInAnswer",
+        "description": "What ``POST /sign-in`` answers: a session, or a challenge for the next step."
+      },
+      "WardenSignedIn": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "signed_in",
+            "title": "Status"
+          },
+          "access_token": {
+            "type": "string",
+            "title": "Access Token",
+            "description": "EdDSA-signed access token; send as `Bearer`."
+          },
+          "token_type": {
+            "type": "string",
+            "const": "Bearer",
+            "title": "Token Type"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In",
+            "description": "Seconds until the access token expires."
+          },
+          "refresh_token": {
+            "type": "string",
+            "title": "Refresh Token",
+            "description": "Single-use; replaced on every refresh."
+          },
+          "refresh_expires_in": {
+            "type": "integer",
+            "title": "Refresh Expires In",
+            "description": "Seconds until the refresh token expires."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "access_token",
+          "token_type",
+          "expires_in",
+          "refresh_token",
+          "refresh_expires_in"
+        ],
+        "title": "WardenSignedIn",
+        "description": "A new session. Every route that issues one answers with this body."
+      },
+      "WardenSignedInAfterEnrolment": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "signed_in",
+            "title": "Status"
+          },
+          "access_token": {
+            "type": "string",
+            "title": "Access Token",
+            "description": "EdDSA-signed access token; send as `Bearer`."
+          },
+          "token_type": {
+            "type": "string",
+            "const": "Bearer",
+            "title": "Token Type"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In",
+            "description": "Seconds until the access token expires."
+          },
+          "refresh_token": {
+            "type": "string",
+            "title": "Refresh Token",
+            "description": "Single-use; replaced on every refresh."
+          },
+          "refresh_expires_in": {
+            "type": "integer",
+            "title": "Refresh Expires In",
+            "description": "Seconds until the refresh token expires."
+          },
+          "recovery_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Recovery Codes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "access_token",
+          "token_type",
+          "expires_in",
+          "refresh_token",
+          "refresh_expires_in",
+          "recovery_codes"
+        ],
+        "title": "WardenSignedInAfterEnrolment",
+        "description": "A new session after a forced enrolment, with the recovery codes, shown once."
+      },
+      "WardenSsoCheck": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "ok",
+          "reason"
+        ],
+        "title": "WardenSsoCheck"
+      },
+      "WardenSsoReport": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/WardenSsoCheck"
+            },
+            "type": "array",
+            "title": "Checks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok",
+          "checks"
+        ],
+        "title": "WardenSsoReport"
+      },
+      "WardenSsoSettingsView": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "issuer_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issuer Url"
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scopes"
+          },
+          "allowed_email_domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Email Domains"
+          },
+          "provider_preset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Preset"
+          },
+          "callback_url": {
+            "type": "string",
+            "title": "Callback Url",
+            "description": "The redirect URI to register with the provider."
+          },
+          "client_secret_set": {
+            "type": "boolean",
+            "title": "Client Secret Set"
+          },
+          "presets": {
+            "items": {
+              "$ref": "#/components/schemas/WardenPresetGuide"
+            },
+            "type": "array",
+            "title": "Presets",
+            "description": "Setup guidance; labels only."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled",
+          "issuer_url",
+          "client_id",
+          "scopes",
+          "allowed_email_domains",
+          "provider_preset",
+          "callback_url",
+          "client_secret_set",
+          "presets"
+        ],
+        "title": "WardenSsoSettingsView"
+      },
+      "WardenStagedGrant": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "role",
+          "expires_at"
+        ],
+        "title": "WardenStagedGrant"
+      },
+      "WardenTotpEnrolment": {
+        "properties": {
+          "secret": {
+            "type": "string",
+            "title": "Secret",
+            "description": "The TOTP secret, base32."
+          },
+          "uri": {
+            "type": "string",
+            "title": "Uri",
+            "description": "An `otpauth://totp/` URI for an authenticator app."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "secret",
+          "uri"
+        ],
+        "title": "WardenTotpEnrolment"
+      },
+      "WardenUser": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "UUID."
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "invited",
+              "active",
+              "suspended",
+              "deactivated"
+            ],
+            "title": "Status"
+          },
+          "sign_in_method": {
+            "type": "string",
+            "enum": [
+              "password_and_sso",
+              "sso_only"
+            ],
+            "title": "Sign In Method"
+          },
+          "has_password": {
+            "type": "boolean",
+            "title": "Has Password"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "display_name",
+          "status",
+          "sign_in_method",
+          "has_password",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "WardenUser"
+      },
+      "WardenUserDetail": {
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/WardenUser"
+          },
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/WardenRoleAssignment"
+            },
+            "type": "array",
+            "title": "Roles"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user",
+          "roles"
+        ],
+        "title": "WardenUserDetail"
+      },
+      "WardenUserEnvelope": {
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/WardenUser"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user"
+        ],
+        "title": "WardenUserEnvelope"
+      },
+      "WardenUserList": {
+        "properties": {
+          "users": {
+            "items": {
+              "$ref": "#/components/schemas/WardenUser"
+            },
+            "type": "array",
+            "title": "Users",
+            "description": "Every matching user, oldest first."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "users"
+        ],
+        "title": "WardenUserList"
+      }
+    }
+  }
+}

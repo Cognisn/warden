@@ -40,6 +40,14 @@ from fastapi.responses import Response
 
 from warden.identity.errors import AuthenticationRefused
 from warden.identity.http import NO_STORE, SourceIp, client_ip, json_response, read_object, refusal
+from warden.identity.routers.contract import (
+    REFUSED,
+    HandoffBody,
+    SsoInvitationBody,
+    WardenSignedIn,
+    json_body,
+    no_store,
+)
 
 # The same token body as password sign-in, so a client handles both alike.
 from warden.identity.routers.tokens import token_body
@@ -93,6 +101,54 @@ async def _body_field(request: Request, name: str) -> str:
     return values[0] if len(values) == 1 else ""
 
 
+_STRING = {"type": "string"}
+_LOCATION = {"description": "Where the browser goes next.", "schema": _STRING}
+_SET_COOKIE = {
+    "description": (
+        f"`{COOKIE_NAME}`, the login binding: HttpOnly, Secure, SameSite=Lax, path "
+        "`<auth prefix>/sso`, for `sso.login_transaction_ttl_seconds`."
+    ),
+    "schema": _STRING,
+}
+_REFERRER = {"description": "`no-referrer`.", "schema": _STRING}
+_TO_PROVIDER = {
+    "location": {"description": "The provider's authorisation endpoint.", "schema": _STRING},
+    "set-cookie": _SET_COOKIE,
+    "referrer-policy": _REFERRER,
+    **no_store(),
+}
+_LANDING = {"location": _LOCATION, "referrer-policy": _REFERRER, **no_store()}
+_NO_LANDING = {
+    "description": (
+        "A failure while `http.sso_completion_link` is not configured: the fixed failure "
+        "message as plain text."
+    ),
+    "content": {"text/plain": {"schema": _STRING, "example": SSO_FAILURE_MESSAGE}},
+}
+_FAILURE = (
+    " Every failure lands the browser on `http.sso_completion_link` with `?error=sso_failed` "
+    "and nothing else, clearing the cookie; show `SSO_FAILURE_MESSAGE`. The reason is "
+    "recorded only in the audit trail (`warden.identity.sso.sign_in`)."
+)
+_COOKIE_PARAMETER = {
+    "name": COOKIE_NAME,
+    "in": "cookie",
+    "required": True,
+    "description": "The login binding set by `/sso/start`; the browser sends it.",
+    "schema": _STRING,
+}
+
+
+def _query(name: str, description: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "in": "query",
+        "required": False,
+        "description": description,
+        "schema": _STRING,
+    }
+
+
 def build_sso_router(identity: Identity) -> APIRouter:
     router = APIRouter(tags=["warden: single sign-on"])
     config = identity.config
@@ -144,7 +200,24 @@ def build_sso_router(identity: Identity) -> APIRouter:
         set_cookie(response, COOKIE_NAME, begun.binding, begun.max_age)
         return response
 
-    @router.get("/sso/start")
+    @router.get(
+        "/sso/start",
+        status_code=302,
+        response_class=Response,
+        summary="Begin single sign-on",
+        description=(
+            "A top-level browser navigation. Stores a login transaction (PKCE S256, state and "
+            "nonce), sets the login binding cookie and redirects to the identity provider."
+            + _FAILURE
+        ),
+        responses={
+            302: {
+                "description": "To the provider; on failure, to the completion link.",
+                "headers": _TO_PROVIDER,
+            },
+            400: _NO_LANDING,
+        },
+    )
     async def start(request: Request) -> Response:
         try:
             begun = await identity.sso.begin(source_ip=source(request))
@@ -152,7 +225,32 @@ def build_sso_router(identity: Identity) -> APIRouter:
             return failed()
         return to_provider(begun, 302)
 
-    @router.post("/sso/start")
+    @router.post(
+        "/sso/start",
+        status_code=303,
+        response_class=Response,
+        summary="Accept an invitation through single sign-on",
+        description=(
+            "The product's accept-invitation screen submits the link's token as `invitation`, "
+            "a urlencoded form (a top-level form submission) or a JSON object, chosen by "
+            "`Content-Type`, so the token appears in no URL. The token is sealed into the "
+            "login transaction to this browser's binding. At the callback the verified "
+            "identity accepts the invitation (it must be the invited address), and the browser "
+            "lands like any sign-in. Any other content type, or a missing, repeated or "
+            "malformed `invitation`, is a failure." + _FAILURE
+        ),
+        responses={
+            303: {
+                "description": (
+                    "To the provider (the browser follows with GET); on failure, a 302 to "
+                    "the completion link."
+                ),
+                "headers": _TO_PROVIDER,
+            },
+            400: _NO_LANDING,
+        },
+        openapi_extra=json_body(SsoInvitationBody, also=("application/x-www-form-urlencoded",)),
+    )
     async def start_with_invitation(request: Request) -> Response:
         token = await _body_field(request, "invitation")
         try:
@@ -162,7 +260,36 @@ def build_sso_router(identity: Identity) -> APIRouter:
         # 303: the browser follows a post to the provider with a GET.
         return to_provider(begun, 303)
 
-    @router.get("/sso/callback")
+    @router.get(
+        "/sso/callback",
+        status_code=302,
+        response_class=Response,
+        summary="The identity provider's redirect back",
+        description=(
+            "The redirect URI registered with the provider: `http.public_base_url` + "
+            "`http.auth_prefix` + `/sso/callback`. Uses the login transaction up, redeems the "
+            "code with the PKCE verifier, validates the id_token and matches a pre-provisioned "
+            "active user, then lands the browser on `http.sso_completion_link` with only a "
+            "one-time handoff code (`?code=`)." + _FAILURE
+        ),
+        responses={
+            302: {
+                "description": (
+                    "To the completion link: `?code=` on success, `?error=sso_failed` on failure."
+                ),
+                "headers": _LANDING,
+            },
+            400: _NO_LANDING,
+        },
+        openapi_extra={
+            "parameters": [
+                _query("state", "From the provider."),
+                _query("code", "From the provider."),
+                _query("error", "From the provider, when it refused."),
+                {**_COOKIE_PARAMETER, "required": False},
+            ]
+        },
+    )
     async def callback(request: Request) -> Response:
         params = request.query_params
         try:
@@ -178,7 +305,18 @@ def build_sso_router(identity: Identity) -> APIRouter:
             return failed()
         return land(code=code)
 
-    @router.post("/sso/handoff")
+    @router.post(
+        "/sso/handoff",
+        summary="Exchange the handoff code for a session",
+        description=(
+            "The product's completion screen posts the `code` from its URL, from the same "
+            "browser, so the login binding cookie goes with it. The code is single-use and "
+            "expires after `sso.handoff_code_ttl_seconds`. The answer is the same body as "
+            "password sign-in, and clears the cookie."
+        ),
+        responses={200: {"model": WardenSignedIn, "description": "Signed in."}, **REFUSED},
+        openapi_extra={**json_body(HandoffBody), "parameters": [_COOKIE_PARAMETER]},
+    )
     async def handoff(request: Request) -> Response:
         body = await read_object(request) or {}
         try:
