@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from examples.console import product
@@ -187,6 +187,11 @@ def _mount_pages(app: FastAPI) -> None:
     async def page() -> FileResponse:
         return FileResponse(index, media_type="text/html", headers={"cache-control": "no-store"})
 
+    async def no_icon() -> Response:
+        # The console has no icon; answer browsers' automatic request quietly.
+        return Response(status_code=204)
+
     for path in PAGES:
         app.add_api_route(path, page, methods=["GET"], include_in_schema=False)
+    app.add_api_route("/favicon.ico", no_icon, methods=["GET"], include_in_schema=False)
     app.mount("/static", StaticFiles(directory=STATIC), name="static")

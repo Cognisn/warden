@@ -125,6 +125,9 @@ async def test_every_page_and_asset_is_served_with_the_policy(client: httpx.Asyn
         assert answer.status_code == 200, page
         assert answer.headers["content-type"].startswith("text/html")
         assert_strict_csp(answer)
+    icon = await client.get("/favicon.ico")
+    assert icon.status_code == 204
+    assert_strict_csp(icon)
 
 
 async def test_warden_and_product_answers_carry_the_policy_too(client: httpx.AsyncClient) -> None:

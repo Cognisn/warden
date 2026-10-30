@@ -72,15 +72,15 @@ For break-glass sign-in, stop the provider (`docker compose ... stop idp`) and s
 
 ## Gaps
 
-These are things the console needed that warden's public surface does not provide. Each is recorded as a question for warden's maintainers, and the screen that needs it says so. The sample works around none of them; where it builds its own route, it does so only from public names, as any product would have to.
+These are things the console needed that warden's public surface does not provide. Each is recorded as a numbered question in warden 0.1.0's release tracking, and the screen that needs it says so. The sample works around none of them; where it builds its own route, it does so only from public names, as any product would have to.
 
-- No way to reset a user's TOTP enrolment or to issue new recovery codes.
-- No HTTP route for the session policy: the sample's own `/api/policy` uses `Identity.policy`.
-- No HTTP route to anchor the audit chain head or to check exported anchors: the sample's own `/api/audit/anchor` and `/api/audit/anchors/verify` use `warden.audit.anchor` and `verify_anchors`.
-- Syslog settings come only from start-up configuration; nothing changes them at run time.
-- No setting for the identity provider's CA: the sample sets `SSL_CERT_FILE` for its own process (httpx reads it) so warden trusts the stub provider.
-- No "who am I" route: the sample's own `/api/me` answers it from `require_user`.
-- warden's CLI cannot create the first administrator, since the roles are the product's: the sample has its own `create-admin` command.
+- No way to reset a user's TOTP enrolment or to issue new recovery codes (question 6).
+- No HTTP route for the session policy: the sample's own `/api/policy` uses `Identity.policy` (question 7).
+- No HTTP route to anchor the audit chain head or to check exported anchors: the sample's own `/api/audit/anchor` and `/api/audit/anchors/verify` use `warden.audit.anchor` and `verify_anchors` (question 8).
+- Syslog settings come only from start-up configuration; nothing changes them at run time (question 9).
+- No setting for the identity provider's CA: the sample sets `SSL_CERT_FILE` for its own process (httpx reads it) so warden trusts the stub provider (question 10).
+- No "who am I" route: the sample's own `/api/me` answers it from `require_user` (question 11).
+- warden's CLI cannot create the first administrator, since the roles are the product's: the sample has its own `create-admin` command (question 11).
 
 ## Tests
 
