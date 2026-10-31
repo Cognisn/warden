@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b5] - 2026-10-31
+
+Fifth beta: the release pipeline (trusted publishing to PyPI from a tag), distribution checks and metadata, and an sdist fix. warden's behaviour is unchanged.
+
 ### Added
 
 - `tests/packaging` builds the sdist and the wheel from it, and fails if the wheel holds anything but the `warden` package and its metadata (with `py.typed`, `LICENSE` and `NOTICE`) or if the sdist holds an `examples` directory anywhere. The checks live in `.github/scripts/check_dist.py`, which CI and the release workflow run too, and each check is shown a distribution with the defect it exists to catch.
