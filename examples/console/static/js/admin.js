@@ -75,6 +75,13 @@ export async function usersScreen(main) {
           async (values) => after(await call("POST", `${admin}/users/${id}/sign-in-method`, { body: values }), "method set"),
         ),
         h("p", {}, action("Send a password reset link", async () => outcome(await call("POST", `${admin}/users/${id}/password-reset`), "sent; see the outbox"), out, "quiet")),
+        h(
+          "p",
+          {},
+          action("Reset TOTP", async () => outcome(await call("DELETE", `${admin}/users/${id}/totp`), "TOTP reset; the user enrols again at their next sign-in"), out, "danger"),
+          " ",
+          h("span", { class: "muted" }, "For a user who has lost their authenticator and their recovery codes: removes both and ends the user's sessions."),
+        ),
         h("h4", {}, "Roles"),
         roles.length === 0
           ? status("info", "No roles.")
@@ -143,7 +150,6 @@ export async function usersScreen(main) {
     card("Users", filterForm, listArea),
     detail,
     card("Roles the product defines", table(["Role", "Permissions", "Administrator"], registry.roles.map((r) => h("tr", {}, h("td", {}, r.name), h("td", {}, r.permissions.join(", ")), h("td", {}, r.administrator ? "yes" : ""))))),
-    gap("mfaReset"),
   );
   listArea.replaceChildren(await load());
 }

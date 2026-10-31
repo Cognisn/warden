@@ -64,6 +64,10 @@ Use `localhost` rather than `127.0.0.1` in the browser: the public base URL is `
 
 The example configuration requires MFA, so the first sign-in asks the administrator to set up an authenticator. The console shows the `otpauth://` URI and the secret as text; it draws no QR code.
 
+### Resetting an authenticator
+
+An administrator who opens a user under Users can reset their TOTP enrolment (warden's `DELETE <admin>/users/{user_id}/totp`): it removes the enrolment and every recovery code and ends the user's sessions, so their next sign-in enrols again. Recovery codes cannot yet be replaced by the user; that is planned for warden 0.2.0.
+
 ### Single sign-on
 
 Single sign-on starts disabled. To try it, sign in as the administrator, open **Single sign-on**, tick **Enabled** and save (the issuer and client id come from the configuration; the stub provider accepts any client secret, and `init` stored one). **Test the configuration** runs discovery and fetches the provider's keys. Then pre-provision a user (for example an invitation with sign-in method `sso_only`), and sign in through the stub provider's login page, entering the user's email address as the username and claims such as `{"email": "carol@example.org", "email_verified": true}`.
@@ -74,7 +78,6 @@ For break-glass sign-in, stop the provider (`docker compose ... stop idp`) and s
 
 These are things the console needed that warden's public surface does not provide. Each is recorded as a numbered question in warden 0.1.0's release tracking, and the screen that needs it says so. The sample works around none of them; where it builds its own route, it does so only from public names, as any product would have to.
 
-- No way to reset a user's TOTP enrolment or to issue new recovery codes (question 6).
 - No HTTP route for the session policy: the sample's own `/api/policy` uses `Identity.policy` (question 7).
 - No HTTP route to anchor the audit chain head or to check exported anchors: the sample's own `/api/audit/anchor` and `/api/audit/anchors/verify` use `warden.audit.anchor` and `verify_anchors` (question 8).
 - Syslog settings come only from start-up configuration; nothing changes them at run time (question 9).

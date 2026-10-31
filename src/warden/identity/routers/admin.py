@@ -14,6 +14,7 @@ and every error is a fixed message.
 | ``POST /users/{id}/status`` | ``status`` | ``{"user"}`` |
 | ``POST /users/{id}/sign-in-method`` | ``sign_in_method`` | ``{"user"}`` |
 | ``POST /users/{id}/password-reset`` | | 202 |
+| ``DELETE /users/{id}/totp`` | | 204 |
 | ``GET /roles`` | | ``{"roles", "permissions"}`` |
 | ``PUT /users/{id}/roles/{role}`` | ``expires_at`` (optional) | 204 |
 | ``DELETE /users/{id}/roles/{role}`` | | 204 |
@@ -403,6 +404,37 @@ def build_admin_router(
         if reason is not None:
             return _detail("a reset link cannot be sent to this user", 409)
         return json_response({"status": "sent"}, 202)
+
+    @router.delete(
+        "/users/{user_id}/totp",
+        status_code=204,
+        summary="Reset a user's TOTP enrolment",
+        description=(
+            "For a user who has lost their authenticator and their recovery codes. In one "
+            "transaction it removes the TOTP enrolment (confirmed or not) and every recovery "
+            "code, ends every session of the user, and records `warden.identity.mfa.reset`. "
+            "The user's next password sign-in answers `mfa_enrolment_required` where the "
+            "session policy requires a second factor, and they enrol again. A user with "
+            "nothing enrolled is a 204 too, still audited."
+        ),
+        responses={
+            204: {"description": "Reset.", "headers": no_store()},
+            404: detail("No such user.", "not found"),
+            **REFUSED,
+            **FORBIDDEN,
+        },
+    )
+    async def reset_totp(
+        user_id: str, request: Request, principal: Annotated[Principal, Depends(users_admin)]
+    ) -> Response:
+        uid = _id(user_id)
+        if uid is None:
+            return _not_found()
+        try:
+            await identity.reset_totp(uid, actor=str(principal.user_id), source_ip=source(request))
+        except UserError:
+            return _not_found()
+        return _no_content()
 
     # Roles
 

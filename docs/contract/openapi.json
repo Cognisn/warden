@@ -2090,6 +2090,123 @@
         }
       }
     },
+    "/admin/users/{user_id}/totp": {
+      "delete": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "Reset a user's TOTP enrolment",
+        "description": "For a user who has lost their authenticator and their recovery codes. In one transaction it removes the TOTP enrolment (confirmed or not) and every recovery code, ends every session of the user, and records `warden.identity.mfa.reset`. The user's next password sign-in answers `mfa_enrolment_required` where the session policy requires a second factor, and they enrol again. A user with nothing enrolled is a 204 too, still audited.",
+        "operationId": "reset_totp_admin_users__user_id__totp_delete",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Reset.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/roles": {
       "get": {
         "tags": [

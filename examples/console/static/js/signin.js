@@ -2,7 +2,6 @@
 
 import { adopt, call, me, prefixes, refresh, sessionTimes, signOut, signedIn } from "./api.js";
 import { action, card, field, form, h, input, json, outcome, status } from "./dom.js";
-import { gap } from "./gaps.js";
 
 // What warden returns when single sign-on fails in the browser leg; the
 // reason is only in the audit trail (warden.identity.SSO_FAILURE_MESSAGE).
@@ -195,7 +194,7 @@ export async function accountScreen(main) {
       action("Set up an authenticator", async () => enrolStep({}, enrolArea), enrolNote, "quiet"),
       enrolNote,
       enrolArea,
-      gap("mfaReset"),
+      h("p", { class: "muted" }, "Lost your authenticator and your recovery codes? An administrator can reset your enrolment (Users, Manage, Reset TOTP), and you enrol again at your next sign-in. Replacing your own recovery codes is planned for warden 0.2.0."),
     ),
     card("Change password", passwordForm),
   );

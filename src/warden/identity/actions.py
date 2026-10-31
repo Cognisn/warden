@@ -14,6 +14,7 @@ IDENTITY_ACTIONS: tuple[tuple[str, Severity, str], ...] = (
     ("warden.identity.mfa.verify", Severity.WARNING, "second factor from {actor}: {outcome}"),
     ("warden.identity.mfa.enrolment_started", Severity.INFO, "{actor} started TOTP enrolment"),
     ("warden.identity.mfa.enrolled", Severity.NOTICE, "{resource_id} enrolled TOTP"),
+    ("warden.identity.mfa.reset", Severity.NOTICE, "{actor} reset TOTP of user {resource_id}"),
     ("warden.identity.session.refresh", Severity.INFO, "session refresh: {outcome}"),
     (
         "warden.identity.session.reuse_detected",
