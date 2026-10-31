@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b4] - 2026-10-31
+
+Fourth beta: an administrator's TOTP reset, a fix for users locked out of password sign-in, with the client-behaviour guide's notes on what a product builds itself in 0.1.0.
+
 ### Added
 
 - An administrator's TOTP reset, for a user who has lost both their authenticator and their recovery codes and was otherwise locked out of password sign-in for good. `Identity.reset_totp(user_id, actor=..., source_ip=...)` and the route `DELETE <admin>/users/{user_id}/totp` on the administration router, behind its users permission, answer 204 with no body, or 404 for no such user. In one transaction the reset removes the user's TOTP credential (confirmed or not) and every recovery code, ends every session of the user as a password reset does, and records one `warden.identity.mfa.reset` event (a new audit action) with the administrator as actor, the user as resource and only counts in its details (`totp_removed`, `recovery_codes_removed`, `sessions_ended`). The user's next password sign-in then answers `mfa_enrolment_required` where the session policy requires a second factor, and they enrol again. A reset of a user with nothing enrolled is a 204 too, still audited. The HTTP contract (`docs/contract/openapi.json`) and the client-behaviour guide describe the route. This is the only change in warden's behaviour.
