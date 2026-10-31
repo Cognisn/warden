@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b6] - 2026-10-31
+
+Sixth beta: the README ready to be the PyPI project description. warden's behaviour is unchanged.
+
 ### Changed
 
 - `README.md`, which is the PyPI project description, is ready for publication: it gives the beta status, the real requirements with the note that psycopg needs libpq (`psycopg[binary]` or a system libpq), an installation line (with `--pre` for a pre-release), and pointers to the client-behaviour guide and the HTTP contract. Every link is an absolute link to the repository's `main` branch, so none breaks on pypi.org; links to files that reach `main` only with 0.1.0 resolve from then. `tests/test_readme.py` fails on a relative link or image, or on the pre-release wording.
