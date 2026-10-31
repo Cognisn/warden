@@ -42,7 +42,7 @@ from warden.identity.single_use import SingleUseTokens
 from warden.identity.sso.service import SingleSignOn
 from warden.identity.throttle import SignInThrottle
 from warden.identity.tokens import NewSession, Sessions, TokenPair
-from warden.identity.users import SignInMethod, Users, UserStatus, is_email
+from warden.identity.users import SignInMethod, UserError, Users, UserStatus, is_email
 from warden.keys import KeyStore
 
 __all__ = ["ChallengeIssued", "Identity", "SignInResult"]
@@ -517,6 +517,47 @@ class Identity:
             )
         await self._notify_enrolled(new.user_id)
         return codes, await self.sessions.finish(new)
+
+    async def reset_totp(
+        self, user_id: uuid.UUID, *, actor: str, source_ip: SourceIp = None
+    ) -> bool:
+        """Remove a user's TOTP enrolment and recovery codes, and end their sessions.
+
+        For an administrator helping a user who has lost both factors: the
+        next password sign-in enrols again where the policy requires a second
+        factor. One transaction deletes the credential and every recovery
+        code, ends every session of the user (as a password reset does) and
+        records ``warden.identity.mfa.reset``. A user with nothing enrolled is
+        not an error; the reset is still audited. Returns whether a credential
+        was removed, and raises ``UserError`` if there is no such user.
+        """
+        async with self.db.transaction() as tx:
+            # KEY SHARE, not UPDATE: an enrolment's recovery codes and a new
+            # session take that lock on the user too, through their foreign keys.
+            cur = await tx.execute(
+                sql.SQL("SELECT 1 FROM {} WHERE id = %s FOR KEY SHARE").format(_USERS), (user_id,)
+            )
+            if await cur.fetchone() is None:
+                raise UserError(f"user {user_id} does not exist")
+            removed, codes = await self.mfa.remove(tx, user_id)
+            ended = await self.sessions.revoke_all(user_id, reason="totp_reset", conn=tx)
+            await record_audit(
+                AuditEvent(
+                    action="warden.identity.mfa.reset",
+                    outcome="success",
+                    actor=actor,
+                    resource_type="user",
+                    resource_id=str(user_id),
+                    source_ip=source_ip,
+                    details={
+                        "totp_removed": removed,
+                        "recovery_codes_removed": codes,
+                        "sessions_ended": ended,
+                    },
+                ),
+                conn=tx,
+            )
+        return removed
 
     async def _enrolling_user(
         self, challenge: object, principal: Principal | None, source_ip: SourceIp

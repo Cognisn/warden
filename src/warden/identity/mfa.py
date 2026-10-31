@@ -248,6 +248,23 @@ class Mfa:
             )
         return codes
 
+    async def remove(self, conn: AsyncConnection[Any], user_id: uuid.UUID) -> tuple[bool, int]:
+        """Delete the user's TOTP credential, then every recovery code.
+
+        Returns whether a credential was removed and how many codes. The
+        credential goes first: its row lock makes a concurrent confirmation
+        either finish before this (its codes are then deleted too) or find no
+        credential to confirm.
+        """
+        cur = await conn.execute(
+            sql.SQL("DELETE FROM {} WHERE user_id = %s").format(_TOTP), (user_id,)
+        )
+        removed = cur.rowcount == 1
+        cur = await conn.execute(
+            sql.SQL("DELETE FROM {} WHERE user_id = %s").format(_CODES), (user_id,)
+        )
+        return removed, cur.rowcount
+
     # Single-use claims (call inside the transaction that issues the session)
 
     async def claim_totp(

@@ -22,6 +22,7 @@ ROUTES = [
     ("POST", "/admin/users/{user}/status"),
     ("POST", "/admin/users/{user}/sign-in-method"),
     ("POST", "/admin/users/{user}/password-reset"),
+    ("DELETE", "/admin/users/{user}/totp"),
     ("GET", "/admin/roles"),
     ("PUT", "/admin/users/{user}/roles/viewer"),
     ("DELETE", "/admin/users/{user}/roles/viewer"),
