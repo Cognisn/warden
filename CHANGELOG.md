@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `tests/packaging` builds the sdist and the wheel from it, and fails if the wheel holds anything but the `warden` package and its metadata (with `py.typed`, `LICENSE` and `NOTICE`) or if the sdist holds an `examples` directory anywhere. The checks live in `.github/scripts/check_dist.py`, which CI and the release workflow run too, and each check is shown a distribution with the defect it exists to catch.
+- CI runs two more jobs: `build` builds both distributions, runs `twine check --strict` and the distribution checks, installs the wheel into a clean environment and imports every public module from it; `examples` runs `mypy --strict` on the sample console.
+- Distribution metadata: keywords, the project's source, documentation and security policy links, and the session and logging topic classifiers. The development status classifier is now Beta.
+- The `dev` extra gains the build tools: `build` (MIT), `hatchling` (MIT) and `twine` (Apache-2.0). warden's runtime dependencies are unchanged.
+- The release workflow, `.github/workflows/release.yml`. A version tag (`v0.1.0rc1`) builds the sdist and wheel, refuses a tag that does not name the package's version, runs `twine check --strict` and the distribution checks, installs the wheel into clean environments on Python 3.12 and 3.13 and imports every public module, then publishes to PyPI with trusted publishing from the protected `pypi` environment once a maintainer approves. A manual run publishes to TestPyPI from the `testpypi` environment. A push to any branch runs the same build and checks as a dry run and publishes nothing. No API token is used anywhere, and every action is pinned to a commit SHA.
+- `docs/releasing.md`: how a version is stamped, tagged, approved, checked on PyPI and, for a final release, squash-merged to `main`, with what to do when something goes wrong and the one-time repository set-up.
+
+### Changed
+
+- `SECURITY.md` is ready for publication: it states what the policy covers (the published package, not the sample console), which versions receive security fixes, and how a fixed vulnerability is disclosed.
+
+### Fixed
+
+- The sdist no longer ships part of the sample console. Its include patterns were unanchored, so `README.md` also matched `examples/console/README.md`, and `tests` brought in `tests/examples`, whose tests cannot run without the sample. The patterns are now anchored to the project root and `tests/examples` is excluded. The wheel was not affected.
+
 ## [0.1.0b3] - 2026-10-30
 
 Third beta: the sample console under `examples/console`. warden's behaviour is unchanged.

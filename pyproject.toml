@@ -11,8 +11,19 @@ requires-python = ">=3.12"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Cognisn Pty Ltd" }]
+keywords = [
+    "authentication",
+    "audit",
+    "audit-trail",
+    "fastapi",
+    "identity",
+    "oidc",
+    "single-sign-on",
+    "syslog",
+    "totp",
+]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 4 - Beta",
     "Framework :: FastAPI",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
@@ -20,7 +31,9 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP :: Session",
     "Topic :: Security",
+    "Topic :: System :: Logging",
     "Typing :: Typed",
 ]
 # Runtime dependencies are limited to the agreed set in the development plan.
@@ -48,6 +61,10 @@ dev = [
     "mypy>=1.11",
     "ruff>=0.6",
     "packaging>=24",
+    # Building and checking the distributions (tests/packaging, CI, release).
+    "build>=1.2",
+    "hatchling>=1.25",
+    "twine>=6.1",
 ]
 # The sample console under examples/console (not part of the package): uvicorn
 # serves it, and it opens its own pool, as a product does. Never a runtime
@@ -63,8 +80,11 @@ warden = "warden.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Cognisn/warden"
+Source = "https://github.com/Cognisn/warden"
+Documentation = "https://github.com/Cognisn/warden/blob/main/docs/guide/clients.md"
 Issues = "https://github.com/Cognisn/warden/issues"
 Changelog = "https://github.com/Cognisn/warden/blob/main/CHANGELOG.md"
+Security = "https://github.com/Cognisn/warden/blob/main/SECURITY.md"
 
 [tool.hatch.version]
 path = "src/warden/__init__.py"
@@ -73,7 +93,20 @@ path = "src/warden/__init__.py"
 packages = ["src/warden"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/warden", "tests", "scripts", "docs", "CHANGELOG.md", "README.md", "LICENSE", "NOTICE"]
+# Patterns are gitignore-style: without the leading slash, "README.md" would also
+# match examples/console/README.md. The sample console and its tests are never
+# shipped (tests/packaging checks both distributions).
+include = [
+    "/src/warden",
+    "/tests",
+    "/scripts",
+    "/docs",
+    "/CHANGELOG.md",
+    "/README.md",
+    "/LICENSE",
+    "/NOTICE",
+]
+exclude = ["/tests/examples"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
