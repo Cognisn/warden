@@ -304,3 +304,30 @@ async def test_bootstrap_creates_the_first_administrator(
 
     again = await create_administrator(console.identity, "first@example.com", PASSWORD)
     assert again.id == created.id
+
+
+async def test_an_administrator_resets_a_users_totp(
+    console: Any, client: httpx.AsyncClient
+) -> None:
+    """The users screen's reset button calls warden's own route (question 6)."""
+    import time
+
+    from examples.console.bootstrap import create_administrator
+    from warden.identity.totp import code_at, step_for
+
+    await create_administrator(console.identity, "first@example.com", PASSWORD)
+    admin = await sign_in(client, "first@example.com")
+    bob = await make_user(console, "bob@example.com")
+    enrolment = await console.identity.mfa.begin_enrolment(bob.id, account=bob.email)
+    codes = await console.identity.mfa.confirm_enrolment(
+        bob.id, code_at(enrolment.secret, step_for(time.time())), actor="test"
+    )
+    assert codes is not None
+    before = await client.post("/auth/sign-in", json={"email": bob.email, "password": PASSWORD})
+    assert before.json()["status"] == "mfa_required"
+
+    reset = await client.delete(f"/admin/users/{bob.id}/totp", headers=bearer(admin))
+    assert reset.status_code == 204 and reset.content == b""
+
+    after = await client.post("/auth/sign-in", json={"email": bob.email, "password": PASSWORD})
+    assert after.json()["status"] in ("signed_in", "mfa_enrolment_required")

@@ -5,13 +5,6 @@
 import { h } from "./dom.js";
 
 export const GAPS = {
-  mfaReset: {
-    question: "Q6",
-    text:
-      "warden has no way to reset or remove a user's TOTP enrolment, or to issue new " +
-      "recovery codes, either over HTTP or in its public Python API. A user who loses " +
-      "their authenticator and their recovery codes cannot be helped.",
-  },
   policyRoute: {
     question: "Q7",
     text:
