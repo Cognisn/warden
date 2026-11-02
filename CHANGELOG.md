@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b8] - 2026-11-02
+
+Eighth beta: beta builds may be published to PyPI as pre-releases. warden's behaviour is unchanged.
+
 ### Changed
 
 - Beta builds may now be published to PyPI as pre-releases, by tagging the stamp commit (`v0.1.0b8`) as for a release candidate; `docs/releasing.md` says so. Alpha builds are still never published. The workflow is unchanged: it already publishes whatever version the tag names, after a maintainer's approval.
