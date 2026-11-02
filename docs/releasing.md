@@ -1,6 +1,6 @@
 # Releasing warden
 
-warden is published to PyPI as [`cognisn-warden`](https://pypi.org/project/cognisn-warden/) by the workflow in `.github/workflows/release.yml`. This document is the procedure for a maintainer. Nothing here is done by a contributor's pull request, and nothing is published without a maintainer's approval.
+warden is published to PyPI as [`cognisn-warden`](https://pypi.org/project/cognisn-warden/) by the workflow in `.github/workflows/publish.yml`. This document is the procedure for a maintainer. Nothing here is done by a contributor's pull request, and nothing is published without a maintainer's approval.
 
 ## How publication works
 
@@ -86,7 +86,7 @@ Work on the release branch, `release/v<version>`, in a clean checkout.
 These are done once by a repository administrator, and are not part of any release.
 
 - The repository is public.
-- On PyPI and on TestPyPI, a project `cognisn-warden` with a trusted publisher for repository `Cognisn/warden`, workflow `release.yml`, and environment `pypi` (PyPI) or `testpypi` (TestPyPI). Before the first upload this can be a pending publisher, which creates the project on first use.
+- On PyPI and on TestPyPI, a project `cognisn-warden` with a trusted publisher for repository `Cognisn/warden`, workflow `publish.yml`, and environment `pypi` (PyPI) or `testpypi` (TestPyPI). Before the first upload this can be a pending publisher, which creates the project on first use.
 - In the repository's settings, the environments `pypi` and `testpypi`. `pypi` has required reviewers (the maintainers) and accepts deployments only from tags matching `v*`. `testpypi` accepts deployments only from the release branches and the default branch.
 - Tag protection for `v*`, so only maintainers can create release tags.
 - Private vulnerability reporting enabled, as `SECURITY.md` describes.
