@@ -7,7 +7,7 @@ warden is published to PyPI as [`cognisn-warden`](https://pypi.org/project/cogni
 - **Trusted publishing, no tokens.** The workflow authenticates to PyPI and TestPyPI with GitHub's OpenID Connect token. No API token or password exists in the repository, its secrets or its environments. PyPI accepts an upload only from this repository, this workflow file and the named environment.
 - **Two environments.** The `pypi` environment publishes to PyPI and requires a maintainer's approval in GitHub before the job runs. The `testpypi` environment publishes to TestPyPI.
 - **What triggers what.**
-  - A version tag (`v0.1.0rc1`, `v0.1.0`) builds, checks and verifies the distributions, then waits for approval in the `pypi` environment.
+  - A version tag (`v0.1.0b8`, `v0.1.0rc1`, `v0.1.0`) builds, checks and verifies the distributions, then waits for approval in the `pypi` environment.
   - A manual run of the workflow (Actions, Release, Run workflow) does the same and publishes to TestPyPI. GitHub offers a manual run only once the workflow file is on the default branch.
   - A push to any branch runs the build, check and verify jobs as a dry run and publishes nothing.
 - **What is checked before anything is published.**
@@ -23,8 +23,10 @@ The same build and checks run in CI on every push (the `build` job), and `tests/
 
 - Versions follow Semantic Versioning with PEP 440 pre-release suffixes: `0.1.0a1`, `0.1.0b1`, `0.1.0rc1`, then `0.1.0`.
 - The version lives only in `src/warden/__init__.py`; hatchling reads it from there.
-- A tag is `v` followed by the version: `v0.1.0rc1`, `v0.1.0`.
-- Alpha and beta builds are stamped on the release branch but not tagged or published. Release candidates and final releases are tagged and published.
+- A tag is `v` followed by the version: `v0.1.0b8`, `v0.1.0rc1`, `v0.1.0`.
+- Alpha builds are stamped on the release branch but never tagged or published.
+- A beta build may be tagged and published, at the maintainer's choice; not every beta stamp needs to be. PyPI shows it as a pre-release, and pip installs it only when asked for by its exact version or with `--pre`, so `pip install cognisn-warden` keeps choosing the latest final release.
+- Release candidates and final releases are always tagged and published.
 - PyPI never accepts the same version twice, even after a deletion. A mistake is fixed with a new version, never by moving a tag.
 
 ## Releasing a version
@@ -35,7 +37,7 @@ Work on the release branch, `release/v<version>`, in a clean checkout.
    ```
    gh run list --branch release/v0.1.0 --limit 1
    ```
-   For a release candidate, the release's gate in its plan has passed.
+   For a beta, the integration session has stamped it and its CI is green. For a release candidate, the release's gate in its plan has passed.
 2. **Stamp the version.** The stamp script refuses any other branch or a version of another release:
    ```
    python scripts/bump_version.py 0.1.0rc1
@@ -72,8 +74,8 @@ Work on the release branch, `release/v<version>`, in a clean checkout.
    git diff v0.1.0 main --stat
    git push origin main
    ```
-   The `git diff` must print nothing: `main` then holds exactly the tree that was published. Release candidates are never merged to `main`.
-8. **Record the release.** Create a GitHub release for the tag, with the version's `CHANGELOG.md` section as its notes, marked as a pre-release for a release candidate.
+   The `git diff` must print nothing: `main` then holds exactly the tree that was published. Betas and release candidates are never merged to `main`.
+8. **Record the release.** Create a GitHub release for the tag, with the version's `CHANGELOG.md` section as its notes, marked as a pre-release for a beta or a release candidate.
 
 ## If something goes wrong
 
