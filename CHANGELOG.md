@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b7] - 2026-11-02
+
+Seventh beta: the release workflow renamed for the PyPI trusted publisher. warden's behaviour is unchanged.
+
 ### Changed
 
 - The release workflow is now `.github/workflows/publish.yml` (it was `release.yml`), the workflow name the PyPI trusted publisher for `cognisn-warden` is registered against. Its jobs and triggers are unchanged.
