@@ -10,11 +10,12 @@ and every error is a fixed message.
 | Route | Body | Success |
 |---|---|---|
 | ``GET /users[?status=&limit=&after=]`` | | ``{"users": [...]}`` (*) |
-| ``GET /users/{id}`` | | ``{"user", "roles"}`` |
+| ``GET /users/{id}`` | | ``{"user", "roles", "webauthn_credentials"}`` |
 | ``POST /users/{id}/status`` | ``status`` | ``{"user"}`` |
 | ``POST /users/{id}/sign-in-method`` | ``sign_in_method`` | ``{"user"}`` |
 | ``POST /users/{id}/password-reset`` | | 202 |
 | ``DELETE /users/{id}/totp`` | | 204 |
+| ``DELETE /users/{id}/mfa`` | | 204 |
 | ``GET /roles`` | | ``{"roles", "permissions"}`` |
 | ``PUT /users/{id}/roles/{role}`` | ``expires_at`` (optional) | 204 |
 | ``DELETE /users/{id}/roles/{role}`` | | 204 |
@@ -286,7 +287,14 @@ def build_admin_router(
         if user is None:
             return _not_found()
         assignments = await identity.roles.assignments_of(user.id)
-        return json_response({"user": _user(user), "roles": [_assignment(a) for a in assignments]})
+        keys = await identity.webauthn_credentials.count(user.id)
+        return json_response(
+            {
+                "user": _user(user),
+                "roles": [_assignment(a) for a in assignments],
+                "webauthn_credentials": keys,
+            }
+        )
 
     @router.post(
         "/users/{user_id}/status",
@@ -432,6 +440,39 @@ def build_admin_router(
             return _not_found()
         try:
             await identity.reset_totp(uid, actor=str(principal.user_id), source_ip=source(request))
+        except UserError:
+            return _not_found()
+        return _no_content()
+
+    @router.delete(
+        "/users/{user_id}/mfa",
+        status_code=204,
+        summary="Reset every second factor of a user",
+        description=(
+            "For a user who has lost their second factors. In one transaction it removes the "
+            "TOTP enrolment (confirmed or not), every security key and passkey and every "
+            "recovery code, ends every session of the user, and records "
+            "`warden.identity.mfa.reset` with counts (`totp_removed`, `webauthn_removed`, "
+            "`recovery_codes_removed`, `sessions_ended`). The user's next password sign-in "
+            "answers `mfa_enrolment_required` where the session policy requires a second "
+            "factor, and they enrol again. A user with nothing enrolled is a 204 too, still "
+            "audited. `DELETE /users/{user_id}/totp` removes TOTP only and leaves keys."
+        ),
+        responses={
+            204: {"description": "Reset.", "headers": no_store()},
+            404: detail("No such user.", "not found"),
+            **REFUSED,
+            **FORBIDDEN,
+        },
+    )
+    async def reset_mfa(
+        user_id: str, request: Request, principal: Annotated[Principal, Depends(users_admin)]
+    ) -> Response:
+        uid = _id(user_id)
+        if uid is None:
+            return _not_found()
+        try:
+            await identity.reset_mfa(uid, actor=str(principal.user_id), source_ip=source(request))
         except UserError:
             return _not_found()
         return _no_content()

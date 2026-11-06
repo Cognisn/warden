@@ -67,6 +67,16 @@ __all__ = [
     "WardenUserDetail",
     "WardenUserEnvelope",
     "WardenUserList",
+    "WardenWebAuthnCredential",
+    "WardenWebAuthnCredentialEnvelope",
+    "WardenWebAuthnCredentialList",
+    "WardenWebAuthnOptions",
+    "WardenWebAuthnRegistered",
+    "WardenWebAuthnRegistrationConfirmed",
+    "WebAuthnRegistrationConfirmBody",
+    "WebAuthnRenameBody",
+    "WebAuthnVerifyBody",
+    "WebAuthnVerifyOptionsBody",
     "detail",
     "json_body",
     "no_store",
@@ -116,11 +126,19 @@ class WardenSignedInAfterEnrolment(WardenSignedIn):
 
 
 class WardenChallengeIssued(_Doc):
-    """The password was right; a second factor, or TOTP enrolment, comes next."""
+    """The password was right; a second factor, or enrolment in one, comes next."""
 
     status: Literal["mfa_required", "mfa_enrolment_required"]
     challenge: str = Field(description="Opaque; pass it to the next step.")
     expires_in: int = Field(description="Seconds until the challenge expires.")
+    methods: list[Literal["totp", "webauthn"]] | None = Field(
+        default=None,
+        description=(
+            "With `mfa_required` only (absent from `mfa_enrolment_required`): the kinds of "
+            "second factor the user holds, `totp` before `webauthn`. A recovery code is "
+            "always accepted as well."
+        ),
+    )
 
 
 class WardenSignInAnswer(RootModel[WardenSignedIn | WardenChallengeIssued]):
@@ -137,7 +155,70 @@ class WardenRecoveryCodes(_Doc):
 
 
 class WardenEnrolmentConfirmed(RootModel[WardenRecoveryCodes | WardenSignedInAfterEnrolment]):
-    """The recovery codes; under a challenge, with the new session as well."""
+    """The recovery codes; under a challenge, with the new session as well.
+
+    The codes are fresh when TOTP is the user's first second factor; when
+    the user already holds a security key or passkey the list is empty, and
+    the codes they hold cover TOTP too.
+    """
+
+
+class WardenWebAuthnOptions(_Doc):
+    """What the browser passes to `navigator.credentials.create()` or `get()`."""
+
+    public_key: dict[str, Any] = Field(
+        description=(
+            "The `publicKey` member as WebAuthn's JSON form (binary values base64url): pass "
+            "it to `PublicKeyCredential.parseCreationOptionsFromJSON` or "
+            "`parseRequestOptionsFromJSON`."
+        )
+    )
+    expires_at: datetime = Field(description="When the ceremony's challenge stops being usable.")
+
+
+class WardenWebAuthnCredential(_Doc):
+    """A security key or passkey, as its owner sees it. Never the public key."""
+
+    id: str = Field(description="warden's UUID for the credential (not the authenticator's id).")
+    nickname: str | None
+    created_at: datetime
+    last_used_at: datetime | None
+    aaguid: str = Field(description="The authenticator model's AAGUID; all zeros when unknown.")
+    backup_eligible: bool = Field(description="Whether the credential may be synced (a passkey).")
+    backup_state: bool = Field(description="Whether it was backed up when last used.")
+    discoverable: bool = Field(description="Whether it can be used without naming the user.")
+
+
+class WardenWebAuthnCredentialList(_Doc):
+    credentials: list[WardenWebAuthnCredential] = Field(description="Oldest first.")
+
+
+class WardenWebAuthnCredentialEnvelope(_Doc):
+    credential: WardenWebAuthnCredential
+
+
+class WardenWebAuthnRegistered(_Doc):
+    """A key registered by a signed-in user."""
+
+    credential: WardenWebAuthnCredential
+    recovery_codes: list[str] = Field(
+        description=(
+            "Fresh codes, shown only now, when the key is the user's first second factor; "
+            "otherwise empty."
+        )
+    )
+
+
+class WardenSignedInAfterWebAuthnRegistration(WardenSignedInAfterEnrolment):
+    """A new session after a forced enrolment completed with a key."""
+
+    credential: WardenWebAuthnCredential
+
+
+class WardenWebAuthnRegistrationConfirmed(
+    RootModel[WardenWebAuthnRegistered | WardenSignedInAfterWebAuthnRegistration]
+):
+    """The key and the recovery codes; under a challenge, with the new session as well."""
 
 
 class WardenInvitationAccepted(_Doc):
@@ -189,6 +270,9 @@ class WardenRoleAssignment(_Doc):
 class WardenUserDetail(_Doc):
     user: WardenUser
     roles: list[WardenRoleAssignment]
+    webauthn_credentials: int = Field(
+        description="How many security keys and passkeys the user holds."
+    )
 
 
 class WardenRole(_Doc):
@@ -298,6 +382,36 @@ class EnrolmentConfirmBody(_Doc):
     challenge: str | None = Field(
         default=None,
         description="The `mfa_enrolment_required` challenge; omit when sending a bearer token.",
+    )
+
+
+class WebAuthnVerifyOptionsBody(_Doc):
+    challenge: str = Field(description="The `mfa_required` challenge.")
+
+
+class WebAuthnVerifyBody(_Doc):
+    challenge: str = Field(description="The `mfa_required` challenge.")
+    credential: dict[str, Any] = Field(
+        description="The browser's answer to `navigator.credentials.get()`, as its `toJSON()`."
+    )
+
+
+class WebAuthnRegistrationConfirmBody(_Doc):
+    credential: dict[str, Any] = Field(
+        description=("The browser's answer to `navigator.credentials.create()`, as its `toJSON()`.")
+    )
+    nickname: str | None = Field(
+        default=None, description="1 to 64 characters without control characters."
+    )
+    challenge: str | None = Field(
+        default=None,
+        description="The `mfa_enrolment_required` challenge; omit when sending a bearer token.",
+    )
+
+
+class WebAuthnRenameBody(_Doc):
+    nickname: str | None = Field(
+        description="1 to 64 characters without control characters, or null to clear it."
     )
 
 

@@ -39,7 +39,7 @@ from warden.identity.mail import (
     MailSender,
     MailTemplate,
 )
-from warden.identity.mfa import Enrolment
+from warden.identity.mfa import Enrolment, LastSecondFactorError, WebAuthnUnavailable
 from warden.identity.passwords import PasswordHasher, Verification
 from warden.identity.policy import PolicyError, PolicyStore, SessionPolicy
 from warden.identity.prune import Pruner, PruneReport
@@ -52,7 +52,7 @@ from warden.identity.roles import (
     RoleError,
     Roles,
 )
-from warden.identity.service import ChallengeIssued, Identity, SignInResult
+from warden.identity.service import ChallengeIssued, Identity, SignInResult, WebAuthnEnrolled
 from warden.identity.sso.errors import SsoError
 from warden.identity.sso.service import (
     SSO_FAILURE_MESSAGE,
@@ -97,6 +97,7 @@ __all__ = [
     "InvitationMismatch",
     "Invitations",
     "LastAdministratorError",
+    "LastSecondFactorError",
     "LoginStart",
     "MailDeliveryError",
     "MailError",
@@ -142,11 +143,13 @@ __all__ = [
     "WebAuthnAssertion",
     "WebAuthnCredential",
     "WebAuthnCredentials",
+    "WebAuthnEnrolled",
     "WebAuthnError",
     "WebAuthnOptions",
     "WebAuthnPurpose",
     "WebAuthnRefusal",
     "WebAuthnRegistration",
+    "WebAuthnUnavailable",
     "new_totp_key",
     "require_permission",
     "require_user",

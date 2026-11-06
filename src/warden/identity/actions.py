@@ -15,6 +15,22 @@ IDENTITY_ACTIONS: tuple[tuple[str, Severity, str], ...] = (
     ("warden.identity.mfa.enrolment_started", Severity.INFO, "{actor} started TOTP enrolment"),
     ("warden.identity.mfa.enrolled", Severity.NOTICE, "{resource_id} enrolled TOTP"),
     ("warden.identity.mfa.reset", Severity.NOTICE, "{actor} reset TOTP of user {resource_id}"),
+    (
+        "warden.identity.mfa.webauthn.registered",
+        Severity.NOTICE,
+        "{actor} registered a security key: {outcome}",
+    ),
+    ("warden.identity.mfa.webauthn.renamed", Severity.INFO, "{actor} renamed a security key"),
+    (
+        "warden.identity.mfa.webauthn.removed",
+        Severity.NOTICE,
+        "{actor} removed a security key: {outcome}",
+    ),
+    (
+        "warden.identity.mfa.webauthn.clone_suspected",
+        Severity.WARNING,
+        "a security key of user {resource_id} may have been copied",
+    ),
     ("warden.identity.session.refresh", Severity.INFO, "session refresh: {outcome}"),
     (
         "warden.identity.session.reuse_detected",
