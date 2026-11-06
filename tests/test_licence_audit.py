@@ -168,9 +168,9 @@ def test_fido2s_declared_licences_need_the_named_exception() -> None:
         "fido2": _pkg("fido2", declared, ["cryptography (>=2.6,!=35,<52)"]),
         "cryptography": _pkg("cryptography", ["Apache-2.0 OR BSD-3-Clause"]),
     }
-    assert [p.name for p in audit.audit("root", packages.__getitem__, exceptions={}).violations] == [
-        "fido2"
-    ]
+    assert [
+        p.name for p in audit.audit("root", packages.__getitem__, exceptions={}).violations
+    ] == ["fido2"]
     report = audit.audit("root", packages.__getitem__)
     assert report.violations == []
     assert [p.name for p in report.excepted] == ["fido2"]

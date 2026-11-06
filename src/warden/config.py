@@ -774,7 +774,9 @@ class WebAuthnConfig(_Section):
         if all(verify_rp_id(rp_id, origin) for origin in self.origins(http)):
             return []
         if self.rp_id is not None:
-            return [(("rp_id",), "must be every allowed origin's host or a registrable suffix of it")]
+            return [
+                (("rp_id",), "must be every allowed origin's host or a registrable suffix of it")
+            ]
         return [(("allowed_origins",), "each origin's host must be rp_id or a subdomain of it")]
 
 
