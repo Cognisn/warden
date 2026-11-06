@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b10] - 2026-11-06
+
+Tenth beta: security keys and passkeys (WebAuthn) as a second factor, peers of TOTP, with an administrator's reset of every second factor. Users without keys see no difference.
+
 ### Added
 
 - Security keys and passkeys (WebAuthn) as a second factor, peers of TOTP. A signed-in user registers one with `POST <auth>/webauthn/registration` and `POST <auth>/webauthn/registration/confirm` (the browser's answer to `navigator.credentials.create()` and an optional nickname of 1 to 64 characters); so does a user in a forced enrolment, under the `mfa_enrolment_required` challenge, which completes their sign-in. Resident key and user verification are preferred, not required, and a credential that comes out discoverable with user verification is recorded as such. A user who signs in only through single sign-on cannot register one. The routes are part of `identity.auth_router()`, so a product mounts nothing new.
