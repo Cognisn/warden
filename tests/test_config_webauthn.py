@@ -159,7 +159,10 @@ def test_an_rp_id_that_does_not_cover_the_origin_is_refused(rp_id: str, origin: 
     ids=["empty", "newline", "trailing-dot", "ip", "space", "wildcard", "single-label"],
 )
 def test_a_malformed_rp_id_is_refused(rp_id: str) -> None:
-    _refused("webauthn.rp_id", webauthn={"rp_id": rp_id})
+    # Refused by its own shape (an anchored pattern), not only because it then
+    # fails to cover the origin.
+    message = _refused("webauthn.rp_id", webauthn={"rp_id": rp_id})
+    assert "must be a domain name" in message
 
 
 @pytest.mark.parametrize("rp_name", ["", "x" * 65, "Example\nCases", "Example\x7f"])
