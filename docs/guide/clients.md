@@ -95,6 +95,13 @@ Request bodies are parsed by warden, not by FastAPI's validation, so a malformed
 
 **Lost both factors: the administrator's reset.** A user who has lost their authenticator and their recovery codes cannot complete a password sign-in, so an administrator resets their enrolment with [`DELETE /admin/users/{user_id}/totp`](../contract/openapi.json), behind the administration router's users permission. It answers 204 with no body, or 404 for no such user. In one transaction it removes the user's TOTP enrolment (confirmed or not) and every recovery code, ends every session of the user (as a password reset does), and records `warden.identity.mfa.reset` with the administrator as actor. The user's next password sign-in answers `mfa_enrolment_required` where the deployment requires a second factor (or `signed_in` where it does not), and they enrol again as above; their old codes are refused. A user with nothing enrolled gets a 204 too, still audited, so pressing the button twice is harmless. Confirm the user's identity some other way before resetting: the reset is what stands between a stolen password and the account. A product's server can call `Identity.reset_totp(user_id, actor=...)` directly.
 
+**Security keys and passkeys (routes).** A full section on WebAuthn follows later in 0.1.0; until then, the routes, each described in the contract. A key or passkey is a second factor beside TOTP, and `mfa_required` lists the kinds a user holds in `methods`.
+
+- [`POST /auth/webauthn/registration`](../contract/openapi.json) and [`POST /auth/webauthn/registration/confirm`](../contract/openapi.json): register one, signed in or under the `mfa_enrolment_required` challenge.
+- [`POST /auth/webauthn/verify/options`](../contract/openapi.json) and [`POST /auth/webauthn/verify`](../contract/openapi.json): complete the `mfa_required` challenge with one.
+- [`GET /auth/webauthn/credentials`](../contract/openapi.json), [`PATCH /auth/webauthn/credentials/{credential_id}`](../contract/openapi.json) and [`DELETE /auth/webauthn/credentials/{credential_id}`](../contract/openapi.json): the signed-in user's own list, rename and remove.
+- [`DELETE /admin/users/{user_id}/mfa`](../contract/openapi.json): the administrator's reset of every second factor, keys included.
+
 ## 6. Single sign-on
 
 Single sign-on is OIDC with one identity provider per deployment, for users an administrator has already created or invited (warden never creates an account from a sign-in). The flow is browser-based and needs three things from the product: a link or button that starts it, a completion screen at `http.sso_completion_link`, and HTTPS (the login cookie is `Secure`).

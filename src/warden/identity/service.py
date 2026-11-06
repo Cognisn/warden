@@ -34,7 +34,15 @@ from warden.identity.dependencies import APP_STATE_KEY, Principal, ResourceScope
 from warden.identity.errors import AuthenticationRefused, MfaError
 from warden.identity.http import SourceIp
 from warden.identity.mail import Mailer, MailError, MailKind, MailSender
-from warden.identity.mfa import Challenge, ChallengePurpose, Enrolment, Mfa
+from warden.identity.mfa import (
+    Challenge,
+    ChallengePurpose,
+    Enrolment,
+    LastSecondFactorError,
+    Mfa,
+    SecondFactor,
+    WebAuthnUnavailable,
+)
 from warden.identity.passwords import MAX_PASSWORD_LENGTH, PasswordHasher
 from warden.identity.policy import PolicyStore, SessionPolicy
 from warden.identity.roles import PermissionRegistry, Roles
@@ -43,15 +51,28 @@ from warden.identity.sso.service import SingleSignOn
 from warden.identity.throttle import SignInThrottle
 from warden.identity.tokens import NewSession, Sessions, TokenPair
 from warden.identity.users import SignInMethod, UserError, Users, UserStatus, is_email
+from warden.identity.webauthn import (
+    WebAuthn,
+    WebAuthnCredential,
+    WebAuthnCredentials,
+    WebAuthnError,
+    WebAuthnOptions,
+    WebAuthnPurpose,
+    WebAuthnRefusal,
+)
 from warden.keys import KeyStore
 
-__all__ = ["ChallengeIssued", "Identity", "SignInResult"]
+__all__ = ["ChallengeIssued", "Identity", "SignInResult", "WebAuthnEnrolled"]
 
 logger = logging.getLogger(__name__)
 
 _USERS = table(schema.USERS)
 # Longest identifier looked up; nothing longer can be an email address.
 _MAX_IDENTIFIER = 320
+# RFC 8176: a password and a hardware-bound key (ruling P7).
+_KEY_AMR = ["pwd", "hwk"]
+# Refusals that say nothing about the second factor offered, so cost no attempt.
+_NOT_AN_ATTEMPT = frozenset({"unknown_challenge", "user_inactive", "sso_only", "challenge_used"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +82,8 @@ class ChallengeIssued:
     token: str
     purpose: ChallengePurpose
     expires_in: int
+    methods: tuple[SecondFactor, ...] = ()
+    """For ``verify``: the kinds of second factor the user holds (``totp``, ``webauthn``)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +92,17 @@ class SignInResult:
 
     tokens: TokenPair | None = None
     challenge: ChallengeIssued | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WebAuthnEnrolled:
+    """A security key or passkey registered as a second factor."""
+
+    credential: WebAuthnCredential
+    recovery_codes: list[str]
+    """Fresh codes when it is the user's first second factor; otherwise none."""
+    tokens: TokenPair | None = None
+    """The new session, when registered under an enrolment challenge."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +187,14 @@ class Identity:
             else sign_in_window_seconds,
         )
         self.sessions = Sessions(db, keys, self.policy, issuer=issuer, clock=clock)
+        # Passkeys and security keys: built only where a relying party id is
+        # known, so a deployment on an IP address without WebAuthn settings
+        # boots as before (wave 9 decision D17). The credential store needs no
+        # relying party, so a user can always list and remove their keys.
+        self.webauthn: WebAuthn | None = (
+            WebAuthn(config, db) if config.webauthn.relying_party_id(config.http) else None
+        )
+        self.webauthn_credentials = WebAuthnCredentials(db)
         # Single sign-on (warden.identity.sso). Built even while disabled, since an
         # administrator may enable it at run time.
         self.sso = SingleSignOn(
@@ -184,10 +226,10 @@ class Identity:
         self.resets = reset.PasswordResets(
             self.config, self.db, self.single_use, self.mailer, self.passwords, self.sessions
         )
-        self.pruner = prune.Pruner(self.db, self.single_use, self.throttle)
+        self.pruner = prune.Pruner(self.db, self.single_use, self.throttle, webauthn=self.webauthn)
 
     async def prune(self) -> prune.PruneReport:
-        """Delete expired refresh tokens, single-use tokens, MFA challenges and throttle windows."""
+        """Delete expired tokens, MFA and WebAuthn challenges, and ended throttle windows."""
         return await self.pruner.prune()
 
     def pruning(
@@ -197,22 +239,33 @@ class Identity:
         prune.check_interval(every_seconds)
         return prune.scheduled(lambda: self.prune(), every_seconds)
 
-    async def _notify_enrolled(self, user_id: uuid.UUID) -> None:
-        """Mail the MFA-enrolled notice, after the enrolment committed.
+    async def _notify_enrolled(
+        self, user_id: uuid.UUID, *, key: WebAuthnCredential | None = None
+    ) -> None:
+        """Mail the MFA-enrolled notice, after the user's first second factor committed.
 
         Best effort: without a sender nothing is sent, and a failed delivery
-        is logged, never allowed to undo or fail the enrolment.
+        is logged, never allowed to undo or fail the enrolment. ``key`` is the
+        security key or passkey that was the first factor; otherwise it was TOTP.
         """
         if not self.mailer.configured:
             return
         async with self.db.connection() as conn:
-            cur = await conn.execute(
-                sql.SQL(
-                    "SELECT u.email, u.display_name, t.confirmed_at FROM {} u"
-                    " JOIN {} t ON t.user_id = u.id WHERE u.id = %s"
-                ).format(_USERS, table(schema.TOTP_CREDENTIALS)),
-                (user_id,),
-            )
+            if key is None:
+                cur = await conn.execute(
+                    sql.SQL(
+                        "SELECT u.email, u.display_name, t.confirmed_at FROM {} u"
+                        " JOIN {} t ON t.user_id = u.id WHERE u.id = %s"
+                    ).format(_USERS, table(schema.TOTP_CREDENTIALS)),
+                    (user_id,),
+                )
+            else:
+                cur = await conn.execute(
+                    sql.SQL(
+                        "SELECT email, display_name, %s::timestamptz FROM {} WHERE id = %s"
+                    ).format(_USERS),
+                    (key.created_at, user_id),
+                )
             row = await cur.fetchone()
         if row is None:
             return
@@ -357,14 +410,18 @@ class Identity:
                 )
                 rehashed = cur.rowcount == 1
             purpose: ChallengePurpose | None = None
-            if await self.mfa.has_confirmed_totp(account.id, conn=tx):
+            # Any confirmed second factor, TOTP or a key, is asked for (ruling P4).
+            methods = await self.mfa.methods(account.id, conn=tx)
+            if methods:
                 purpose = "verify"
             elif policy.require_mfa:
                 purpose = "enrol"
             details: dict[str, Any] = {"rehashed": True} if rehashed else {}
             if purpose is not None:
                 token = await self.mfa.create_challenge(tx, account.id, purpose)
-                challenge = ChallengeIssued(token, purpose, self.mfa.challenge_ttl_seconds)
+                challenge = ChallengeIssued(
+                    token, purpose, self.mfa.challenge_ttl_seconds, tuple(methods)
+                )
                 await self._audit(
                     tx,
                     "warden.identity.mfa.challenge",
@@ -479,7 +536,8 @@ class Identity:
                     "wrong_code", str(principal.user_id), "enrolment", source_ip
                 )
                 raise MfaError("code not accepted")
-            await self._notify_enrolled(principal.user_id)
+            if codes:  # the user's first second factor
+                await self._notify_enrolled(principal.user_id)
             return codes, None
         policy = await self.policy.current()
         reason: str | None = None
@@ -515,8 +573,355 @@ class Identity:
             await self._refuse_second_factor(
                 reason or "unknown_challenge", opened, "enrolment", source_ip
             )
-        await self._notify_enrolled(new.user_id)
+        if codes:  # the user's first second factor
+            await self._notify_enrolled(new.user_id)
         return codes, await self.sessions.finish(new)
+
+    # Security keys and passkeys as a second factor (rulings P4 and P7)
+
+    def _relying_party(self) -> WebAuthn:
+        if self.webauthn is None:
+            raise WebAuthnUnavailable("WebAuthn is not configured")
+        return self.webauthn
+
+    async def begin_webauthn_sign_in(
+        self, challenge: object, *, source_ip: SourceIp = None
+    ) -> WebAuthnOptions:
+        """The options for completing an ``mfa_required`` challenge with a key.
+
+        They list only the user's own credentials: the challenge already
+        proves the password. User verification is preferred, not required
+        (ruling P7). Every refusal is ``AuthenticationRefused``, its reason audited.
+        """
+        reason: str | None = None
+        opened: Challenge | None = None
+        options: WebAuthnOptions | None = None
+        async with self.db.transaction() as tx:
+            opened = await self.mfa.open_challenge(tx, challenge, "verify")
+            if opened is None:
+                reason = "unknown_challenge"
+            else:
+                reason = await self._account_refusal(tx, opened.user_id)
+            if reason is None and opened is not None:
+                try:
+                    options = await self._relying_party().begin_authentication(
+                        opened.user_id, require_user_verification=False, conn=tx
+                    )
+                except WebAuthnUnavailable:
+                    reason = "webauthn_unavailable"
+                except WebAuthnError as exc:
+                    reason = exc.reason.value
+        if reason is not None or options is None:
+            await self._refuse_second_factor(
+                reason or "unknown_challenge", opened, "webauthn", source_ip
+            )
+        return options
+
+    async def verify_webauthn(
+        self, challenge: object, credential: object, *, source_ip: SourceIp = None
+    ) -> TokenPair:
+        """Complete a sign-in with a security key or passkey; ``amr`` ``["pwd", "hwk"]``.
+
+        Under the challenge's attempt limit and single use, with the user's
+        status and sign-in method checked again in the transaction that
+        issues the session, as ``verify_totp`` does. A refused response
+        costs an attempt; a signature counter that did not increase is also
+        audited as a suspected clone.
+
+        The ceremony is finished with no transaction of this method's open:
+        it uses its challenge up on a connection of its own, and holding one
+        here meanwhile would let concurrent sign-ins exhaust the pool.
+        """
+        policy = await self.policy.current()
+        opened, reason = await self._open_challenge(challenge, "verify")
+        new: NewSession | None = None
+        clone: WebAuthnError | None = None
+        if reason is None and opened is not None:
+            try:
+                assertion = await self._relying_party().finish_authentication(
+                    opened.user_id, credential
+                )
+            except WebAuthnUnavailable:
+                reason = "webauthn_unavailable"
+            except WebAuthnError as exc:
+                reason = exc.reason.value
+                clone = exc if exc.suspected_clone else None
+            else:
+                async with self.db.transaction() as tx:
+                    reason = await self._account_refusal(tx, opened.user_id)
+                    if reason is None and not await self.mfa.consume_challenge(tx, opened):
+                        reason = "challenge_used"
+                    if reason is None:
+                        new = await self.sessions.start(tx, opened.user_id, _KEY_AMR, policy)
+                        await self._clear_throttle(tx, opened.user_id, source_ip)
+                        await self._audit(
+                            tx,
+                            "warden.identity.sign_in",
+                            opened.user_id,
+                            source_ip,
+                            amr=_KEY_AMR,
+                            credential_id=str(assertion.credential.id),
+                        )
+        if reason is not None or new is None:
+            if opened is not None and reason not in _NOT_AN_ATTEMPT:
+                await self.mfa.record_failure(opened)
+            if clone is not None:
+                await self._audit_clone(clone, source_ip)
+            await self._refuse_second_factor(
+                reason or "unknown_challenge", opened, "webauthn", source_ip
+            )
+        return await self.sessions.finish(new)
+
+    async def begin_webauthn_registration(
+        self,
+        *,
+        challenge: object = None,
+        principal: Principal | None = None,
+        source_ip: SourceIp = None,
+    ) -> WebAuthnOptions:
+        """Start registering a key as a second factor, signed in or under an enrolment challenge.
+
+        Resident key and user verification are preferred. Signed in, a
+        refusal is raised as ``WebAuthnError`` or ``WebAuthnUnavailable``;
+        under a challenge it is ``AuthenticationRefused``.
+        """
+        user_id = await self._enrolling_user(challenge, principal, source_ip)
+        try:
+            return await self._relying_party().begin_registration(
+                user_id, WebAuthnPurpose.SECOND_FACTOR
+            )
+        except (WebAuthnError, WebAuthnUnavailable) as exc:
+            if principal is not None:
+                raise
+            reason = exc.reason.value if isinstance(exc, WebAuthnError) else "webauthn_unavailable"
+            await self._audit_second_factor_failure(reason, str(user_id), "enrolment", source_ip)
+            raise AuthenticationRefused(reason) from None
+
+    async def finish_webauthn_registration(
+        self,
+        credential: object,
+        *,
+        nickname: object = None,
+        challenge: object = None,
+        principal: Principal | None = None,
+        source_ip: SourceIp = None,
+    ) -> WebAuthnEnrolled:
+        """Register a key as a second factor. Under a challenge, also completes the sign-in.
+
+        A user holding no recovery codes gets fresh ones, and the
+        MFA-enrolled notice, with their first second factor; a later one
+        brings neither. A credential that came out discoverable with user
+        verification is recorded as such. Under a challenge that is refused
+        once the key is stored (used up meanwhile, or the user no longer
+        active), the key is removed again.
+        """
+        user = None if principal is None else principal.user_id
+        if nickname is not None and not isinstance(nickname, str):
+            raise WebAuthnError(WebAuthnRefusal.NICKNAME, user_id=user)
+        if principal is not None:
+            return await self._register_signed_in(principal, credential, nickname, source_ip)
+        policy = await self.policy.current()
+        opened, reason = await self._open_challenge(challenge, "enrol")
+        new: NewSession | None = None
+        enrolled: WebAuthnEnrolled | None = None
+        if reason is None and opened is not None:
+            try:
+                registration = await self._relying_party().finish_registration(
+                    opened.user_id, credential, nickname=nickname
+                )
+            except WebAuthnUnavailable:
+                reason = "webauthn_unavailable"
+            except WebAuthnError as exc:
+                reason = exc.reason.value
+            else:
+                key = registration.credential
+                async with self.db.transaction() as tx:
+                    reason = await self._account_refusal(tx, opened.user_id)
+                    if reason is None and not await self.mfa.consume_challenge(tx, opened):
+                        reason = "challenge_used"
+                    if reason is None:
+                        try:
+                            enrolled = await self._registered(tx, key, source_ip)
+                        except WebAuthnError as exc:
+                            reason = exc.reason.value
+                    if reason is not None or enrolled is None:
+                        await self.webauthn_credentials.remove(opened.user_id, key.id, conn=tx)
+                    else:
+                        new = await self.sessions.start(tx, opened.user_id, _KEY_AMR, policy)
+                        await self._clear_throttle(tx, opened.user_id, source_ip)
+                        await self._audit(
+                            tx,
+                            "warden.identity.sign_in",
+                            opened.user_id,
+                            source_ip,
+                            amr=_KEY_AMR,
+                            credential_id=str(key.id),
+                        )
+        if reason is not None or new is None or enrolled is None:
+            if opened is not None and reason not in _NOT_AN_ATTEMPT:
+                await self.mfa.record_failure(opened)
+            await self._refuse_second_factor(
+                reason or "unknown_challenge", opened, "enrolment", source_ip
+            )
+        if enrolled.recovery_codes:
+            await self._notify_enrolled(new.user_id, key=enrolled.credential)
+        return WebAuthnEnrolled(
+            enrolled.credential, enrolled.recovery_codes, await self.sessions.finish(new)
+        )
+
+    async def _register_signed_in(
+        self, principal: Principal, credential: object, nickname: str | None, source_ip: SourceIp
+    ) -> WebAuthnEnrolled:
+        try:
+            registration = await self._relying_party().finish_registration(
+                principal.user_id, credential, nickname=nickname
+            )
+            async with self.db.transaction() as tx:
+                enrolled = await self._registered(tx, registration.credential, source_ip)
+        except WebAuthnError as exc:
+            await self._audit_failure(
+                "warden.identity.mfa.webauthn.registered",
+                principal.user_id,
+                source_ip,
+                reason=exc.reason.value,
+            )
+            raise
+        if enrolled.recovery_codes:
+            await self._notify_enrolled(principal.user_id, key=enrolled.credential)
+        return enrolled
+
+    async def _registered(
+        self, tx: AsyncConnection[Any], key: WebAuthnCredential, source_ip: SourceIp
+    ) -> WebAuthnEnrolled:
+        """Issue codes to a user holding none, and audit the key, in ``tx``.
+
+        The user's row is locked first, so of two second factors added at
+        once exactly one brings the codes.
+        """
+        await self.mfa.lock_user(tx, key.user_id)
+        if await self.webauthn_credentials.get(key.user_id, key.id, conn=tx) is None:
+            # An administrator's reset removed it after it was stored.
+            raise WebAuthnError(
+                WebAuthnRefusal.UNKNOWN_CREDENTIAL, user_id=key.user_id, credential_id=key.id
+            )
+        codes = await self.mfa.issue_codes_if_none(tx, key.user_id)
+        await self._audit(
+            tx,
+            "warden.identity.mfa.webauthn.registered",
+            key.user_id,
+            source_ip,
+            credential_id=str(key.id),
+            discoverable=key.discoverable,
+            user_verified=key.user_verified,
+            first_factor=bool(codes),
+        )
+        return WebAuthnEnrolled(key, codes)
+
+    async def _open_challenge(
+        self, token: object, purpose: ChallengePurpose
+    ) -> tuple[Challenge | None, str | None]:
+        """The live challenge and why its user may not continue (None if they may)."""
+        async with self.db.transaction() as tx:
+            opened = await self.mfa.open_challenge(tx, token, purpose)
+            if opened is None:
+                return None, "unknown_challenge"
+            return opened, await self._account_refusal(tx, opened.user_id)
+
+    async def list_webauthn(self, principal: Principal) -> list[WebAuthnCredential]:
+        """The signed-in user's security keys and passkeys, oldest first."""
+        return await self.webauthn_credentials.list(principal.user_id)
+
+    async def rename_webauthn(
+        self,
+        principal: Principal,
+        credential_id: uuid.UUID,
+        nickname: object,
+        *,
+        source_ip: SourceIp = None,
+    ) -> WebAuthnCredential | None:
+        """Set or clear a key's nickname; None if the user holds no such key.
+
+        Raises ``WebAuthnError`` (``nickname``) unless the nickname is None or
+        1 to 64 characters without control characters.
+        """
+        if nickname is not None and not isinstance(nickname, str):
+            raise WebAuthnError(WebAuthnRefusal.NICKNAME, user_id=principal.user_id)
+        async with self.db.transaction() as tx:
+            renamed = await self.webauthn_credentials.rename(
+                principal.user_id, credential_id, nickname, conn=tx
+            )
+            if renamed is not None:
+                await self._audit(
+                    tx,
+                    "warden.identity.mfa.webauthn.renamed",
+                    principal.user_id,
+                    source_ip,
+                    credential_id=str(renamed.id),
+                )
+        return renamed
+
+    async def remove_webauthn(
+        self, principal: Principal, credential_id: uuid.UUID, *, source_ip: SourceIp = None
+    ) -> bool:
+        """Remove one of the signed-in user's keys; False if they hold no such key.
+
+        Refused with ``LastSecondFactorError`` when it is the user's last
+        second factor and the session policy requires one (ruling P4). Where
+        none is required, the last factor takes the recovery codes with it.
+        The user's row is locked first, so concurrent removals are decided
+        one at a time and never leave a required factor missing.
+        """
+        user_id = principal.user_id
+        policy = await self.policy.current()
+        async with self.db.transaction() as tx:
+            await self.mfa.lock_user(tx, user_id)
+            if await self.webauthn_credentials.get(user_id, credential_id, conn=tx) is None:
+                return False
+            last = await self.mfa.count_factors(tx, user_id) <= 1
+            if not (last and policy.require_mfa):
+                await self.webauthn_credentials.remove(user_id, credential_id, conn=tx)
+                codes = await self.mfa.remove_recovery_codes(tx, user_id) if last else 0
+                await self._audit(
+                    tx,
+                    "warden.identity.mfa.webauthn.removed",
+                    user_id,
+                    source_ip,
+                    credential_id=str(credential_id),
+                    recovery_codes_removed=codes,
+                )
+                return True
+        await self._audit_failure(
+            "warden.identity.mfa.webauthn.removed",
+            user_id,
+            source_ip,
+            credential_id=str(credential_id),
+            reason="last_factor",
+        )
+        raise LastSecondFactorError(f"user {user_id} would be left without a second factor")
+
+    async def _audit_clone(self, error: WebAuthnError, source_ip: SourceIp) -> None:
+        if error.user_id is not None:
+            await self._audit_failure(
+                "warden.identity.mfa.webauthn.clone_suspected",
+                error.user_id,
+                source_ip,
+                credential_id=str(error.credential_id),
+            )
+
+    async def _audit_failure(
+        self, action: str, user_id: uuid.UUID, source_ip: SourceIp, **details: Any
+    ) -> None:
+        await record_audit(
+            AuditEvent(
+                action=action,
+                outcome="failure",
+                actor=str(user_id),
+                resource_type="user",
+                resource_id=str(user_id),
+                source_ip=source_ip,
+                details=details,
+            )
+        )
 
     async def reset_totp(
         self, user_id: uuid.UUID, *, actor: str, source_ip: SourceIp = None
@@ -558,6 +963,46 @@ class Identity:
                 conn=tx,
             )
         return removed
+
+    async def reset_mfa(
+        self, user_id: uuid.UUID, *, actor: str, source_ip: SourceIp = None
+    ) -> None:
+        """Remove every second factor of a user, and end their sessions.
+
+        For an administrator helping a user who has lost their factors
+        (ruling P4, Skuld question 21): one transaction removes the TOTP
+        enrolment (confirmed or not), every security key and passkey and
+        every recovery code, ends every session of the user, and records
+        ``warden.identity.mfa.reset`` with counts. A user with nothing
+        enrolled is not an error; the reset is still audited. Raises
+        ``UserError`` if there is no such user. ``reset_totp`` is unchanged.
+        """
+        async with self.db.transaction() as tx:
+            # The user's row first, as every change to their second factors
+            # takes it: a key being registered is either removed here or added
+            # after, with fresh codes; never left with codes for nothing.
+            if not await self.mfa.lock_user(tx, user_id):
+                raise UserError(f"user {user_id} does not exist")
+            totp_removed, codes = await self.mfa.remove(tx, user_id)
+            keys = await self.webauthn_credentials.remove_all(user_id, conn=tx)
+            ended = await self.sessions.revoke_all(user_id, reason="mfa_reset", conn=tx)
+            await record_audit(
+                AuditEvent(
+                    action="warden.identity.mfa.reset",
+                    outcome="success",
+                    actor=actor,
+                    resource_type="user",
+                    resource_id=str(user_id),
+                    source_ip=source_ip,
+                    details={
+                        "totp_removed": totp_removed,
+                        "webauthn_removed": keys,
+                        "recovery_codes_removed": codes,
+                        "sessions_ended": ended,
+                    },
+                ),
+                conn=tx,
+            )
 
     async def _enrolling_user(
         self, challenge: object, principal: Principal | None, source_ip: SourceIp

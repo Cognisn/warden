@@ -137,14 +137,12 @@ DEFAULT_TEMPLATES: Mapping[MailKind, MailTemplate] = {
         subject="Two-step verification was set up",
         text=(
             "Hello $display_name,\n\n"
-            "An authenticator app was set up for two-step verification on $email"
-            " on $enrolled_at.\n\n"
+            "Two-step verification was set up on $email on $enrolled_at.\n\n"
             "If this was not you, contact your administrator straight away.\n"
         ),
         html=(
             "<p>Hello $display_name,</p>"
-            "<p>An authenticator app was set up for two-step verification on $email"
-            " on $enrolled_at.</p>"
+            "<p>Two-step verification was set up on $email on $enrolled_at.</p>"
             "<p>If this was not you, contact your administrator straight away.</p>"
         ),
     ),

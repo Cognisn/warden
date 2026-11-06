@@ -1,9 +1,10 @@
 """Pruning (#134): delete identity rows that can never be used again.
 
 ``Pruner.prune`` deletes expired refresh tokens, expired single-use tokens,
-expired MFA challenges and ended sign-in throttle windows, and reports how
-many of each. Only expired rows go: a used refresh token is kept until it
-expires, because presenting it again is how reuse is detected.
+expired MFA challenges, expired WebAuthn ceremony challenges and ended
+sign-in throttle windows, and reports how many of each. Only expired rows
+go: a used refresh token is kept until it expires, because presenting it
+again is how reuse is detected.
 
 warden ships no scheduler of its own. A product calls ``identity.prune()``
 from its own scheduler, or runs ``identity.pruning(every_seconds=...)`` in
@@ -18,12 +19,16 @@ import contextlib
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from psycopg import sql
 
 from warden.db import Database, schema, table
 from warden.identity.single_use import SingleUseTokens
 from warden.identity.throttle import SignInThrottle
+
+if TYPE_CHECKING:
+    from warden.identity.webauthn import WebAuthn
 
 __all__ = ["PruneReport", "Pruner"]
 
@@ -41,6 +46,8 @@ class PruneReport:
     single_use_tokens: int
     mfa_challenges: int
     sign_in_attempts: int
+    webauthn_challenges: int = 0
+    """Expired passkey and security key ceremony challenges, used or not."""
 
     @property
     def total(self) -> int:
@@ -49,14 +56,24 @@ class PruneReport:
             + self.single_use_tokens
             + self.mfa_challenges
             + self.sign_in_attempts
+            + self.webauthn_challenges
         )
 
 
 class Pruner:
-    def __init__(self, db: Database, tokens: SingleUseTokens, throttle: SignInThrottle) -> None:
+    def __init__(
+        self,
+        db: Database,
+        tokens: SingleUseTokens,
+        throttle: SignInThrottle,
+        *,
+        webauthn: WebAuthn | None = None,
+    ) -> None:
+        """``webauthn`` is None where passkeys are not configured: nothing to prune."""
         self._db = db
         self._tokens = tokens
         self._throttle = throttle
+        self._webauthn = webauthn
 
     async def prune(self) -> PruneReport:
         """Delete every expired row once; each kind in its own short transaction."""
@@ -64,15 +81,17 @@ class Pruner:
         single_use = await self._tokens.prune()
         challenges = await self._delete_expired(_MFA_CHALLENGES)
         attempts = await self._throttle.prune()
-        report = PruneReport(refresh, single_use, challenges, attempts)
+        ceremonies = 0 if self._webauthn is None else await self._webauthn.prune()
+        report = PruneReport(refresh, single_use, challenges, attempts, ceremonies)
         if report.total:
             logger.info(
                 "pruned %d refresh tokens, %d single-use tokens, %d MFA challenges,"
-                " %d sign-in windows",
+                " %d sign-in windows, %d WebAuthn challenges",
                 refresh,
                 single_use,
                 challenges,
                 attempts,
+                ceremonies,
             )
         return report
 

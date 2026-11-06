@@ -11,6 +11,13 @@ Concurrent attempts block on the row and re-check the condition when the
 first commits, so exactly one succeeds. Only a confirmed TOTP enrolment is
 MFA: an unconfirmed credential never verifies.
 
+TOTP and WebAuthn credentials (passkeys and security keys) are peers as
+second factors (ruling P4): ``methods`` names the kinds a user holds, and
+recovery codes are issued when a user's first second factor of either kind
+is confirmed, never again for a later one, and cover every factor. A change
+to a user's second factors locks the user's row (``lock_user``) first, so
+two of them for one user are decided one at a time.
+
 TOTP secrets are stored sealed (``warden.identity.crypto``), bound to their
 user; a secret that does not open is treated as no secret.
 """
@@ -36,13 +43,23 @@ from warden.identity import totp
 from warden.identity.crypto import SecretBox
 from warden.identity.errors import MfaError
 
-__all__ = ["CHALLENGE_TTL_SECONDS", "MAX_CHALLENGE_FAILURES", "Challenge", "Enrolment", "Mfa"]
+__all__ = [
+    "CHALLENGE_TTL_SECONDS",
+    "MAX_CHALLENGE_FAILURES",
+    "Challenge",
+    "Enrolment",
+    "LastSecondFactorError",
+    "Mfa",
+    "SecondFactor",
+    "WebAuthnUnavailable",
+]
 
 # Defaults of ``identity.mfa_challenge_ttl_seconds`` and ``identity.mfa_max_failures``.
 CHALLENGE_TTL_SECONDS = 300
 MAX_CHALLENGE_FAILURES = 5
 
 ChallengePurpose = Literal["verify", "enrol"]
+SecondFactor = Literal["totp", "webauthn"]
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +68,8 @@ _TOKEN = re.compile(r"[A-Za-z0-9_-]{16,128}")
 _TOTP = table(schema.TOTP_CREDENTIALS)
 _CODES = table(schema.RECOVERY_CODES)
 _CHALLENGES = table(schema.MFA_CHALLENGES)
+_KEYS = table(schema.WEBAUTHN_CREDENTIALS)
+_USERS = table(schema.USERS)
 
 _CHALLENGE_LIVE = sql.SQL("consumed_at IS NULL AND expires_at > now() AND failed_attempts < {}")
 
@@ -72,6 +91,18 @@ class Challenge:
     id: uuid.UUID
     user_id: uuid.UUID
     purpose: ChallengePurpose
+
+
+class LastSecondFactorError(MfaError):
+    """Refused: it would leave the user without a second factor while one is required."""
+
+
+class WebAuthnUnavailable(MfaError):
+    """Passkeys and security keys are not configured for this deployment.
+
+    ``webauthn.rp_id`` is unset and ``http.public_base_url``'s host is not a
+    domain, so there is no relying party id.
+    """
 
 
 def _hash_token(token: str) -> bytes:
@@ -131,6 +162,78 @@ class Mfa:
                 )
                 resealed += 1
         return resealed
+
+    # Second factors of either kind
+
+    async def lock_user(self, conn: AsyncConnection[Any], user_id: uuid.UUID) -> bool:
+        """Hold the user's row until the transaction ends; whether the user exists.
+
+        ``FOR NO KEY UPDATE``: it serialises changes to one user's second
+        factors without blocking the key-share locks that inserting recovery
+        codes, sessions and credentials take on the user.
+        """
+        cur = await conn.execute(
+            sql.SQL("SELECT 1 FROM {} WHERE id = %s FOR NO KEY UPDATE").format(_USERS), (user_id,)
+        )
+        return await cur.fetchone() is not None
+
+    async def methods(
+        self, user_id: uuid.UUID, *, conn: AsyncConnection[Any] | None = None
+    ) -> list[SecondFactor]:
+        """The kinds of confirmed second factor the user holds, in a fixed order."""
+        async with self._db.transaction(conn) as tx:
+            cur = await tx.execute(
+                sql.SQL(
+                    "SELECT EXISTS (SELECT 1 FROM {} WHERE user_id = %s"
+                    " AND confirmed_at IS NOT NULL),"
+                    " EXISTS (SELECT 1 FROM {} WHERE user_id = %s)"
+                ).format(_TOTP, _KEYS),
+                (user_id, user_id),
+            )
+            row = await cur.fetchone()
+        held: list[SecondFactor] = []
+        if row is not None and row[0]:
+            held.append("totp")
+        if row is not None and row[1]:
+            held.append("webauthn")
+        return held
+
+    async def count_factors(self, conn: AsyncConnection[Any], user_id: uuid.UUID) -> int:
+        """How many second factors the user holds: a confirmed TOTP and each key."""
+        cur = await conn.execute(
+            sql.SQL(
+                "SELECT (SELECT count(*) FROM {} WHERE user_id = %s AND confirmed_at IS NOT NULL)"
+                " + (SELECT count(*) FROM {} WHERE user_id = %s)"
+            ).format(_TOTP, _KEYS),
+            (user_id, user_id),
+        )
+        row = await cur.fetchone()
+        return 0 if row is None else int(row[0])
+
+    async def issue_codes_if_none(
+        self, conn: AsyncConnection[Any], user_id: uuid.UUID
+    ) -> list[str]:
+        """Fresh recovery codes for a user holding none (used or not); otherwise none.
+
+        Call with the user locked (``lock_user``) once a second factor is
+        added: the first factor brings the codes, and a later one finds them
+        and brings none, since the codes cover every factor. Codes go only
+        when the last factor does (or an administrator resets them), so a
+        user holding none has no other factor they could have come with.
+        """
+        cur = await conn.execute(
+            sql.SQL("SELECT 1 FROM {} WHERE user_id = %s LIMIT 1").format(_CODES), (user_id,)
+        )
+        if await cur.fetchone() is not None:
+            return []
+        return await self._replace_recovery_codes(conn, user_id)
+
+    async def remove_recovery_codes(self, conn: AsyncConnection[Any], user_id: uuid.UUID) -> int:
+        """Delete every recovery code the user holds; how many."""
+        cur = await conn.execute(
+            sql.SQL("DELETE FROM {} WHERE user_id = %s").format(_CODES), (user_id,)
+        )
+        return cur.rowcount
 
     # TOTP enrolment
 
@@ -192,11 +295,17 @@ class Mfa:
         actor: str | None = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> list[str] | None:
-        """Confirm with a current code. Returns fresh recovery codes, or None if refused.
+        """Confirm with a current code. Returns the recovery codes, or None if refused.
 
-        The confirming code's step is claimed, so it cannot also complete a sign-in.
+        The codes are fresh when TOTP is the user's first second factor, and
+        none (an empty list) when the user already holds a security key or
+        passkey, whose codes cover TOTP too. The confirming code's step is
+        claimed, so it cannot also complete a sign-in.
         """
         async with self._db.transaction(conn) as tx:
+            # The user first, then the credential: the order every change to a
+            # user's second factors takes, so none of them deadlock.
+            await self.lock_user(tx, user_id)
             cur = await tx.execute(
                 sql.SQL(
                     "SELECT secret_sealed, key_id FROM {}"
@@ -220,7 +329,7 @@ class Mfa:
             )
             if await cur.fetchone() is None:
                 return None
-            codes = await self._replace_recovery_codes(tx, user_id)
+            codes = await self.issue_codes_if_none(tx, user_id)
             await record_audit(
                 AuditEvent(
                     action="warden.identity.mfa.enrolled",
@@ -260,10 +369,7 @@ class Mfa:
             sql.SQL("DELETE FROM {} WHERE user_id = %s").format(_TOTP), (user_id,)
         )
         removed = cur.rowcount == 1
-        cur = await conn.execute(
-            sql.SQL("DELETE FROM {} WHERE user_id = %s").format(_CODES), (user_id,)
-        )
-        return removed, cur.rowcount
+        return removed, await self.remove_recovery_codes(conn, user_id)
 
     # Single-use claims (call inside the transaction that issues the session)
 

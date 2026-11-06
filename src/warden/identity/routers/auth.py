@@ -16,7 +16,10 @@
 Tokens are ``{"status": "signed_in", "access_token", "token_type": "Bearer",
 "expires_in", "refresh_token", "refresh_expires_in"}``. A challenge is
 ``{"status": "mfa_required" | "mfa_enrolment_required", "challenge",
-"expires_in"}``. Every authentication failure is the same 401 response.
+"expires_in"}``; ``mfa_required`` also carries ``methods``, the kinds of
+second factor the user holds. Every authentication failure is the same 401
+response. The security key and passkey routes (``/webauthn/...``) are in
+``warden.identity.routers.webauthn`` and included here.
 """
 
 from __future__ import annotations
@@ -47,6 +50,7 @@ from warden.identity.routers.contract import (
     no_store,
 )
 from warden.identity.routers.tokens import token_body
+from warden.identity.routers.webauthn import build_webauthn_router
 
 if TYPE_CHECKING:
     from warden.identity.service import Identity
@@ -77,11 +81,13 @@ def build_auth_router(identity: Identity) -> APIRouter:
         summary="Sign in with an email address and password",
         description=(
             "Answers with a new session (`status` `signed_in`), or with a challenge when a "
-            "second factor is needed: `mfa_required` (send a TOTP code to `/totp/verify` or a "
-            "recovery code to `/recovery-code`) or `mfa_enrolment_required` (enrol through "
-            "`/totp/enrolment` under the challenge). An unknown address, a wrong password, an "
-            "`sso_only` user, a user who is not active and a throttled attempt all get the "
-            "uniform refusal, in the same time."
+            "second factor is needed: `mfa_required` (send a TOTP code to `/totp/verify`, a "
+            "security key's answer to `/webauthn/verify`, or a recovery code to "
+            "`/recovery-code`; `methods` lists the kinds the user holds) or "
+            "`mfa_enrolment_required` (enrol through `/totp/enrolment` or "
+            "`/webauthn/registration` under the challenge). An unknown address, a wrong "
+            "password, an `sso_only` user, a user who is not active and a throttled attempt all "
+            "get the uniform refusal, in the same time."
         ),
         responses={
             200: {"model": WardenSignInAnswer, "description": "Signed in, or challenged."},
@@ -98,13 +104,14 @@ def build_auth_router(identity: Identity) -> APIRouter:
         except AuthenticationRefused:
             return refusal()
         if result.challenge is not None:
-            return json_response(
-                {
-                    "status": _CHALLENGE_STATUS[result.challenge.purpose],
-                    "challenge": result.challenge.token,
-                    "expires_in": result.challenge.expires_in,
-                }
-            )
+            answer: dict[str, object] = {
+                "status": _CHALLENGE_STATUS[result.challenge.purpose],
+                "challenge": result.challenge.token,
+                "expires_in": result.challenge.expires_in,
+            }
+            if result.challenge.purpose == "verify":
+                answer["methods"] = list(result.challenge.methods)
+            return json_response(answer)
         if result.tokens is None:
             raise RuntimeError("sign-in produced neither tokens nor a challenge")
         return json_response(token_body(result.tokens))
@@ -296,4 +303,5 @@ def build_auth_router(identity: Identity) -> APIRouter:
             return json_response({"recovery_codes": codes})
         return json_response(token_body(pair, recovery_codes=codes))
 
+    router.include_router(build_webauthn_router(identity))
     return router

@@ -16,7 +16,7 @@
           "warden: sign-in"
         ],
         "summary": "Sign in with an email address and password",
-        "description": "Answers with a new session (`status` `signed_in`), or with a challenge when a second factor is needed: `mfa_required` (send a TOTP code to `/totp/verify` or a recovery code to `/recovery-code`) or `mfa_enrolment_required` (enrol through `/totp/enrolment` under the challenge). An unknown address, a wrong password, an `sso_only` user, a user who is not active and a throttled attempt all get the uniform refusal, in the same time.",
+        "description": "Answers with a new session (`status` `signed_in`), or with a challenge when a second factor is needed: `mfa_required` (send a TOTP code to `/totp/verify`, a security key's answer to `/webauthn/verify`, or a recovery code to `/recovery-code`; `methods` lists the kinds the user holds) or `mfa_enrolment_required` (enrol through `/totp/enrolment` or `/webauthn/registration` under the challenge). An unknown address, a wrong password, an `sso_only` user, a user who is not active and a throttled attempt all get the uniform refusal, in the same time.",
         "operationId": "sign_in_auth_sign_in_post",
         "requestBody": {
           "content": {
@@ -664,6 +664,750 @@
                 },
                 "example": {
                   "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/webauthn/verify/options": {
+      "post": {
+        "tags": [
+          "warden: sign-in",
+          "warden: sign-in"
+        ],
+        "summary": "Begin completing sign-in with a security key or passkey",
+        "description": "Sends the `mfa_required` challenge; answers with the options for `navigator.credentials.get()`, listing only the user's own credentials. User verification is preferred, not required. A user without a key, like every other failure, gets the uniform refusal.",
+        "operationId": "verify_options_auth_webauthn_verify_options_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "challenge": {
+                    "type": "string",
+                    "title": "Challenge",
+                    "description": "The `mfa_required` challenge."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "challenge"
+                ],
+                "title": "WebAuthnVerifyOptionsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The browser's options.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenWebAuthnOptions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/webauthn/verify": {
+      "post": {
+        "tags": [
+          "warden: sign-in",
+          "warden: sign-in"
+        ],
+        "summary": "Complete sign-in with a security key or passkey",
+        "description": "Sends the `mfa_required` challenge with the browser's answer to `navigator.credentials.get()`. The session's `amr` is `[\"pwd\", \"hwk\"]`. Each options' challenge is accepted once; a refused answer counts as a wrong code does, and too many end the challenge.",
+        "operationId": "verify_auth_webauthn_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "challenge": {
+                    "type": "string",
+                    "title": "Challenge",
+                    "description": "The `mfa_required` challenge."
+                  },
+                  "credential": {
+                    "additionalProperties": true,
+                    "type": "object",
+                    "title": "Credential",
+                    "description": "The browser's answer to `navigator.credentials.get()`, as its `toJSON()`."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "challenge",
+                  "credential"
+                ],
+                "title": "WebAuthnVerifyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSignedIn"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/webauthn/registration": {
+      "post": {
+        "tags": [
+          "warden: sign-in",
+          "warden: sign-in"
+        ],
+        "summary": "Begin registering a security key or passkey as a second factor",
+        "description": "Under an access token (bearer) for a signed-in user, or under an `mfa_enrolment_required` challenge during a forced enrolment. Answers with the options for `navigator.credentials.create()`: resident key and user verification preferred, and the user's existing credentials excluded.",
+        "operationId": "begin_registration_auth_webauthn_registration_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "challenge": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Challenge",
+                    "description": "The `mfa_enrolment_required` challenge; omit when sending a bearer token."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "title": "EnrolmentBody"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "The browser's options.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenWebAuthnOptions"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "WebAuthn is not configured, the user has as many credentials as allowed, or the user signs in only through single sign-on.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "WebAuthn is not configured"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "the credential limit is reached"
+                    }
+                  },
+                  "message 3": {
+                    "value": {
+                      "detail": "security keys are not available to this user"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/webauthn/registration/confirm": {
+      "post": {
+        "tags": [
+          "warden: sign-in",
+          "warden: sign-in"
+        ],
+        "summary": "Register a security key or passkey with the browser's answer",
+        "description": "Sends the browser's answer to `navigator.credentials.create()` and an optional nickname. Answers with the credential and, when it is the user's first second factor, fresh recovery codes, shown once (otherwise an empty list). Under a challenge (a forced enrolment) the answer is also the new session, with `amr` `[\"pwd\", \"hwk\"]`. A refused answer from a signed-in user is a 400, so a client does not take it for a sign-out.",
+        "operationId": "confirm_registration_auth_webauthn_registration_confirm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "credential": {
+                    "additionalProperties": true,
+                    "type": "object",
+                    "title": "Credential",
+                    "description": "The browser's answer to `navigator.credentials.create()`, as its `toJSON()`."
+                  },
+                  "nickname": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Nickname",
+                    "description": "1 to 64 characters without control characters."
+                  },
+                  "challenge": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Challenge",
+                    "description": "The `mfa_enrolment_required` challenge; omit when sending a bearer token."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "credential"
+                ],
+                "title": "WebAuthnRegistrationConfirmBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Registered; with a session under a challenge.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenWebAuthnRegistrationConfirmed"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The answer or the nickname was not accepted.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "credential not accepted"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "the nickname is not valid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "WebAuthn is not configured, the user has as many credentials as allowed, or the user signs in only through single sign-on.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "WebAuthn is not configured"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "the credential limit is reached"
+                    }
+                  },
+                  "message 3": {
+                    "value": {
+                      "detail": "security keys are not available to this user"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/webauthn/credentials": {
+      "get": {
+        "tags": [
+          "warden: sign-in",
+          "warden: sign-in"
+        ],
+        "summary": "List the signed-in user's security keys and passkeys",
+        "description": "Needs an access token as the bearer token. Never shows a public key.",
+        "operationId": "list_credentials_auth_webauthn_credentials_get",
+        "responses": {
+          "200": {
+            "description": "Oldest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenWebAuthnCredentialList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/webauthn/credentials/{credential_id}": {
+      "patch": {
+        "tags": [
+          "warden: sign-in",
+          "warden: sign-in"
+        ],
+        "summary": "Rename one of the signed-in user's security keys or passkeys",
+        "description": "Needs an access token as the bearer token. `nickname` null clears it. Another user's credential, or anything but a UUID, is a 404.",
+        "operationId": "rename_credential_auth_webauthn_credentials__credential_id__patch",
+        "parameters": [
+          {
+            "name": "credential_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Credential Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Renamed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenWebAuthnCredentialEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The nickname is not valid.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the nickname is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The user holds no such credential.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "nickname": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "1 to 64 characters without control characters, or null to clear it.",
+                    "title": "Nickname"
+                  }
+                },
+                "required": [
+                  "nickname"
+                ],
+                "title": "WebAuthnRenameBody",
+                "type": "object"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "warden: sign-in",
+          "warden: sign-in"
+        ],
+        "summary": "Remove one of the signed-in user's security keys or passkeys",
+        "description": "Needs an access token as the bearer token. Refused with a 409 when it is the user's last second factor and the session policy requires one; where none is required, removing the last factor removes the recovery codes too. Another user's credential, or anything but a UUID, is a 404.",
+        "operationId": "remove_credential_auth_webauthn_credentials__credential_id__delete",
+        "parameters": [
+          {
+            "name": "credential_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Credential Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The user holds no such credential.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It is the user's last second factor.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the last second factor cannot be removed while a second factor is required"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -2098,6 +2842,123 @@
         "summary": "Reset a user's TOTP enrolment",
         "description": "For a user who has lost their authenticator and their recovery codes. In one transaction it removes the TOTP enrolment (confirmed or not) and every recovery code, ends every session of the user, and records `warden.identity.mfa.reset`. The user's next password sign-in answers `mfa_enrolment_required` where the session policy requires a second factor, and they enrol again. A user with nothing enrolled is a 204 too, still audited.",
         "operationId": "reset_totp_admin_users__user_id__totp_delete",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Reset.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}/mfa": {
+      "delete": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "Reset every second factor of a user",
+        "description": "For a user who has lost their second factors. In one transaction it removes the TOTP enrolment (confirmed or not), every security key and passkey and every recovery code, ends every session of the user, and records `warden.identity.mfa.reset` with counts (`totp_removed`, `webauthn_removed`, `recovery_codes_removed`, `sessions_ended`). The user's next password sign-in answers `mfa_enrolment_required` where the session policy requires a second factor, and they enrol again. A user with nothing enrolled is a 204 too, still audited. `DELETE /users/{user_id}/totp` removes TOTP only and leaves keys.",
+        "operationId": "reset_mfa_admin_users__user_id__mfa_delete",
         "parameters": [
           {
             "name": "user_id",
@@ -5232,6 +6093,25 @@
             "type": "integer",
             "title": "Expires In",
             "description": "Seconds until the challenge expires."
+          },
+          "methods": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "totp",
+                    "webauthn"
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Methods",
+            "description": "With `mfa_required` only (absent from `mfa_enrolment_required`): the kinds of second factor the user holds, `totp` before `webauthn`. A recovery code is always accepted as well."
           }
         },
         "additionalProperties": false,
@@ -5242,7 +6122,7 @@
           "expires_in"
         ],
         "title": "WardenChallengeIssued",
-        "description": "The password was right; a second factor, or TOTP enrolment, comes next."
+        "description": "The password was right; a second factor, or enrolment in one, comes next."
       },
       "WardenDetail": {
         "properties": {
@@ -5269,7 +6149,7 @@
           }
         ],
         "title": "WardenEnrolmentConfirmed",
-        "description": "The recovery codes; under a challenge, with the new session as well."
+        "description": "The recovery codes; under a challenge, with the new session as well.\n\nThe codes are fresh when TOTP is the user's first second factor; when\nthe user already holds a security key or passkey the list is empty, and\nthe codes they hold cover TOTP too."
       },
       "WardenForbidden": {
         "properties": {
@@ -5714,6 +6594,64 @@
         "title": "WardenSignedInAfterEnrolment",
         "description": "A new session after a forced enrolment, with the recovery codes, shown once."
       },
+      "WardenSignedInAfterWebAuthnRegistration": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "signed_in",
+            "title": "Status"
+          },
+          "access_token": {
+            "type": "string",
+            "title": "Access Token",
+            "description": "EdDSA-signed access token; send as `Bearer`."
+          },
+          "token_type": {
+            "type": "string",
+            "const": "Bearer",
+            "title": "Token Type"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In",
+            "description": "Seconds until the access token expires."
+          },
+          "refresh_token": {
+            "type": "string",
+            "title": "Refresh Token",
+            "description": "Single-use; replaced on every refresh."
+          },
+          "refresh_expires_in": {
+            "type": "integer",
+            "title": "Refresh Expires In",
+            "description": "Seconds until the refresh token expires."
+          },
+          "recovery_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Recovery Codes"
+          },
+          "credential": {
+            "$ref": "#/components/schemas/WardenWebAuthnCredential"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "access_token",
+          "token_type",
+          "expires_in",
+          "refresh_token",
+          "refresh_expires_in",
+          "recovery_codes",
+          "credential"
+        ],
+        "title": "WardenSignedInAfterWebAuthnRegistration",
+        "description": "A new session after a forced enrolment completed with a key."
+      },
       "WardenSsoCheck": {
         "properties": {
           "name": {
@@ -5981,13 +6919,19 @@
             },
             "type": "array",
             "title": "Roles"
+          },
+          "webauthn_credentials": {
+            "type": "integer",
+            "title": "Webauthn Credentials",
+            "description": "How many security keys and passkeys the user holds."
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
           "user",
-          "roles"
+          "roles",
+          "webauthn_credentials"
         ],
         "title": "WardenUserDetail"
       },
@@ -6033,6 +6977,167 @@
           "users"
         ],
         "title": "WardenUserList"
+      },
+      "WardenWebAuthnCredential": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "warden's UUID for the credential (not the authenticator's id)."
+          },
+          "nickname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nickname"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "aaguid": {
+            "type": "string",
+            "title": "Aaguid",
+            "description": "The authenticator model's AAGUID; all zeros when unknown."
+          },
+          "backup_eligible": {
+            "type": "boolean",
+            "title": "Backup Eligible",
+            "description": "Whether the credential may be synced (a passkey)."
+          },
+          "backup_state": {
+            "type": "boolean",
+            "title": "Backup State",
+            "description": "Whether it was backed up when last used."
+          },
+          "discoverable": {
+            "type": "boolean",
+            "title": "Discoverable",
+            "description": "Whether it can be used without naming the user."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "nickname",
+          "created_at",
+          "last_used_at",
+          "aaguid",
+          "backup_eligible",
+          "backup_state",
+          "discoverable"
+        ],
+        "title": "WardenWebAuthnCredential",
+        "description": "A security key or passkey, as its owner sees it. Never the public key."
+      },
+      "WardenWebAuthnCredentialEnvelope": {
+        "properties": {
+          "credential": {
+            "$ref": "#/components/schemas/WardenWebAuthnCredential"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "credential"
+        ],
+        "title": "WardenWebAuthnCredentialEnvelope"
+      },
+      "WardenWebAuthnCredentialList": {
+        "properties": {
+          "credentials": {
+            "items": {
+              "$ref": "#/components/schemas/WardenWebAuthnCredential"
+            },
+            "type": "array",
+            "title": "Credentials",
+            "description": "Oldest first."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "credentials"
+        ],
+        "title": "WardenWebAuthnCredentialList"
+      },
+      "WardenWebAuthnOptions": {
+        "properties": {
+          "public_key": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Public Key",
+            "description": "The `publicKey` member as WebAuthn's JSON form (binary values base64url): pass it to `PublicKeyCredential.parseCreationOptionsFromJSON` or `parseRequestOptionsFromJSON`."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At",
+            "description": "When the ceremony's challenge stops being usable."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "public_key",
+          "expires_at"
+        ],
+        "title": "WardenWebAuthnOptions",
+        "description": "What the browser passes to `navigator.credentials.create()` or `get()`."
+      },
+      "WardenWebAuthnRegistered": {
+        "properties": {
+          "credential": {
+            "$ref": "#/components/schemas/WardenWebAuthnCredential"
+          },
+          "recovery_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Recovery Codes",
+            "description": "Fresh codes, shown only now, when the key is the user's first second factor; otherwise empty."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "credential",
+          "recovery_codes"
+        ],
+        "title": "WardenWebAuthnRegistered",
+        "description": "A key registered by a signed-in user."
+      },
+      "WardenWebAuthnRegistrationConfirmed": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/WardenWebAuthnRegistered"
+          },
+          {
+            "$ref": "#/components/schemas/WardenSignedInAfterWebAuthnRegistration"
+          }
+        ],
+        "title": "WardenWebAuthnRegistrationConfirmed",
+        "description": "The key and the recovery codes; under a challenge, with the new session as well."
       }
     }
   }
