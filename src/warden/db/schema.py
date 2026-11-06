@@ -74,6 +74,16 @@ SSO_HANDOFF_CODES = "sso_handoff_codes"
 
 SSO_TABLES = frozenset({SSO_IDENTITIES, SSO_LOGIN_TRANSACTIONS, SSO_HANDOFF_CODES})
 
+# WebAuthn's tables (passkeys and security keys).
+# Each credential's public key, signature counter and flags, owned by one user.
+WEBAUTHN_CREDENTIALS = "webauthn_credentials"
+# Each user's WebAuthn user handle: 64 random bytes, never derived from the user id.
+WEBAUTHN_USER_HANDLES = "webauthn_user_handles"
+# Registration and sign-in challenges, held as hashes, each usable once.
+WEBAUTHN_CHALLENGES = "webauthn_challenges"
+
+WEBAUTHN_TABLES = frozenset({WEBAUTHN_CREDENTIALS, WEBAUTHN_USER_HANDLES, WEBAUTHN_CHALLENGES})
+
 # Transaction-scoped advisory lock taken by every migration run, so replicas
 # that start together apply the chain one at a time. ASCII "warden" + 0x0001.
 MIGRATION_LOCK_KEY = 0x7761_7264_656E_0001

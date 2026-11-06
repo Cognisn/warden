@@ -16,6 +16,7 @@ from warden.db import (
     LIFECYCLE_TABLES,
     SCHEMA,
     SSO_TABLES,
+    WEBAUTHN_TABLES,
     current_revision,
     downgrade,
     heads,
@@ -27,7 +28,7 @@ pytestmark = pytest.mark.db
 WORKER = Path(__file__).with_name("migrate_worker.py")
 BASELINE = "5c2f9a1e7b04"
 BASELINE_TABLES = {"alembic_version", "audit_events", "signing_keys", "settings"}
-HEAD_TABLES = BASELINE_TABLES | IDENTITY_TABLES | LIFECYCLE_TABLES | SSO_TABLES
+HEAD_TABLES = BASELINE_TABLES | IDENTITY_TABLES | LIFECYCLE_TABLES | SSO_TABLES | WEBAUTHN_TABLES
 
 
 def _tables(dsn: str, schema: str) -> set[str]:

@@ -114,6 +114,9 @@ def test_constraints(migrated_dsn: str, table: str, columns: dict[str, object]) 
 
 def test_downgrade_removes_only_the_sso_tables(dsn: str) -> None:
     migrate(dsn)
+    head = _tables(dsn)
+    # Later migrations may add tables of their own; take them off first.
+    downgrade(dsn, SSO_REVISION)
     before = _tables(dsn)
     previous = ScriptDirectory.from_config(_config()).get_revision(SSO_REVISION).down_revision
     assert isinstance(previous, str)
@@ -121,4 +124,4 @@ def test_downgrade_removes_only_the_sso_tables(dsn: str) -> None:
     assert current_revision(dsn) == previous
     assert _tables(dsn) == before - SSO_TABLES
     migrate(dsn)
-    assert _tables(dsn) == before
+    assert _tables(dsn) == head
