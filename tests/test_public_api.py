@@ -94,6 +94,7 @@ SNAPSHOT: dict[str, list[str]] = {
         "SsoConfig",
         "SyslogConfig",
         "WardenConfig",
+        "WebAuthnConfig",
         "load_config",
         "parse_config",
     ],
