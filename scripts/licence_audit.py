@@ -42,6 +42,12 @@ EXCEPTIONS: dict[str, str] = {
         " the licence policy of 27 October 2026; used unmodified as a separately installed"
         " package"
     ),
+    "fido2": (
+        "MPL-2.0: fido2 itself is BSD-2-Clause, but it bundles the public suffix list"
+        " (public_suffix_list.dat, MPL-2.0), which warden's WebAuthn relying-party checks"
+        " read; agreed on 6 November 2026 (ruling P2); used unmodified as a separately"
+        " installed package"
+    ),
 }
 
 _STRONG = re.compile(
