@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b9] - 2026-11-06
+
+Ninth beta: the groundwork for passkeys and security keys (WebAuthn), as a Python service with its configuration and schema. No route uses it yet, and warden's behaviour is otherwise unchanged.
+
 ### Added
 
 - A runtime dependency for passkeys and security keys (WebAuthn): `fido2` (`>=2.2.1,<3`, Yubico, BSD-2-Clause). It bundles the public suffix list under MPL-2.0, so `scripts/licence_audit.py` names it as a reviewed exception with its reason, as it does `certifi`. Its only dependency, `cryptography`, was already one of warden's, and warden imports none of its device (HID, NFC or smart card) modules.
