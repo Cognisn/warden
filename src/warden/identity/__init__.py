@@ -1,6 +1,6 @@
 """warden's identity subsystem: users, sign-in, sessions, roles and permissions,
-the user lifecycle (invitations, password reset, mail, API keys, pruning) and
-OIDC single sign-on.
+the user lifecycle (invitations, password reset, mail, API keys, pruning),
+OIDC single sign-on, and passkeys and security keys (WebAuthn).
 
 A product constructs one ``Identity``, installs it on its FastAPI app, and
 mounts ``identity.auth_router()`` (and the lifecycle, administration and
@@ -65,6 +65,17 @@ from warden.identity.sso.service import (
 from warden.identity.sso.settings import SsoSettings, SsoSettingsError, SsoSettingsStore
 from warden.identity.tokens import TokenPair
 from warden.identity.users import SignInMethod, User, UserError, Users, UserStatus
+from warden.identity.webauthn import (
+    WebAuthn,
+    WebAuthnAssertion,
+    WebAuthnCredential,
+    WebAuthnCredentials,
+    WebAuthnError,
+    WebAuthnOptions,
+    WebAuthnPurpose,
+    WebAuthnRefusal,
+    WebAuthnRegistration,
+)
 
 __all__ = [
     "DEFAULT_TEMPLATES",
@@ -127,6 +138,15 @@ __all__ = [
     "Users",
     "Verification",
     "VerifiedIdentity",
+    "WebAuthn",
+    "WebAuthnAssertion",
+    "WebAuthnCredential",
+    "WebAuthnCredentials",
+    "WebAuthnError",
+    "WebAuthnOptions",
+    "WebAuthnPurpose",
+    "WebAuthnRefusal",
+    "WebAuthnRegistration",
     "new_totp_key",
     "require_permission",
     "require_user",

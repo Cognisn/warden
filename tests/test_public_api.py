@@ -197,6 +197,15 @@ SNAPSHOT: dict[str, list[str]] = {
         "Users",
         "Verification",
         "VerifiedIdentity",
+        "WebAuthn",
+        "WebAuthnAssertion",
+        "WebAuthnCredential",
+        "WebAuthnCredentials",
+        "WebAuthnError",
+        "WebAuthnOptions",
+        "WebAuthnPurpose",
+        "WebAuthnRefusal",
+        "WebAuthnRegistration",
         "new_totp_key",
         "require_permission",
         "require_user",
@@ -258,10 +267,10 @@ def test_identity_does_not_re_export_the_sso_presets() -> None:
 
 def test_identity_exports_the_objects_its_modules_define() -> None:
     from warden import identity
-    from warden.identity import apikeys, invitations, mail, prune, reset
+    from warden.identity import apikeys, invitations, mail, prune, reset, webauthn
     from warden.identity.sso import errors, service, settings
 
-    for module in (apikeys, invitations, mail, prune, reset, errors, service, settings):
+    for module in (apikeys, invitations, mail, prune, reset, errors, service, settings, webauthn):
         for exported in getattr(module, "__all__", []):
             if exported in identity.__all__:
                 assert getattr(identity, exported) is getattr(module, exported), exported
