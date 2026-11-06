@@ -51,9 +51,13 @@ def _findings() -> list[str]:
                         findings.append(f"{where}: check_hostname assigned a non-True value")
                     if target.attr == "verify_mode" and not _is_cert_required(value):
                         findings.append(f"{where}: verify_mode assigned other than CERT_REQUIRED")
-            elif isinstance(node, ast.keyword) and node.arg in {"check_hostname", "verify"}:
-                if isinstance(node.value, ast.Constant) and not node.value.value:
-                    findings.append(f"{where}: {node.arg}= set to a false value")
+            elif (
+                isinstance(node, ast.keyword)
+                and node.arg in {"check_hostname", "verify"}
+                and isinstance(node.value, ast.Constant)
+                and not node.value.value
+            ):
+                findings.append(f"{where}: {node.arg}= set to a false value")
     return findings
 
 

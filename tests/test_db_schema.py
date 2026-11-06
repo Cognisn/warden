@@ -119,8 +119,19 @@ def test_lifecycle_and_sso_names_are_importable_from_warden_db() -> None:
     assert db.SSO_SETTINGS_LOCK_KEY == 0x7761_7264_656E_0201
 
 
+def test_webauthn_names_are_importable_from_warden_db() -> None:
+    assert db.WEBAUTHN_CREDENTIALS == "webauthn_credentials"
+    assert db.WEBAUTHN_USER_HANDLES == "webauthn_user_handles"
+    assert db.WEBAUTHN_CHALLENGES == "webauthn_challenges"
+    assert {
+        "webauthn_credentials",
+        "webauthn_user_handles",
+        "webauthn_challenges",
+    } == db.WEBAUTHN_TABLES
+
+
 def test_table_sets_are_disjoint() -> None:
-    sets = [db.IDENTITY_TABLES, db.LIFECYCLE_TABLES, db.SSO_TABLES]
+    sets = [db.IDENTITY_TABLES, db.LIFECYCLE_TABLES, db.SSO_TABLES, db.WEBAUTHN_TABLES]
     assert sum(len(t) for t in sets) == len(frozenset().union(*sets))
 
 

@@ -28,6 +28,8 @@ from collections.abc import Iterable, Mapping
 from typing import Annotated, Any, Literal, Protocol, Self
 from urllib.parse import quote, urlsplit
 
+from cryptography import x509
+from fido2.rpid import verify_rp_id
 from pydantic import (
     BaseModel,
     BeforeValidator,
@@ -56,6 +58,7 @@ __all__ = [
     "SsoConfig",
     "SyslogConfig",
     "WardenConfig",
+    "WebAuthnConfig",
     "load_config",
     "parse_config",
 ]
@@ -73,6 +76,12 @@ _EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 _SCOPE = re.compile(r"[!#-\[\]-~]+")
 _PACKAGE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
 _API_KEY_PREFIX = re.compile(r"[a-z0-9_]{1,16}")
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+_ORIGIN_SHAPE = (
+    "each entry must be an exact origin such as https://login.example.com,"
+    " with a domain name and no path, trailing slash or wildcard"
+)
 
 # RFC 5612: the enterprise number reserved for documentation. Never shipped.
 DOCUMENTATION_PEN = "32473"
@@ -549,6 +558,9 @@ class HttpConfig(_Section):
     """Template for the product's reset-password screen; must contain ``{token}``."""
     sso_completion_link: str | None = None
     """Where the browser lands after single sign-on; no placeholders."""
+    passkey_registration_link: str | None = None
+    """Template for the product's screen that registers a passkey from an
+    administrator's emailed link; must contain ``{token}``."""
 
     @field_validator("public_base_url")
     @classmethod
@@ -565,6 +577,13 @@ class HttpConfig(_Section):
     @field_validator("accept_invitation_link", "reset_password_link")
     @classmethod
     def _token_template_shape(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _check_template(value, placeholders=frozenset({"token"}))
+
+    @field_validator("passkey_registration_link")
+    @classmethod
+    def _passkey_link_shape(cls, value: str | None) -> str | None:
         if value is None:
             return None
         return _check_template(value, placeholders=frozenset({"token"}))
@@ -609,6 +628,158 @@ class HttpConfig(_Section):
         return self.url_for(filled) if filled.startswith("/") else filled
 
 
+def _is_domain(host: str) -> bool:
+    """A lower-case DNS name, or ``localhost``; never an IP address."""
+    return host == "localhost" or (len(host) <= 253 and _DOMAIN.fullmatch(host) is not None)
+
+
+def _serialise_origin(scheme: str, host: str, port: int | None) -> str:
+    """An origin as a browser serialises it: no path, no default port."""
+    shown = f"[{host}]" if ":" in host else host
+    suffix = "" if port is None or port == _DEFAULT_PORTS.get(scheme) else f":{port}"
+    return f"{scheme}://{shown}{suffix}"
+
+
+def _base_origin(url: str) -> str:
+    parts = urlsplit(url)
+    return _serialise_origin(parts.scheme.lower(), (parts.hostname or "").lower(), parts.port)
+
+
+def _check_origin(value: str) -> str:
+    """An exact origin, ``https://host[:port]``; plain http only for localhost."""
+    if _PRINTABLE.fullmatch(value) is None:
+        raise ValueError(_ORIGIN_SHAPE)
+    parts = urlsplit(value)
+    try:
+        port = parts.port
+    except ValueError:
+        raise ValueError(_ORIGIN_SHAPE) from None
+    host = parts.hostname or ""
+    if parts.scheme not in ("http", "https") or not _is_domain(host):
+        raise ValueError(_ORIGIN_SHAPE)
+    if value != _serialise_origin(parts.scheme, host, port):
+        raise ValueError(_ORIGIN_SHAPE)
+    if parts.scheme == "http" and host != "localhost" and not host.endswith(".localhost"):
+        raise ValueError("each entry must use https unless the host is localhost")
+    return value
+
+
+class WebAuthnConfig(_Section):
+    """Passkeys and security keys (WebAuthn): the relying party and ceremony limits.
+
+    With nothing set, the relying party is the host of ``http.public_base_url``
+    and the only allowed origin is that URL's origin. User verification is not
+    a setting: a ceremony prefers it for a second factor and requires it for
+    passkey sign-in (ruling P7).
+    """
+
+    rp_id: str | None = None
+    """Relying party id; None uses the host of ``http.public_base_url``. It must
+    be the host of every allowed origin or a registrable suffix of it."""
+    rp_name: str | None = Field(default=None, min_length=1, max_length=64)
+    """Name an authenticator shows; None uses the relying party id."""
+    allowed_origins: Annotated[tuple[str, ...], BeforeValidator(_split_list)] = ()
+    """Origins a ceremony response may come from, compared exactly; empty uses
+    the origin of ``http.public_base_url``. No wildcards."""
+    challenge_ttl_seconds: int = Field(default=300, ge=30, le=1800)
+    """How long a registration or sign-in challenge stays usable."""
+    client_timeout_seconds: int = Field(default=240, ge=30, le=1800)
+    """The timeout hint sent to the browser; at most ``challenge_ttl_seconds``."""
+    max_credentials_per_user: int = Field(default=10, ge=1, le=100)
+    """Most passkeys and security keys one user may register."""
+    attestation_roots: str | None = None
+    """Trusted attestation roots as PEM certificates, usually
+    ``secret://<name>``. Unset or empty accepts any authenticator; set, only
+    authenticators whose attestation chains to one of them may register
+    (ruling P3). warden never fetches attestation metadata."""
+
+    @field_validator("rp_id")
+    @classmethod
+    def _rp_id_shape(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        lowered = value.lower()
+        if not _is_domain(lowered):
+            raise ValueError("must be a domain name such as example.com, not an IP address")
+        return lowered
+
+    @field_validator("rp_name")
+    @classmethod
+    def _rp_name_shape(cls, value: str | None) -> str | None:
+        if value is not None and any(ch < " " or ch == "\x7f" for ch in value):
+            raise ValueError("must not contain control characters")
+        return value
+
+    @field_validator("allowed_origins")
+    @classmethod
+    def _origins_shape(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for origin in value:
+            _check_origin(origin)
+        return value
+
+    @field_validator("attestation_roots")
+    @classmethod
+    def _roots_shape(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        try:
+            certificates = x509.load_pem_x509_certificates(value.encode("ascii"))
+        except (ValueError, UnicodeEncodeError):
+            raise ValueError("must hold one or more PEM certificates") from None
+        for certificate in certificates:
+            try:
+                constraints = certificate.extensions.get_extension_for_class(x509.BasicConstraints)
+            except x509.ExtensionNotFound:
+                raise ValueError("each certificate must be a CA certificate") from None
+            if not constraints.value.ca:
+                raise ValueError("each certificate must be a CA certificate")
+        return value
+
+    @model_validator(mode="after")
+    def _timeout_within_lifetime(self) -> Self:
+        if self.client_timeout_seconds > self.challenge_ttl_seconds:
+            raise _FieldProblems(
+                [(("client_timeout_seconds",), "must not exceed challenge_ttl_seconds")]
+            )
+        return self
+
+    def relying_party_id(self, http: HttpConfig) -> str | None:
+        """The relying party id, or None when WebAuthn is unavailable.
+
+        It is unavailable only when nothing is set and the base URL's host is
+        an IP address, which browsers refuse as a relying party id.
+        """
+        if self.rp_id is not None:
+            return self.rp_id
+        host = (urlsplit(http.public_base_url).hostname or "").lower()
+        return host if _is_domain(host) else None
+
+    def relying_party_name(self, http: HttpConfig) -> str:
+        if self.rp_name is not None:
+            return self.rp_name
+        return self.relying_party_id(http) or (urlsplit(http.public_base_url).hostname or "")
+
+    def origins(self, http: HttpConfig) -> tuple[str, ...]:
+        """The origins a ceremony response may come from, compared exactly."""
+        return self.allowed_origins or (_base_origin(http.public_base_url),)
+
+    def _relying_party_problems(self, http: HttpConfig) -> list[tuple[tuple[str, ...], str]]:
+        """Whether the relying party id covers every origin (fido2's public suffix rules)."""
+        explicit = self.rp_id is not None or bool(self.allowed_origins)
+        rp_id = self.relying_party_id(http)
+        if rp_id is None:
+            if not explicit:
+                return []
+            return [(("rp_id",), "is required when http.public_base_url's host is not a domain")]
+        if all(verify_rp_id(rp_id, origin) for origin in self.origins(http)):
+            return []
+        if self.rp_id is not None:
+            return [
+                (("rp_id",), "must be every allowed origin's host or a registrable suffix of it")
+            ]
+        return [(("allowed_origins",), "each origin's host must be rp_id or a subdomain of it")]
+
+
 class WardenConfig(_Section):
     """warden's whole configuration: one object, validated once at start-up."""
 
@@ -620,6 +791,7 @@ class WardenConfig(_Section):
     identity: IdentityConfig = IdentityConfig()
     sso: SsoConfig = SsoConfig()
     mail: MailConfig = MailConfig()
+    webauthn: WebAuthnConfig = WebAuthnConfig()
 
     @model_validator(mode="after")
     def _cross_section(self) -> Self:
@@ -642,6 +814,8 @@ class WardenConfig(_Section):
             for name in ("host", "port"):
                 if getattr(self.syslog, name) is None:
                     problems.append((("syslog", name), "is required while syslog is enabled"))
+        for path, reason in self.webauthn._relying_party_problems(self.http):
+            problems.append((("webauthn", *path), reason))
         if problems:
             raise _FieldProblems(problems)
         return self

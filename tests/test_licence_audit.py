@@ -141,13 +141,39 @@ def test_listed_exceptions_pass_with_their_reason() -> None:
     assert [p.name for p in report.excepted] == ["psycopg"]
 
 
-def test_the_named_exceptions_are_psycopg_and_certifi_with_their_reasons() -> None:
-    assert set(audit.EXCEPTIONS) == {"psycopg", "certifi"}
+def test_the_named_exceptions_are_psycopg_certifi_and_fido2_with_their_reasons() -> None:
+    assert set(audit.EXCEPTIONS) == {"psycopg", "certifi", "fido2"}
     assert "LGPL-3.0" in audit.EXCEPTIONS["psycopg"]
     assert "MPL-2.0" in audit.EXCEPTIONS["certifi"]
     assert "httpx" in audit.EXCEPTIONS["certifi"]
+    assert "MPL-2.0" in audit.EXCEPTIONS["fido2"]
+    assert "public suffix list" in audit.EXCEPTIONS["fido2"]
     for reason in audit.EXCEPTIONS.values():
         assert "unmodified" in reason and "separately installed" in reason
+
+
+def test_fido2s_declared_licences_need_the_named_exception() -> None:
+    # fido2 is BSD-2-Clause, but it bundles the public suffix list under
+    # MPL-2.0 and declares that licence too, so the audit sees weak copyleft.
+    declared = [
+        "",
+        "Copyright (c) 2018 Yubico AB",
+        "License :: OSI Approved :: BSD License",
+        "License :: OSI Approved :: Apache Software License",
+        "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)",
+    ]
+    assert audit.classify(declared) == "weak copyleft"
+    packages = {
+        "root": _pkg("root", ["MIT"], ["fido2"]),
+        "fido2": _pkg("fido2", declared, ["cryptography (>=2.6,!=35,<52)"]),
+        "cryptography": _pkg("cryptography", ["Apache-2.0 OR BSD-3-Clause"]),
+    }
+    assert [
+        p.name for p in audit.audit("root", packages.__getitem__, exceptions={}).violations
+    ] == ["fido2"]
+    report = audit.audit("root", packages.__getitem__)
+    assert report.violations == []
+    assert [p.name for p in report.excepted] == ["fido2"]
 
 
 def test_both_named_exceptions_pass() -> None:
@@ -167,3 +193,5 @@ def test_the_real_runtime_tree_passes_with_only_the_agreed_exception() -> None:
     assert report.violations == []
     assert {p.name for p in report.excepted} <= set(audit.EXCEPTIONS)
     assert "cognisn-konfig" in {p.name for p in report.checked}
+    # fido2 is a runtime dependency, and the audit sees its bundled MPL-2.0 file.
+    assert "fido2" in {p.name for p in report.excepted}

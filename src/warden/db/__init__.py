@@ -31,6 +31,10 @@ from warden.db.schema import (
     SYSLOG_CURSOR_SETTING,
     SYSLOG_FORWARDER_LOCK_KEY,
     VERSION_TABLE,
+    WEBAUTHN_CHALLENGES,
+    WEBAUTHN_CREDENTIALS,
+    WEBAUTHN_TABLES,
+    WEBAUTHN_USER_HANDLES,
     table,
 )
 
@@ -59,6 +63,10 @@ __all__ = [
     "SYSLOG_CURSOR_SETTING",
     "SYSLOG_FORWARDER_LOCK_KEY",
     "VERSION_TABLE",
+    "WEBAUTHN_CHALLENGES",
+    "WEBAUTHN_CREDENTIALS",
+    "WEBAUTHN_TABLES",
+    "WEBAUTHN_USER_HANDLES",
     "ConnectionSource",
     "Database",
     "current_revision",
