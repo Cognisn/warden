@@ -1,0 +1,5 @@
+# Local to each machine: interpreter path, scan root, extraction cache and token costs.
+.graphify_python
+.graphify_root
+cache/
+cost.json
