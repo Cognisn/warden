@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>warden WebAuthn live check</title>
+  <script type="module" src="/ceremony.js"></script>
+</head>
+<body>
+  <h1>warden WebAuthn live check</h1>
+  <p>A test page for warden's passkey and security key routes. It holds no
+  script of its own; everything it does is in ceremony.js.</p>
+  <form id="fields">
+    <p><label>Email <input id="email" type="email" autocomplete="username webauthn"></label></p>
+    <p><label>Password <input id="password" type="password" autocomplete="current-password"></label></p>
+    <p><label>Nickname <input id="nickname" type="text"></label></p>
+  </form>
+  <p>
+    <button type="button" id="sign-in">Sign in with a password</button>
+    <button type="button" id="verify-key">Use my security key</button>
+    <button type="button" id="register-key">Add a security key or passkey</button>
+    <button type="button" id="passkey-sign-in">Sign in with a passkey</button>
+    <button type="button" id="accept-invitation">Accept the invitation with a passkey</button>
+    <button type="button" id="register-from-link">Register a passkey from the link</button>
+  </p>
+  <output for="fields"><pre id="outcome" data-seq="0"></pre></output>
+</body>
+</html>
