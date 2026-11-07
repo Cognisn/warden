@@ -6,7 +6,7 @@ import { action, card, field, form, h, input, json, outcome, select, status, tab
 import { gap } from "./gaps.js";
 
 const STATUSES = ["active", "suspended", "deactivated", "invited"];
-const METHODS = ["password_and_sso", "sso_only"];
+const METHODS = ["password_and_sso", "sso_only", "passkey_only"];
 
 function chosen(el, value) {
   el.value = value;
@@ -55,7 +55,7 @@ export async function usersScreen(main) {
       detail.replaceChildren(outcome(answer));
       return;
     }
-    const { user, roles } = answer.data;
+    const { user, roles, webauthn_credentials: keys } = answer.data;
     const out = h("div", {});
     const after = async (result, message) => {
       out.replaceChildren(outcome(result, message));
@@ -72,15 +72,46 @@ export async function usersScreen(main) {
         form(
           "inline",
           [field("Sign-in method", chosen(select("sign_in_method", METHODS.map((m) => [m])), user.sign_in_method)), h("button", {}, "Set method")],
-          async (values) => after(await call("POST", `${admin}/users/${id}/sign-in-method`, { body: values }), "method set"),
+          async (values) => {
+            const result = await call("POST", `${admin}/users/${id}/sign-in-method`, { body: values });
+            await after(result, "method set");
+            if (result.ok && result.data.has_passkey === false) {
+              out.prepend(status("info", "This user holds no passkey, so they cannot sign in yet: send them a passkey registration link."));
+            }
+            return null;
+          },
         ),
-        h("p", {}, action("Send a password reset link", async () => outcome(await call("POST", `${admin}/users/${id}/password-reset`), "sent; see the outbox"), out, "quiet")),
+        h("p", { class: "muted" }, `Security keys and passkeys held: ${keys}.`),
+        h(
+          "p",
+          {},
+          action("Send a password reset link", async () => outcome(await call("POST", `${admin}/users/${id}/password-reset`), "sent; see the outbox"), out, "quiet"),
+          " ",
+          action("Send a passkey registration link", async () => outcome(await call("POST", `${admin}/users/${id}/passkey-registration`), "sent; see the outbox"), out, "quiet"),
+        ),
+        h(
+          "p",
+          {},
+          action(
+            "Reset second factors",
+            async () => {
+              const result = await call("DELETE", `${admin}/users/${id}/mfa`);
+              await show(id);
+              detail.prepend(outcome(result, "every second factor removed; the user's sessions have ended"));
+              return null;
+            },
+            out,
+            "danger",
+          ),
+          " ",
+          h("span", { class: "muted" }, "Removes the authenticator, every security key and passkey and every recovery code, and ends the user's sessions. A passkey-only user then needs a registration link."),
+        ),
         h(
           "p",
           {},
           action("Reset TOTP", async () => outcome(await call("DELETE", `${admin}/users/${id}/totp`), "TOTP reset; the user enrols again at their next sign-in"), out, "danger"),
           " ",
-          h("span", { class: "muted" }, "For a user who has lost their authenticator and their recovery codes: removes both and ends the user's sessions."),
+          h("span", { class: "muted" }, "For a user who has lost their authenticator and their recovery codes: removes both and ends the user's sessions. Security keys and passkeys stay."),
         ),
         h("h4", {}, "Roles"),
         roles.length === 0
@@ -129,7 +160,7 @@ export async function usersScreen(main) {
             return null;
           },
         ),
-        h("p", { class: "muted" }, "Removing the last active administrator's role, or suspending them, is refused with 409."),
+        h("p", { class: "muted" }, "Removing the last active administrator's role, or suspending them, is refused with 409. So is moving a user who holds security keys or passkeys to sso_only: reset their second factors first."),
         out,
       ),
     );
@@ -216,7 +247,11 @@ export async function invitationsScreen(main) {
 
   main.replaceChildren(
     h("h2", {}, "Invitations"),
-    card("Invite someone", invite, h("p", { class: "muted" }, "Choose sso_only to make the invitee accept through single sign-on.")),
+    card(
+      "Invite someone",
+      invite,
+      h("p", { class: "muted" }, "Choose sso_only to make the invitee accept through single sign-on, or passkey_only to make them accept by registering a passkey (the link opens /accept, where they choose With a passkey)."),
+    ),
     card("Pending", listArea, out),
   );
   listArea.replaceChildren(await load());

@@ -27,6 +27,11 @@ warden:
     accept_invitation_link: /accept?t={token}
     reset_password_link: /reset?t={token}
     sso_completion_link: /signed-in
+    # The screen that registers a passkey from an administrator's emailed link.
+    passkey_registration_link: /passkey?t={token}
+  # Passkeys and security keys need no settings here: on localhost the relying
+  # party id is localhost and the only origin is public_base_url's. See
+  # README.md, "Passkeys and security keys", to accept only YubiKeys.
   identity:
     require_mfa: true
     totp_issuer: warden sample console

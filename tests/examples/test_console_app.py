@@ -12,46 +12,11 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
-from console_support import PASSWORD
+from console_support import PASSWORD, assert_strict_csp, bearer, make_user, sign_in
 
 pytestmark = pytest.mark.db
 
 STATIC = Path(__file__).resolve().parents[2] / "examples" / "console" / "static"
-
-
-async def make_user(console: Any, email: str, *roles: str) -> Any:
-    user = await console.identity.users.create(email, actor="test", password=PASSWORD)
-    for role in roles:
-        await console.identity.roles.assign(user.id, role, actor="test")
-    return user
-
-
-async def sign_in(client: httpx.AsyncClient, email: str, password: str = PASSWORD) -> str:
-    answer = await client.post("/auth/sign-in", json={"email": email, "password": password})
-    assert answer.status_code == 200, answer.text
-    body = answer.json()
-    assert body["status"] == "signed_in"
-    return str(body["access_token"])
-
-
-def bearer(token: str) -> dict[str, str]:
-    return {"authorization": f"Bearer {token}"}
-
-
-def assert_strict_csp(response: httpx.Response) -> None:
-    policy = response.headers.get("content-security-policy")
-    assert policy, f"no Content Security Policy on {response.request.url}"
-    directives = {
-        part.split()[0]: part.split()[1:] for part in (p.strip() for p in policy.split(";")) if part
-    }
-    assert directives["default-src"] == ["'none'"]
-    assert directives["script-src"] == ["'self'"]
-    assert directives["style-src"] == ["'self'"]
-    assert directives["frame-ancestors"] == ["'none'"]
-    assert directives["base-uri"] == ["'none'"]
-    assert directives["object-src"] == ["'none'"]
-    assert "unsafe" not in policy
-    assert response.headers.get("x-content-type-options") == "nosniff"
 
 
 # Mounting

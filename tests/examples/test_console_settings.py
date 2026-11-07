@@ -53,3 +53,35 @@ def test_init_seeds_the_secrets_warden_needs(tmp_path: Path) -> None:
     first = loaded.secrets.get(TOTP_KEY_SECRET)
     seed_secrets(loaded)
     assert loaded.secrets.get(TOTP_KEY_SECRET) == first
+
+
+def test_the_example_configuration_has_the_passkey_registration_link(tmp_path: Path) -> None:
+    from examples.console.app import PAGES
+    from examples.console.settings import load_settings, write_config
+
+    config = load_settings(write_config(tmp_path, PORTS)).config
+    link = config.http.passkey_registration_link
+    assert link == "/passkey?t={token}"
+    assert link.split("?")[0] in PAGES
+    # On localhost the relying party is localhost and the only origin is the console's.
+    assert config.webauthn.relying_party_id(config.http) == "localhost"
+    assert config.webauthn.origins(config.http) == ("http://localhost:8040",)
+
+
+def test_attestation_roots_added_to_the_configuration_load(tmp_path: Path) -> None:
+    """README, "Only YubiKeys": a root certificate pasted under warden.webauthn."""
+    from console_support import soft_authenticator
+
+    from examples.console.settings import load_settings, write_config
+
+    root = soft_authenticator().TestCa.create("Example").root_pem
+    path = write_config(tmp_path, PORTS)
+    block = "".join(f"      {line}\n" for line in root.strip().splitlines())
+    text = path.read_text(encoding="utf-8").replace(
+        "\nwarden:\n", f"\nwarden:\n  webauthn:\n    attestation_roots: |\n{block}", 1
+    )
+    path.write_text(text, encoding="utf-8", newline="\n")
+
+    config = load_settings(path).config
+    assert config.webauthn.attestation_roots is not None
+    assert config.webauthn.attestation_roots.strip() == root.strip()

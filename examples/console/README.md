@@ -18,7 +18,7 @@ How a product integrates warden, using only warden's public surface (names a war
 | `console_routes.py` | The sample's own routes for what warden leaves to the product (see "Gaps"). |
 | `bootstrap.py` | Creates the first administrator: warden's CLI cannot, because the roles are the product's. |
 | `security.py` | A strict Content Security Policy on every answer: scripts and styles only from the app, no inline script or style. |
-| `static/` | The console: plain HTML, CSS and JavaScript modules, with no build step, framework or CDN. |
+| `static/` | The console: plain HTML, CSS and JavaScript modules, with no build step, framework or CDN. `static/js/webauthn.js` is the browser side of passkeys and security keys: it hands warden's options to `navigator.credentials` and sends the answer back as JSON, with the WebAuthn Level 3 helpers where the browser has them and a fallback where it does not. |
 
 The console holds the access and refresh tokens in memory only (never `localStorage`), refreshes once at a time shortly before the access token expires, never sends a spent refresh token again, and retries a refused call once after a refresh. Reloading the page signs you out.
 
@@ -62,11 +62,59 @@ On a workstation with the worktree recipe (`dev/worktree.json`), the sandbox's `
 
 Use `localhost` rather than `127.0.0.1` in the browser: the public base URL is `http://localhost:<port>`, and the single sign-on login cookie is `Secure`, which browsers accept over plain HTTP only for `localhost`.
 
-The example configuration requires MFA, so the first sign-in asks the administrator to set up an authenticator. The console shows the `otpauth://` URI and the secret as text; it draws no QR code.
+The example configuration requires MFA, so the first sign-in asks the administrator to set up a second factor: an authenticator app or a security key or passkey. For an authenticator app the console shows the `otpauth://` URI and the secret as text; it draws no QR code.
 
-### Resetting an authenticator
+### Resetting second factors
 
-An administrator who opens a user under Users can reset their TOTP enrolment (warden's `DELETE <admin>/users/{user_id}/totp`): it removes the enrolment and every recovery code and ends the user's sessions, so their next sign-in enrols again. Recovery codes cannot yet be replaced by the user; that is planned for warden 0.2.0.
+An administrator who opens a user under Users has two resets. **Reset second factors** (warden's `DELETE <admin>/users/{user_id}/mfa`) removes the authenticator, every security key and passkey and every recovery code, and ends the user's sessions, so their next sign-in sets up a second factor again. **Reset TOTP** (`DELETE <admin>/users/{user_id}/totp`) removes only the authenticator and the recovery codes, and leaves keys in place. Recovery codes cannot yet be replaced by the user; that is planned for warden 0.2.0.
+
+### Passkeys and security keys
+
+The console needs no WebAuthn settings: with `http://localhost:<port>` as the public base URL, the relying party ID is `localhost` and the only allowed origin is the console's own. Open the console at `http://localhost:<port>/`, never `127.0.0.1`: a browser refuses an IP address as a relying party, and a credential made for `localhost` works nowhere else. Every passkey made on this walk belongs to `localhost`; delete them from the key or password manager afterwards.
+
+What each screen does:
+
+- **Account** (signed in): **Security keys and passkeys** registers a key with an optional nickname, lists the keys (nickname, kind, when registered and last used), renames and removes them. Removing the only second factor while the policy requires one is refused with warden's 409, shown as it is. The first second factor of either kind comes with recovery codes, shown once.
+- **Sign in**: when the password step answers `mfa_required`, the second-factor card offers **Use your security key or passkey** when `methods` lists `webauthn`, the authenticator code when it lists `totp`, and a recovery code always. A forced enrolment (`mfa_enrolment_required`) offers a key or an authenticator app. **Sign in with a passkey** asks the browser for any passkey for this site, with no email first; where the browser supports conditional mediation, the email field's autofill offers the passkeys too. A passkey sign-in has no second step (`amr` `["hwk", "mfa"]`). A passkey picked from the autofill after its challenge has expired (five minutes by default) gets the uniform refusal, and the autofill starts again.
+- **Users and roles**: the sign-in method `passkey_only`, with a notice when the user holds no passkey yet; **Send a passkey registration link**; **Reset second factors**; and how many keys the user holds.
+- **Invitations**: invite with `passkey_only`. The invitee follows the link from the outbox to `/accept` and chooses **With a passkey**.
+- **Outbox**: the registration link (`http.passkey_registration_link`, `/passkey?t=...` in the example configuration) opens the **Register a passkey** page, which registers a passkey without signing in and shows any recovery codes once.
+
+#### With a real YubiKey
+
+Set a FIDO2 PIN on the key first (for example in Yubico Authenticator): a passkey needs user verification, and without a PIN the key can only be a second factor.
+
+1. Sign in as the administrator and finish the forced enrolment with **Register a security key or passkey**: touch the key and enter its PIN. The account's list shows it as a passkey on the device; the recovery codes appear once.
+2. Sign out, then sign in again with the password: the second-factor card offers the key. Touch it.
+3. Sign out and choose **Sign in with a passkey**, or click into the email field and pick the key from the autofill: enter the PIN and touch it. The account screen shows `amr` `["hwk", "mfa"]`.
+4. Under **Invitations**, invite a second user with `passkey_only`, follow the link from the outbox, and accept **With a passkey** on the same key (a YubiKey holds several). Sign in as that user with **Sign in with a passkey**.
+5. As the administrator, **Reset second factors** for that user: their passkey no longer signs in. **Send a passkey registration link**, follow it from the outbox, and register again.
+6. On the account screen, try to remove the administrator's only key: the 409 says why. Register a second key or an authenticator app, then remove the first.
+
+#### With a synced passkey
+
+A synced passkey lives in a password manager (iCloud Keychain, Google Password Manager, Windows Hello or a third-party manager) or on a phone reached by QR code. Walk the same steps, choosing the platform's passkey when the browser asks. The account's list shows it as a synced passkey. Synced passkeys usually have no signature counter; warden accepts them, and still accepts each challenge only once.
+
+#### Only YubiKeys: attestation roots
+
+With trusted attestation roots configured, warden asks for direct attestation at registration and accepts only authenticators whose attestation chains to one of the roots. To try it with Yubico's roots:
+
+1. Download Yubico's attestation root certificates in PEM from Yubico's PKI page (`https://developers.yubico.com/PKI/`). Recent keys chain to the **Yubico FIDO Root CA Serial 450203556**, older ones to the **Yubico U2F Root CA Serial 457200631**. Put both in to accept either.
+2. Add them to `console.yaml` under `warden`, each certificate's lines indented as a block:
+
+   ```yaml
+   warden:
+     webauthn:
+       attestation_roots: |
+         -----BEGIN CERTIFICATE-----
+         ...
+         -----END CERTIFICATE-----
+   ```
+
+   A product would usually keep the roots in konfig's secrets store and write `attestation_roots: secret://<name>` instead.
+3. Restart `serve`. Registering a YubiKey now works (the browser may ask to let the site see the key's make and model: allow it). Registering a synced passkey, or a key from another maker, is refused with a 400 (`credential not accepted`): synced passkeys usually carry no attestation, so a roots policy refuses them, which is its intent. Keys registered before the roots were set keep working.
+
+Remove the block and restart to accept any authenticator again.
 
 ### Single sign-on
 
@@ -84,7 +132,8 @@ These are things the console needed that warden's public surface does not provid
 - No setting for the identity provider's CA: the sample sets `SSL_CERT_FILE` for its own process (httpx reads it) so warden trusts the stub provider (question 10).
 - No "who am I" route: the sample's own `/api/me` answers it from `require_user` (question 11).
 - warden's CLI cannot create the first administrator, since the roles are the product's: the sample has its own `create-admin` command (question 11).
+- The list of a user's security keys and passkeys does not say whether each was registered with user verification, so the account screen cannot yet tell which discoverable key signs in alone. A passkey flag on that list is coming in a later 0.1.0 build; until then the screen calls every discoverable key a passkey (question 29).
 
 ## Tests
 
-`tests/examples/` starts the console against a testcontainers Postgres: every router mounted, the Content Security Policy on every page and asset, a password sign-in round trip, an invitation followed from the outbox, and the notes refused without their permission and allowed with it. Type checking: `mypy --strict examples/console`.
+`tests/examples/` starts the console against a testcontainers Postgres: every router mounted, the Content Security Policy on every page and asset, a password sign-in round trip, an invitation followed from the outbox, and the notes refused without their permission and allowed with it. The passkey tests use the test suite's software authenticator in place of a browser and a key: every warden route a screen calls is mounted, a key registered, renamed and removed, the last second factor kept, a key as the second factor and in a forced enrolment, a passkey sign-in round trip, `passkey_only` with the registration link followed from the outbox, the administrator's reset, and a `passkey_only` invitation accepted with a passkey. Type checking: `mypy --strict examples/console`.

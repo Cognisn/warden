@@ -1,14 +1,14 @@
 // The console's single page: a menu of screens chosen by the URL.
 //
 // Paths that warden's emailed links and the SSO completion link land on
-// (/accept, /reset, /signed-in) open their screen directly; everything else
+// (/accept, /reset, /passkey, /signed-in) open their screen directly; everything else
 // is chosen by the hash (#/notes, #/users, ...).
 
 import { me, onSessionChange, signedIn } from "./api.js";
 import { h, status } from "./dom.js";
 import { gap } from "./gaps.js";
 import { accountScreen, signInScreen, ssoLanding } from "./signin.js";
-import { acceptScreen, outboxScreen, resetScreen } from "./lifecycle.js";
+import { acceptScreen, outboxScreen, passkeyRegistrationScreen, resetScreen } from "./lifecycle.js";
 import { notesScreen } from "./notes.js";
 import { apiKeysScreen, invitationsScreen, policyScreen, ssoScreen, usersScreen } from "./admin.js";
 import { anchorsScreen, auditScreen, keysScreen, syslogScreen } from "./audit.js";
@@ -36,7 +36,12 @@ const MENU = [
   ]],
 ];
 
-const PATHS = { "/accept": acceptScreen, "/reset": resetScreen, "/signed-in": ssoLanding };
+const PATHS = {
+  "/accept": acceptScreen,
+  "/reset": resetScreen,
+  "/passkey": passkeyRegistrationScreen,
+  "/signed-in": ssoLanding,
+};
 
 let who = null;
 

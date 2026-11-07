@@ -31,6 +31,14 @@ export const GAPS = {
       "warden has no setting for the identity provider's CA. The sample trusts the stub " +
       "provider's private CA through SSL_CERT_FILE for its own process.",
   },
+  passkeyKind: {
+    question: "Q29",
+    text:
+      "warden's list of a user's keys does not say whether each was registered with user " +
+      "verification, so this screen cannot yet tell which discoverable key signs in alone. " +
+      "Until the passkey flag on that list arrives in a later 0.1.0 build, it calls every " +
+      "discoverable key a passkey.",
+  },
   whoAmI: {
     question: "Q11",
     text:
