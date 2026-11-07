@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b11] - 2026-11-07
+
+Eleventh beta: signing in with a passkey alone, the `passkey_only` sign-in method, the administrator's passkey registration link, and `passkey_only` invitations accepted by registering a passkey. Users without keys see no difference, except that a user holding keys can no longer be switched to `sso_only` until the administrator's reset removes them.
+
 ### Added
 
 - Signing in with a passkey alone. `POST <auth>/passkey/options` returns the options for `navigator.credentials.get()`: a fresh, single-use challenge, user verification required and no `allowCredentials`, so the answer is the same for every caller, reveals nothing about any account and suits conditional mediation (autofill). `POST <auth>/passkey/sign-in` takes the browser's answer and issues the same `signed_in` answer as a password sign-in, with `amr` `["hwk", "mfa"]`, which satisfies a policy that requires a second factor: there is no second step. The user is found by the answer's user handle and credential id together. It is open to `password_and_sso` and `passkey_only` users whose credential is discoverable and was registered with user verification; a security key held only as a second factor cannot sign in alone. Every failure is the uniform refusal, the reason recorded on `warden.identity.sign_in` with method `passkey`. Passkey attempts are throttled by source address and, separately, by the credential id, each with `identity.sign_in_attempt_limit` per `identity.sign_in_window_seconds`.
