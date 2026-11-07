@@ -35,14 +35,14 @@ app.include_router(keys_router(keys=keys), prefix=http.keys_prefix)
 | `status` | Meaning | Next step |
 |---|---|---|
 | `signed_in` | A session: `access_token`, `token_type` (`Bearer`), `expires_in`, `refresh_token`, `refresh_expires_in`. | Use the access token (section 3). |
-| `mfa_required` | The password was right and the user has TOTP. The body carries a `challenge` and its `expires_in`. | Ask for a code and send it to [`POST /auth/totp/verify`](../contract/openapi.json) as `{"challenge", "code"}`, or a recovery code to [`POST /auth/recovery-code`](../contract/openapi.json). |
+| `mfa_required` | The password was right and the user has a second factor. The body carries a `challenge`, its `expires_in` and `methods`, the kinds the user holds (`"totp"`, `"webauthn"`). | For `totp`, ask for a code and send it to [`POST /auth/totp/verify`](../contract/openapi.json) as `{"challenge", "code"}`, or a recovery code to [`POST /auth/recovery-code`](../contract/openapi.json). For `webauthn`, complete it with a key (section 16.2). |
 | `mfa_enrolment_required` | The password was right, the deployment requires a second factor (`identity.require_mfa`, on by default) and the user has none confirmed. The body carries a `challenge`. | Enrol under the challenge (section 5); confirming the enrolment signs the user in. |
 
 Every other outcome (an unknown address, a wrong password, an `sso_only` user, a user who is not `active`, a throttled attempt) is the uniform refusal (section 4). Do not tell the user which; you cannot know.
 
 A challenge is single-purpose and short-lived: it expires after `identity.mfa_challenge_ttl_seconds` (300 seconds by default) and is used up by the step it was issued for. After `identity.mfa_max_failures` wrong codes (5 by default) it stops working, so the user must sign in again. A TOTP code is six ASCII digits; any other text (including other scripts' digits) is refused like a wrong code. A code is accepted at most once per 30-second step, so a user who submits the same code twice gets the refusal the second time.
 
-Every route that issues a session answers with the same `signed_in` body: password sign-in, TOTP verification, a recovery code, refresh, confirming an enrolment under a challenge, and the single sign-on handoff. A client can handle them with one function.
+Every route that issues a session answers with the same `signed_in` body: password sign-in, TOTP verification, a recovery code, a security key (section 16.2), a passkey (section 16.3), refresh, confirming an enrolment under a challenge, and the single sign-on handoff. A client can handle them with one function.
 
 ## 3. Access and refresh tokens
 
@@ -95,18 +95,7 @@ Request bodies are parsed by warden, not by FastAPI's validation, so a malformed
 
 **Lost both factors: the administrator's reset.** A user who has lost their authenticator and their recovery codes cannot complete a password sign-in, so an administrator resets their enrolment with [`DELETE /admin/users/{user_id}/totp`](../contract/openapi.json), behind the administration router's users permission. It answers 204 with no body, or 404 for no such user. In one transaction it removes the user's TOTP enrolment (confirmed or not) and every recovery code, ends every session of the user (as a password reset does), and records `warden.identity.mfa.reset` with the administrator as actor. The user's next password sign-in answers `mfa_enrolment_required` where the deployment requires a second factor (or `signed_in` where it does not), and they enrol again as above; their old codes are refused. A user with nothing enrolled gets a 204 too, still audited, so pressing the button twice is harmless. Confirm the user's identity some other way before resetting: the reset is what stands between a stolen password and the account. A product's server can call `Identity.reset_totp(user_id, actor=...)` directly.
 
-**Security keys and passkeys (routes).** A full section on WebAuthn follows later in 0.1.0; until then, the routes, each described in the contract. A key or passkey is a second factor beside TOTP, and `mfa_required` lists the kinds a user holds in `methods`.
-
-- [`POST /auth/webauthn/registration`](../contract/openapi.json) and [`POST /auth/webauthn/registration/confirm`](../contract/openapi.json): register one, signed in or under the `mfa_enrolment_required` challenge.
-- [`POST /auth/webauthn/verify/options`](../contract/openapi.json) and [`POST /auth/webauthn/verify`](../contract/openapi.json): complete the `mfa_required` challenge with one.
-- [`GET /auth/webauthn/credentials`](../contract/openapi.json), [`PATCH /auth/webauthn/credentials/{credential_id}`](../contract/openapi.json) and [`DELETE /auth/webauthn/credentials/{credential_id}`](../contract/openapi.json): the signed-in user's own list, rename and remove.
-- [`DELETE /admin/users/{user_id}/mfa`](../contract/openapi.json): the administrator's reset of every second factor, keys included.
-
-**Passkeys on their own (routes).** A passkey also signs a user in alone, with no email first, and a `passkey_only` user signs in no other way; the full section follows later in 0.1.0. The routes, each described in the contract:
-
-- [`POST /auth/passkey/options`](../contract/openapi.json) and [`POST /auth/passkey/sign-in`](../contract/openapi.json): sign in with a passkey.
-- [`POST /admin/users/{user_id}/passkey-registration`](../contract/openapi.json), then [`POST /auth/passkey-registration/options`](../contract/openapi.json) and [`POST /auth/passkey-registration`](../contract/openapi.json): the administrator's emailed link, and registering a passkey with it (reset, then link, for a user who lost theirs).
-- [`POST /auth/invitations/accept/passkey/options`](../contract/openapi.json) and [`POST /auth/invitations/accept/passkey`](../contract/openapi.json): accept a `passkey_only` invitation by registering a passkey.
+**Security keys and passkeys.** A security key or passkey (WebAuthn) is a second factor beside TOTP, and `mfa_required` lists the kinds a user holds in `methods`. A passkey can also sign a user in alone. Section 16 covers both, with their routes.
 
 ## 6. Single sign-on
 
@@ -146,7 +135,7 @@ A program uses the key as a bearer token: `Authorization: Bearer wdn_...`. `requ
 
 ## 9. The sign-in throttle
 
-Password sign-in is throttled per pair of identifier (the email as typed, ignoring case) and client address: once a pair has made `identity.sign_in_attempt_limit` attempts (10 by default) within `identity.sign_in_window_seconds` (15 minutes by default), further attempts get the uniform refusal without the password being checked. Unknown addresses are throttled alike, so throttling reveals nothing. Only issuing a session clears the count; a right password followed by an MFA challenge does not. A throttled user sees the same refusal as a wrong password: advise them to wait, or to reset their password, rather than retrying.
+Password sign-in is throttled per pair of identifier (the email as typed, ignoring case) and client address: once a pair has made `identity.sign_in_attempt_limit` attempts (10 by default) within `identity.sign_in_window_seconds` (15 minutes by default), further attempts get the uniform refusal without the password being checked. Unknown addresses are throttled alike, so throttling reveals nothing. Only issuing a session clears the count; a right password followed by an MFA challenge does not. A throttled user sees the same refusal as a wrong password: advise them to wait, or to reset their password, rather than retrying. Passkey sign-in has its own throttle (section 16.3).
 
 ## 10. Published keys
 
@@ -206,3 +195,114 @@ Some capabilities are in warden's Python API or command line but have no warden 
 **Syslog settings.** Syslog forwarding is configured from the `syslog` section of the configuration, read when the product starts. warden has no route that changes it and stores no change made at run time, so to reconfigure syslog for good, change the configuration and restart the product's processes. A product's server can switch a running `SyslogForwarder` with `reconfigure(settings)`, but that is not audited, reaches only the forwarder in that process, and is lost at the next start.
 
 **Single sign-on behind a private CA.** warden's single sign-on client checks the provider's certificate against certifi's bundle and, in 0.1.0, has no setting for another CA; one is planned for 0.2.0. For a provider whose certificate chains to a private CA, set the `SSL_CERT_FILE` environment variable of the product's process to a PEM bundle. It replaces the whole trust store of the process's HTTPS clients rather than adding to it, so the bundle must hold every CA the process needs, public ones included (for example certifi's bundle with the private CA appended). Python's own default trust store reads the variable as well, and syslog over TLS uses that store when neither `syslog.tls_ca_file` nor `syslog.tls_ca_secret` is set, so give the collector its CA through one of those.
+
+## 16. Security keys and passkeys (WebAuthn)
+
+warden accepts WebAuthn credentials in two roles. A **security key or passkey as a second factor** completes a password sign-in, as a peer of TOTP. A **passkey on its own** signs a user in with no email and no password. The account is the same either way; the difference is how the credential was registered and how it is asked for. warden has no user interface: the product's front end drives the browser's WebAuthn API and passes the results to warden's routes.
+
+### 16.1 The browser side
+
+Every ceremony has the same shape. The client asks warden for options, hands them to the browser, and posts the browser's answer back.
+
+- warden answers an options route with `{"public_key", "expires_at"}`. `public_key` is the JSON form of the WebAuthn options (camelCase names, binary values as base64url text), ready for the Level 3 JSON helpers. `expires_at` is when the challenge stops working (`webauthn.challenge_ttl_seconds`, 300 seconds by default).
+- To register, call `navigator.credentials.create({publicKey: PublicKeyCredential.parseCreationOptionsFromJSON(public_key)})`. To sign in, call `navigator.credentials.get({publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(public_key)})`.
+- Post the result as the `credential` field, in the form `credential.toJSON()` gives. warden reads that JSON form only.
+- A challenge is single-use. If the user cancels, the browser times out or warden refuses the answer, ask for fresh options; do not reuse the old ones.
+
+```js
+// Registration: options from warden, answer back to warden.
+const { public_key } = await (await fetch(optionsUrl, request)).json();
+const created = await navigator.credentials.create({
+  publicKey: PublicKeyCredential.parseCreationOptionsFromJSON(public_key),
+});
+await fetch(confirmUrl, post({ credential: created.toJSON(), nickname }));
+```
+
+Check for support with `window.PublicKeyCredential` before offering the feature. The three Level 3 helpers (`parseCreationOptionsFromJSON`, `parseRequestOptionsFromJSON` and `toJSON`) are newer than the rest of the API, so test for them too (`typeof PublicKeyCredential.parseCreationOptionsFromJSON === "function"`). Where a browser has the API but not the helpers, do the conversion by hand:
+
+- Before the call, decode from base64url to an `ArrayBuffer`: `challenge`, `user.id`, and the `id` of every entry in `excludeCredentials` or `allowCredentials`.
+- After the call, build the JSON yourself with base64url (no padding) for every binary value: `id`, `rawId`, `type`, `authenticatorAttachment`, `clientExtensionResults` (from `getClientExtensionResults()`) and a `response` of `clientDataJSON` and `attestationObject` plus `transports` (from `response.getTransports()`) for registration, or `clientDataJSON`, `authenticatorData`, `signature` and `userHandle` for sign-in.
+
+Where the browser has no WebAuthn at all, do not offer the feature, and keep every other sign-in method working. Do not show a different message for each failure: a browser error such as `NotAllowedError` means only that the ceremony did not finish.
+
+### 16.2 A key as a second factor
+
+**Registering, signed in.** [`POST /auth/webauthn/registration`](../contract/openapi.json), with the access token as the bearer and no body, answers with the options for `navigator.credentials.create()`. Post the answer, with an optional `nickname` (1 to 64 characters), to [`POST /auth/webauthn/registration/confirm`](../contract/openapi.json). The answer is `{"credential", "recovery_codes"}`. `recovery_codes` holds fresh codes, shown once, only when the key is the user's first second factor; otherwise the list is empty. Section 5's advice for recovery codes applies: show them at once, because warden cannot show them again.
+
+**Registering, in a forced enrolment.** A user who was told `mfa_enrolment_required` may register a key instead of TOTP. Send `{"challenge"}` to the registration route and `{"challenge", "credential", "nickname"}` to the confirm route, with no bearer. Confirming signs the user in: the answer is the `signed_in` body (section 2) with `recovery_codes` and `credential` added, and `amr` `["pwd", "hwk"]`.
+
+The registration asks for a resident key and user verification as preferences, not requirements, so a plain security key works. A credential that comes out discoverable and verified the user is recorded as such and may also sign in alone (section 16.3). A user who signs in only through single sign-on cannot register one (409).
+
+**Completing a sign-in.** When [`POST /auth/sign-in`](../contract/openapi.json) answers `mfa_required`, read `methods`: `["totp"]`, `["webauthn"]` or both. Existing clients that ignore the field keep working, because the TOTP routes are unchanged. To use a key:
+
+1. Post `{"challenge"}` to [`POST /auth/webauthn/verify/options`](../contract/openapi.json). The options list only that user's own credentials.
+2. Call `navigator.credentials.get()` with them.
+3. Post `{"challenge", "credential"}` to [`POST /auth/webauthn/verify`](../contract/openapi.json). The answer is the `signed_in` body with `amr` `["pwd", "hwk"]`.
+
+A refused answer counts against the challenge as a wrong code does (`identity.mfa_max_failures`), and every refusal is the uniform refusal (section 4). A signature counter that fails to increase is refused and audited as a suspected cloned key.
+
+**Managing keys.** [`GET /auth/webauthn/credentials`](../contract/openapi.json) lists the signed-in user's keys, oldest first: `id`, `nickname`, `created_at`, `last_used_at`, `aaguid`, `backup_eligible`, `backup_state` and `discoverable`. It never shows the public key. [`PATCH /auth/webauthn/credentials/{credential_id}`](../contract/openapi.json) renames one (`{"nickname"}`; null clears it) and [`DELETE /auth/webauthn/credentials/{credential_id}`](../contract/openapi.json) removes one. Removing a user's last second factor while the session policy requires one is a 409; where none is required, removing the last one also removes the recovery codes. An id that is not the user's own, or not a UUID, is a 404.
+
+**Lost every factor.** [`DELETE /admin/users/{user_id}/mfa`](../contract/openapi.json) is the administrator's reset of every second factor: TOTP, recovery codes, keys and passkeys, and every session. It is 204 even for a user with nothing enrolled, and 404 for no such user. `DELETE /admin/users/{user_id}/totp` (section 5) resets TOTP only and leaves keys in place.
+
+### 16.3 Signing in with a passkey
+
+A passkey is a discoverable credential registered with user verification, so the authenticator itself holds the account and verifies the user (by PIN, biometric or device unlock). Signing in needs no email first.
+
+1. Post nothing to [`POST /auth/passkey/options`](../contract/openapi.json). The options carry a fresh challenge, `userVerification: "required"` and no `allowCredentials`. They are the same for every caller and reveal nothing about any account.
+2. Call `navigator.credentials.get()` with them.
+3. Post `{"credential"}` to [`POST /auth/passkey/sign-in`](../contract/openapi.json). The answer is the `signed_in` body with `amr` `["hwk", "mfa"]`. That satisfies `identity.require_mfa`: there is no second step and no `mfa_required` challenge.
+
+Offer it two ways, as a sign-in screen should:
+
+- **Conditional mediation (autofill).** Give the email field `autocomplete="username webauthn"`. Where `await PublicKeyCredential.isConditionalMediationAvailable()` is true, fetch the options when the screen loads and call `navigator.credentials.get({publicKey, mediation: "conditional", signal})`. The browser then offers the user's passkeys in the field's autofill list, and the call settles when the user picks one. Pass an `AbortController` signal so the pending call is cancelled when the user starts a different sign-in.
+- **A button.** For browsers without conditional mediation, a "Sign in with a passkey" button runs the same call without `mediation`, and the browser shows its own chooser. Fetch fresh options when the button is pressed; the challenge from page load may have expired.
+
+Only a discoverable passkey that verified the user at registration can sign in alone. A security key held only as a second factor cannot, and neither can a credential of a user who is not `active` or whose method is `sso_only`. Every failure is the uniform refusal; do not try to say which.
+
+Passkey sign-in is throttled by source address and, separately, by credential id, each at `identity.sign_in_attempt_limit` attempts per `identity.sign_in_window_seconds`. Clients behind one shared address, such as a corporate NAT, share the address budget, so a product serving them may raise the limit (and must configure `audit.trusted_proxies`, section 12, so the address is the client's and not the proxy's). A sign-in that issues a session clears both counts.
+
+### 16.4 `passkey_only` users, registration links and invitations
+
+An administrator sets a user's sign-in method with [`POST /admin/users/{user_id}/sign-in-method`](../contract/openapi.json). The method `passkey_only` means the user signs in with a passkey and nothing else. Password sign-in is refused exactly as a wrong password is (the uniform refusal), single sign-on is refused, and password reset and change of password are refused as for `sso_only`. The answer to setting `passkey_only` carries `has_passkey`; when it is false, the user cannot sign in until they register a passkey. Switching a user who holds keys to `sso_only` is a 409 until the administrator's reset removes them.
+
+**The registration link.** [`POST /admin/users/{user_id}/passkey-registration`](../contract/openapi.json) mails the user a single-use link built from `http.passkey_registration_link` (with `{token}` where the token goes) and answers 202 with `expires_at`. The link lasts `identity.reset_ttl_seconds` (1 hour by default); sending again stops the earlier link working. There is no self-service request. It is refused (409) for a user who is not `active` or is `sso_only`, and answers 503 where no mail sender or link template is configured. For a user who has lost every passkey, reset first (`DELETE /admin/users/{user_id}/mfa`), then send the link.
+
+The product's screen at that address reads the token from its URL (and removes it from the address bar, as section 7 advises), then:
+
+1. posts `{"token"}` to [`POST /auth/passkey-registration/options`](../contract/openapi.json) and calls `navigator.credentials.create()` with the options;
+2. posts `{"token", "credential", "nickname"}` to [`POST /auth/passkey-registration`](../contract/openapi.json).
+
+The options ask for a resident key and user verification as requirements. The answer is `{"status", "credential", "recovery_codes"}`. It does not sign the user in: send them to passkey sign-in next. `recovery_codes` holds fresh codes, shown once, when the user held no second factor before. An answer that is not a passkey is a 400 and leaves the link usable, so let the user try again; a bad, used or expired link is the uniform refusal.
+
+**Passkey invitations.** An invitation whose `sign_in_method` is `passkey_only` is accepted by registering a passkey, not by choosing a password. The accept-invitation screen posts `{"token"}` to [`POST /auth/invitations/accept/passkey/options`](../contract/openapi.json), calls `navigator.credentials.create()`, and posts `{"token", "credential", "nickname"}` to [`POST /auth/invitations/accept/passkey`](../contract/openapi.json). In one transaction warden registers the passkey, activates the user, applies the staged roles and uses the link up. The answer is `{"status": "accepted", "email", "credential", "recovery_codes"}` (the codes shown once) and, as with a password acceptance, does not sign the user in. A `passkey_only` invitation offered a password, or taken through single sign-on, is a 409 and stays usable; so is another invitation offered a passkey. Inviting `passkey_only` where WebAuthn is not configured is a 409.
+
+### 16.5 Relying party, origins and what warden checks
+
+A passkey is bound to a **relying party ID**, a domain. By default it is the host of `http.public_base_url`, and the only allowed **origin** is that URL's origin. Set `webauthn.rp_id` to share passkeys across subdomains (it must be each allowed origin's host or a registrable suffix of it, never a public suffix), and `webauthn.allowed_origins` for further origins, compared exactly with no wildcards; an origin must be `https`, except for `localhost`. A deployment whose base URL is an IP address needs `webauthn.rp_id`, or WebAuthn is unavailable and the key routes answer 409 `WebAuthn is not configured`. Changing the relying party ID after users have registered strands their passkeys, so choose it once.
+
+Every response is checked for a challenge warden issued for this ceremony and user, still unexpired and unused; the client data type; an allowed origin and no cross-origin frame; the relying party ID hash; user presence, and user verification where required; and, for sign-in, a signature and the credential's backup eligibility.
+
+**Attestation roots.** By default warden accepts any authenticator. Set `webauthn.attestation_roots` (PEM CA certificates, usually `secret://<name>`) to accept only authenticators whose attestation chains to one of them. For example, to allow only YubiKeys, put Yubico's published attestation root certificate (from Yubico's developer documentation) in that secret. The options then request direct attestation. warden never fetches attestation metadata, so a root must be one you chose to trust. With roots set, **synced passkeys are refused**: they give no attestation chain, as with "none" or self attestation. Set roots only for a deployment that mandates hardware keys.
+
+**The credential limit.** A user may register at most `webauthn.max_credentials_per_user` credentials (10 by default). Registration past it is a 409 `the credential limit is reached`.
+
+### 16.6 User verification and `amr`
+
+User verification (the PIN, biometric or device unlock) is not a setting. As a **second factor** it is preferred: the password already proved the first factor, so a plain security key that only proves presence is accepted. For **passkey sign-in** it is required, at registration and at every sign-in, because the passkey alone is both factors.
+
+The `amr` of a session, on the access token and the `Principal`, says which happened:
+
+| Sign-in | `amr` |
+|---|---|
+| Password | `["pwd"]` |
+| Password and TOTP | `["pwd", "otp"]` |
+| Password and recovery code | `["pwd", "recovery_code"]` |
+| Password and a key as a second factor | `["pwd", "hwk"]` |
+| Passkey alone | `["hwk", "mfa"]` |
+
+The values follow RFC 8176: `hwk` is proof of possession of a hardware-secured key and `mfa` is multiple factors.
+
+### 16.7 Refusals
+
+Every sign-in failure here is the uniform refusal (section 4): no key for the user, a wrong or reused challenge, a bad signature, an unknown credential, a user who is not `active`, a throttled attempt. The reason goes to the audit trail only, on `warden.identity.sign_in` (with method `passkey` for passkey sign-in) and the `warden.identity.mfa.webauthn.*` actions. A signed-in user's own registration is told what failed instead, with a fixed message that never echoes the request: 400 `credential not accepted` or `the nickname is not valid`, and 409 for WebAuthn not configured, the credential limit, or an `sso_only` user. These are 400 and 409, not 401, so a client does not mistake them for losing the session. No credential material (public key, signature, client data, attestation or challenge) is ever logged or audited.

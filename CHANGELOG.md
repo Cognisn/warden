@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- The client-behaviour guide gains section 16, security keys and passkeys (WebAuthn), for a product's front end: the browser calls and the Level 3 JSON helpers with a fallback, registering a key as a second factor (signed in and in a forced enrolment), `methods` on `mfa_required` and completing a sign-in with a key, passkey sign-in with conditional mediation and a button, `passkey_only` users, the administrator's registration link and passkey invitations, the relying party ID and origins, optional attestation roots (Yubico's root as the worked example, and that synced passkeys are refused when roots are set), the credential limit, user verification and `amr`, and the uniform refusals. It also notes that passkey sign-in is throttled by source address and by credential, so clients behind one shared address share the address budget.
+- The design overview records WebAuthn: decision D18, the scope in section 3.1, the package layout, acceptance tests, delivery milestone M6a, the `fido2` dependency and its MPL-2.0 public suffix list as a named licence exception, and the WebAuthn Level 3 and RFC 8176 references.
+- The README names passkeys and security keys.
+
 ## [0.1.0b11] - 2026-11-07
 
 Eleventh beta: signing in with a passkey alone, the `passkey_only` sign-in method, the administrator's passkey registration link, and `passkey_only` invitations accepted by registering a passkey. Users without keys see no difference, except that a user holding keys can no longer be switched to `sso_only` until the administrator's reset removes them.
