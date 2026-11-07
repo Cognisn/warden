@@ -132,7 +132,7 @@ These are things the console needed that warden's public surface does not provid
 - No setting for the identity provider's CA: the sample sets `SSL_CERT_FILE` for its own process (httpx reads it) so warden trusts the stub provider (question 10).
 - No "who am I" route: the sample's own `/api/me` answers it from `require_user` (question 11).
 - warden's CLI cannot create the first administrator, since the roles are the product's: the sample has its own `create-admin` command (question 11).
-- The list of a user's security keys and passkeys does not say whether each was registered with user verification, so the account screen cannot tell which discoverable key signs in alone; it calls every discoverable key a passkey (question 29).
+- The list of a user's security keys and passkeys does not say whether each was registered with user verification, so the account screen cannot yet tell which discoverable key signs in alone. A passkey flag on that list is coming in a later 0.1.0 build; until then the screen calls every discoverable key a passkey (question 29).
 
 ## Tests
 

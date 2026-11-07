@@ -35,8 +35,9 @@ export const GAPS = {
     question: "Q29",
     text:
       "warden's list of a user's keys does not say whether each was registered with user " +
-      "verification, so this screen cannot tell which discoverable key signs in alone. It " +
-      "calls every discoverable key a passkey.",
+      "verification, so this screen cannot yet tell which discoverable key signs in alone. " +
+      "Until the passkey flag on that list arrives in a later 0.1.0 build, it calls every " +
+      "discoverable key a passkey.",
   },
   whoAmI: {
     question: "Q11",
