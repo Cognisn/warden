@@ -12,8 +12,9 @@ and every error is a fixed message.
 | ``GET /users[?status=&limit=&after=]`` | | ``{"users": [...]}`` (*) |
 | ``GET /users/{id}`` | | ``{"user", "roles", "webauthn_credentials"}`` |
 | ``POST /users/{id}/status`` | ``status`` | ``{"user"}`` |
-| ``POST /users/{id}/sign-in-method`` | ``sign_in_method`` | ``{"user"}`` |
+| ``POST /users/{id}/sign-in-method`` | ``sign_in_method`` | ``{"user"}`` (+) |
 | ``POST /users/{id}/password-reset`` | | 202 |
+| ``POST /users/{id}/passkey-registration`` | | 202 |
 | ``DELETE /users/{id}/totp`` | | 204 |
 | ``DELETE /users/{id}/mfa`` | | 204 |
 | ``GET /roles`` | | ``{"roles", "permissions"}`` |
@@ -28,6 +29,7 @@ and every error is a fixed message.
 | ``DELETE /api-keys/{id}`` | | 204 |
 
 (*) ``display_name``, ``sign_in_method``, ``roles`` and ``expires_at`` are optional.
+(+) With ``has_passkey`` as well when the method set is ``passkey_only``.
 A user list paged with ``limit`` or ``after`` also carries ``next``.
 Times are ISO 8601 with a zone offset. A new API key is returned once, never again.
 """
@@ -45,6 +47,7 @@ from warden.identity.dependencies import Principal, require_permission
 from warden.identity.http import NO_STORE, SourceIp, client_ip, json_response, read_object
 from warden.identity.invitations import InvitationError, PendingInvitation, StagedGrant
 from warden.identity.mail import MailDeliveryError, MailError
+from warden.identity.mfa import WebAuthnUnavailable
 from warden.identity.roles import LastAdministratorError, RoleAssignment, RoleError
 from warden.identity.routers.contract import (
     FORBIDDEN,
@@ -58,8 +61,10 @@ from warden.identity.routers.contract import (
     WardenInvitationIssued,
     WardenInvitationList,
     WardenNewApiKeyIssued,
+    WardenPasskeyLinkSent,
     WardenResetSent,
     WardenRoleList,
+    WardenSignInMethodSet,
     WardenUserDetail,
     WardenUserEnvelope,
     WardenUserList,
@@ -67,7 +72,14 @@ from warden.identity.routers.contract import (
     json_body,
     no_store,
 )
-from warden.identity.users import SignInMethod, User, UserError, UserStatus
+from warden.identity.service import PasskeyLinkNotConfigured, PasskeyLinkRefused
+from warden.identity.users import (
+    SignInMethod,
+    SignInMethodConflict,
+    User,
+    UserError,
+    UserStatus,
+)
 
 if TYPE_CHECKING:
     from warden.identity.service import Identity
@@ -80,6 +92,12 @@ _PAGE_SIZE = re.compile(r"[1-9][0-9]{0,3}")
 
 class _BadRequest(Exception):
     pass
+
+
+_HOLDS_KEYS = "the user holds security keys or passkeys; reset their second factors first"
+_NO_LINK = "a passkey registration link cannot be sent to this user"
+_LINK_NOT_CONFIGURED = "the passkey registration link is not configured"
+_UNAVAILABLE = "WebAuthn is not configured"
 
 
 def _iso(moment: datetime | None) -> str | None:
@@ -341,13 +359,20 @@ def build_admin_router(
         "/users/{user_id}/sign-in-method",
         summary="Set a user's sign-in method",
         description=(
-            "`password_and_sso` or `sso_only`. An `sso_only` user cannot sign in with, "
-            "reset or change a password."
+            "`password_and_sso`, `sso_only` or `passkey_only`. An `sso_only` or "
+            "`passkey_only` user cannot sign in with, reset or change a password; a "
+            "`passkey_only` user signs in with a passkey alone (`POST /passkey/sign-in` under "
+            "the auth prefix). Setting `passkey_only` also answers `has_passkey`: when false, "
+            "the user cannot sign in until they register a passkey from a link "
+            "(`POST /users/{user_id}/passkey-registration`). `sso_only` is refused (409) "
+            "while the user holds security keys or passkeys: reset their second factors "
+            "first (`DELETE /users/{user_id}/mfa`)."
         ),
         responses={
-            200: {"model": WardenUserEnvelope, "description": "The updated user."},
+            200: {"model": WardenSignInMethodSet, "description": "The updated user."},
             400: detail("The request is not valid.", "the request is not valid"),
             404: detail("No such user.", "not found"),
+            409: detail("The user holds security keys or passkeys.", _HOLDS_KEYS),
             **REFUSED,
             **FORBIDDEN,
         },
@@ -368,8 +393,13 @@ def build_admin_router(
             user = await identity.users.set_sign_in_method(
                 uid, method, actor=str(principal.user_id)
             )
+        except SignInMethodConflict:
+            return _detail(_HOLDS_KEYS, 409)
         except UserError:
             return _not_found()
+        if method is SignInMethod.PASSKEY_ONLY:
+            has_passkey = await identity.users.holds_passkey(user.id)
+            return json_response({"user": _user(user), "has_passkey": has_passkey})
         return json_response({"user": _user(user)})
 
     @router.post(
@@ -412,6 +442,63 @@ def build_admin_router(
         if reason is not None:
             return _detail("a reset link cannot be sent to this user", 409)
         return json_response({"status": "sent"}, 202)
+
+    @router.post(
+        "/users/{user_id}/passkey-registration",
+        status_code=202,
+        summary="Send a user a passkey registration link",
+        description=(
+            "Mails a single-use link (`http.passkey_registration_link`) with which the user "
+            "registers a passkey without signing in (`POST /passkey-registration/options` "
+            "under the auth prefix), and reports the outcome. Sending again stops the earlier "
+            "link working. For a `passkey_only` user who has no passkey yet or has lost every "
+            "one: reset their second factors first (`DELETE /users/{user_id}/mfa`), then send "
+            "the link. There is no self-service request. Refused (409) for a user who is not "
+            "active or is `sso_only`, and without WebAuthn configured."
+        ),
+        responses={
+            202: {"model": WardenPasskeyLinkSent, "description": "Sent.", "headers": no_store()},
+            404: detail("No such user.", "not found"),
+            409: detail(
+                "A link cannot be sent to this user, or WebAuthn is not configured.",
+                _NO_LINK,
+                _UNAVAILABLE,
+            ),
+            502: detail(
+                "The mail sender refused the message.", "the message could not be delivered"
+            ),
+            503: detail(
+                "No mail sender or no link template is configured.",
+                "mail is not configured",
+                _LINK_NOT_CONFIGURED,
+            ),
+            **REFUSED,
+            **FORBIDDEN,
+        },
+    )
+    async def send_passkey_link(
+        user_id: str, request: Request, principal: Annotated[Principal, Depends(users_admin)]
+    ) -> Response:
+        uid = _id(user_id)
+        if uid is None:
+            return _not_found()
+        try:
+            expires_at = await identity.send_passkey_registration(
+                uid, actor=str(principal.user_id), source_ip=source(request)
+            )
+        except UserError:
+            return _not_found()
+        except PasskeyLinkRefused:
+            return _detail(_NO_LINK, 409)
+        except WebAuthnUnavailable:
+            return _detail(_UNAVAILABLE, 409)
+        except PasskeyLinkNotConfigured:
+            return _detail(_LINK_NOT_CONFIGURED, 503)
+        except MailDeliveryError:
+            return _detail("the message could not be delivered", 502)
+        except MailError:
+            return _detail("mail is not configured", 503)
+        return json_response({"status": "sent", "expires_at": _iso(expires_at)}, 202)
 
     @router.delete(
         "/users/{user_id}/totp",
@@ -611,7 +698,10 @@ def build_admin_router(
             },
             400: detail("The request is not valid.", "the request is not valid"),
             409: detail(
-                "A user with that address exists.", "a user with that email address already exists"
+                "A user with that address exists, or the invitation is `passkey_only` and "
+                "WebAuthn is not configured.",
+                "a user with that email address already exists",
+                _UNAVAILABLE,
             ),
             502: detail(
                 "The mail sender refused the message.", "the invitation could not be delivered"
@@ -641,6 +731,8 @@ def build_admin_router(
             grants = tuple(StagedGrant(g["role"], _when(g.get("expires_at"))) for g in raw_roles)
         except (_BadRequest, ValueError):
             return _invalid()
+        if method is SignInMethod.PASSKEY_ONLY and identity.webauthn is None:
+            return _detail(_UNAVAILABLE, 409)
         try:
             invitation = await identity.invitations.create(
                 email,

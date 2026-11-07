@@ -70,6 +70,8 @@ def _refusal(account: _Account) -> str | None:
     """Why this account cannot use a password reset now, or None."""
     if account.status != UserStatus.ACTIVE:
         return f"user_{account.status}"
+    if account.sign_in_method == SignInMethod.PASSKEY_ONLY:
+        return "passkey_only"  # ruling P5: no password to reset
     if account.sign_in_method != SignInMethod.PASSWORD_AND_SSO:
         return "sso_only"
     return None

@@ -81,7 +81,7 @@ from warden.identity.sso.sealing import open_invitation, seal_invitation
 from warden.identity.sso.settings import SSO_AMR, SsoSettings, SsoSettingsStore
 from warden.identity.sso.validation import IdTokenClaims, IdTokenValidator
 from warden.identity.tokens import NewSession, Sessions, TokenPair
-from warden.identity.users import UserStatus, is_email
+from warden.identity.users import SignInMethod, UserStatus, is_email
 
 __all__ = [
     "COOKIE_NAME",
@@ -460,7 +460,8 @@ class SingleSignOn:
         async with self.db.transaction() as tx:
             cur = await tx.execute(
                 sql.SQL(
-                    "SELECT u.id, u.email, u.status FROM {} i JOIN {} u ON u.id = i.user_id"
+                    "SELECT u.id, u.email, u.status, u.sign_in_method FROM {} i"
+                    " JOIN {} u ON u.id = i.user_id"
                     " WHERE i.issuer = %s AND i.subject = %s FOR SHARE OF i"
                 ).format(_IDENTITIES, _USERS),
                 (claims.issuer, claims.subject),
@@ -472,6 +473,8 @@ class SingleSignOn:
                     reason = "email_mismatch"
                 elif pinned[2] != UserStatus.ACTIVE:
                     reason = "user_inactive"
+                elif pinned[3] == SignInMethod.PASSKEY_ONLY:
+                    reason = "passkey_only"
             else:
                 user_id, reason = await self._first_sign_in(tx, claims, email, source_ip)
             if reason is None and user_id is not None:
@@ -548,7 +551,9 @@ class SingleSignOn:
     ) -> tuple[uuid.UUID | None, str | None]:
         """Match a verified email to a pre-provisioned user and pin the subject."""
         cur = await tx.execute(
-            sql.SQL("SELECT id, status FROM {} WHERE lower(email) = lower(%s)").format(_USERS),
+            sql.SQL(
+                "SELECT id, status, sign_in_method FROM {} WHERE lower(email) = lower(%s)"
+            ).format(_USERS),
             (email,),
         )
         row = await cur.fetchone()
@@ -557,6 +562,9 @@ class SingleSignOn:
         user_id: uuid.UUID = row[0]
         if row[1] != UserStatus.ACTIVE:
             return user_id, "user_inactive"
+        if row[2] == SignInMethod.PASSKEY_ONLY:
+            # A passkey_only user signs in with a passkey alone (Skuld question 26).
+            return user_id, "passkey_only"
         cur = await tx.execute(
             sql.SQL(
                 "INSERT INTO {} (user_id, issuer, subject) VALUES (%s, %s, %s)"
@@ -652,14 +660,16 @@ class SingleSignOn:
     ) -> str | None:
         cur = await tx.execute(
             sql.SQL(
-                "SELECT u.status, i.issuer FROM {} u LEFT JOIN {} i ON i.user_id = u.id"
-                " WHERE u.id = %s FOR SHARE OF u"
+                "SELECT u.status, i.issuer, u.sign_in_method FROM {} u"
+                " LEFT JOIN {} i ON i.user_id = u.id WHERE u.id = %s FOR SHARE OF u"
             ).format(_USERS, _IDENTITIES),
             (user_id,),
         )
         row = await cur.fetchone()
         if row is None or row[0] != UserStatus.ACTIVE:
             return "user_inactive"
+        if row[2] == SignInMethod.PASSKEY_ONLY:
+            return "passkey_only"
         if row[1] != settings.issuer_url:
             return "not_pinned"
         return None

@@ -16,12 +16,14 @@ import contextlib
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, NoReturn
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, FastAPI
+from fido2.utils import websafe_decode
 from psycopg import AsyncConnection, sql
 
 from warden.audit import AuditEvent, get_recorder, record_audit
@@ -33,7 +35,8 @@ from warden.identity.crypto import SecretBox, SecretStore
 from warden.identity.dependencies import APP_STATE_KEY, Principal, ResourceScopeHook
 from warden.identity.errors import AuthenticationRefused, MfaError
 from warden.identity.http import SourceIp
-from warden.identity.mail import Mailer, MailError, MailKind, MailSender
+from warden.identity.invitations import AcceptedInvitation
+from warden.identity.mail import MailDeliveryError, Mailer, MailError, MailKind, MailSender
 from warden.identity.mfa import (
     Challenge,
     ChallengePurpose,
@@ -46,7 +49,7 @@ from warden.identity.mfa import (
 from warden.identity.passwords import MAX_PASSWORD_LENGTH, PasswordHasher
 from warden.identity.policy import PolicyStore, SessionPolicy
 from warden.identity.roles import PermissionRegistry, Roles
-from warden.identity.single_use import SingleUseTokens
+from warden.identity.single_use import Purpose, SingleUseTokens, well_formed
 from warden.identity.sso.service import SingleSignOn
 from warden.identity.throttle import SignInThrottle
 from warden.identity.tokens import NewSession, Sessions, TokenPair
@@ -62,7 +65,15 @@ from warden.identity.webauthn import (
 )
 from warden.keys import KeyStore
 
-__all__ = ["ChallengeIssued", "Identity", "SignInResult", "WebAuthnEnrolled"]
+__all__ = [
+    "ChallengeIssued",
+    "Identity",
+    "PasskeyInvitationAccepted",
+    "PasskeyLinkNotConfigured",
+    "PasskeyLinkRefused",
+    "SignInResult",
+    "WebAuthnEnrolled",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +82,10 @@ _USERS = table(schema.USERS)
 _MAX_IDENTIFIER = 320
 # RFC 8176: a password and a hardware-bound key (ruling P7).
 _KEY_AMR = ["pwd", "hwk"]
+# RFC 8176: a hardware-bound key that verified its user, alone (ruling P7).
+_PASSKEY_AMR = ["hwk", "mfa"]
+# The longest credential id a response may name (WebAuthn caps it at 1023 bytes).
+_MAX_CREDENTIAL_ID = 1023
 # Refusals that say nothing about the second factor offered, so cost no attempt.
 _NOT_AN_ATTEMPT = frozenset({"unknown_challenge", "user_inactive", "sso_only", "challenge_used"})
 
@@ -103,6 +118,30 @@ class WebAuthnEnrolled:
     """Fresh codes when it is the user's first second factor; otherwise none."""
     tokens: TokenPair | None = None
     """The new session, when registered under an enrolment challenge."""
+
+
+@dataclass(frozen=True, slots=True)
+class PasskeyInvitationAccepted:
+    """A ``passkey_only`` invitation accepted by registering a passkey; not signed in."""
+
+    invitation: AcceptedInvitation
+    credential: WebAuthnCredential
+    recovery_codes: list[str]
+
+
+class PasskeyLinkRefused(Exception):
+    """No registration link for this user: ``sso_only``, or not active (ruling P8).
+
+    ``reason`` is the audited reason. Messages carry identifiers only.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"passkey registration link refused: {reason}")
+        self.reason = reason
+
+
+class PasskeyLinkNotConfigured(MailError):
+    """``http.passkey_registration_link`` is not set, so there is nothing to mail."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -388,7 +427,13 @@ class Identity:
         if verification is None or not verification.ok:
             await self._refuse_sign_in("wrong_password", account.id, email, source_ip)
         if account.sign_in_method != SignInMethod.PASSWORD_AND_SSO:
-            await self._refuse_sign_in("sso_only", account.id, email, source_ip)
+            # A passkey_only user is refused as a wrong password is (ruling P5).
+            reason = (
+                "passkey_only"
+                if account.sign_in_method == SignInMethod.PASSKEY_ONLY
+                else "sso_only"
+            )
+            await self._refuse_sign_in(reason, account.id, email, source_ip)
         if account.status != UserStatus.ACTIVE:
             await self._refuse_sign_in("user_inactive", account.id, email, source_ip)
 
@@ -497,6 +542,431 @@ class Identity:
                 reason or "unknown_challenge", opened, method, source_ip
             )
         return await self.sessions.finish(new)
+
+    # Passkey-only sign-in (rulings P5, P6 and P7)
+
+    async def begin_passkey_sign_in(self, *, source_ip: SourceIp = None) -> WebAuthnOptions:
+        """The options for signing in with a passkey alone.
+
+        Discoverable only: no ``allowCredentials``, so the options are the
+        same for every caller and say nothing about any account, and user
+        verification is required. Usable with conditional mediation. Without
+        a relying party the refusal is ``AuthenticationRefused``, audited.
+        """
+        if self.webauthn is None:
+            await self._refuse_passkey("webauthn_unavailable", None, None, source_ip)
+        return await self.webauthn.begin_authentication(None, require_user_verification=True)
+
+    async def passkey_sign_in(self, credential: object, *, source_ip: SourceIp = None) -> TokenPair:
+        """Sign in with a passkey alone: ``amr`` ``["hwk", "mfa"]``.
+
+        That satisfies ``require_mfa`` with no second step. The user is the
+        one holding the credential, found by the response's user handle and
+        credential id together. Open to ``password_and_sso`` and
+        ``passkey_only`` users, with a credential that is discoverable and
+        was registered with user verification. Throttled by source address
+        and, separately, by the credential id's hash. Every failure is
+        ``AuthenticationRefused``, its reason recorded as a failed
+        ``warden.identity.sign_in``.
+
+        The ceremony is finished with no transaction of this method's open,
+        as ``verify_webauthn`` does; the user's status and sign-in method are
+        checked again in the transaction that issues the session.
+        """
+        raw_id = _credential_id(credential)
+        if not await self.throttle.reserve_passkey(source_ip, raw_id or b""):
+            await self._refuse_passkey("throttled", None, None, source_ip)
+        if raw_id is None:
+            await self._refuse_passkey("malformed", None, None, source_ip)
+        if self.webauthn is None:
+            await self._refuse_passkey("webauthn_unavailable", None, None, source_ip)
+        policy = await self.policy.current()
+        try:
+            assertion = await self.webauthn.finish_authentication(None, credential)
+        except WebAuthnError as exc:
+            if exc.suspected_clone:
+                await self._audit_clone(exc, source_ip)
+            await self._refuse_passkey(exc.reason.value, exc.user_id, exc.credential_id, source_ip)
+        user_id, key = assertion.user_id, assertion.credential
+        new: NewSession | None = None
+        async with self.db.transaction() as tx:
+            reason = await self._passkey_refusal(tx, user_id)
+            if reason is None:
+                new = await self.sessions.start(tx, user_id, _PASSKEY_AMR, policy)
+                await self.throttle.clear_passkey(tx, source_ip, raw_id)
+                await self._audit(
+                    tx,
+                    "warden.identity.sign_in",
+                    user_id,
+                    source_ip,
+                    amr=_PASSKEY_AMR,
+                    credential_id=str(key.id),
+                )
+        if reason is not None or new is None:
+            await self._refuse_passkey(reason or "inactive_user", user_id, key.id, source_ip)
+        return await self.sessions.finish(new)
+
+    async def _passkey_refusal(self, conn: AsyncConnection[Any], user_id: uuid.UUID) -> str | None:
+        """Why this user may not sign in with a passkey now, or None."""
+        cur = await conn.execute(
+            sql.SQL("SELECT status, sign_in_method FROM {} WHERE id = %s").format(_USERS),
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if row is None or row[0] != UserStatus.ACTIVE:
+            return "inactive_user"
+        if row[1] == SignInMethod.SSO_ONLY:
+            return "sso_only"
+        return None
+
+    async def _refuse_passkey(
+        self,
+        reason: str,
+        user_id: uuid.UUID | None,
+        credential_id: uuid.UUID | None,
+        source_ip: SourceIp,
+    ) -> NoReturn:
+        """Audit a refused passkey sign-in, identifiers only, and refuse it."""
+        details: dict[str, Any] = {"reason": reason, "method": "passkey"}
+        if credential_id is not None:
+            details["credential_id"] = str(credential_id)
+        await record_audit(
+            AuditEvent(
+                action="warden.identity.sign_in",
+                outcome="failure",
+                actor=None if user_id is None else str(user_id),
+                resource_type=None if user_id is None else "user",
+                resource_id=None if user_id is None else str(user_id),
+                source_ip=source_ip,
+                details=details,
+            )
+        )
+        raise AuthenticationRefused(reason)
+
+    # The administrator's passkey registration link (ruling P8)
+
+    async def send_passkey_registration(
+        self, user_id: uuid.UUID, *, actor: str | None, source_ip: SourceIp = None
+    ) -> datetime:
+        """Mail a user a single-use link for registering a passkey; when it expires.
+
+        For a ``passkey_only`` user with no passkey, or one who lost every
+        passkey (after ``reset_mfa``: reset, then link). Sending again
+        revokes the live link. The link lasts ``identity.reset_ttl_seconds``.
+        Raises ``UserError`` for no such user, ``PasskeyLinkRefused`` for an
+        ``sso_only`` or inactive user, ``WebAuthnUnavailable`` without a
+        relying party, ``PasskeyLinkNotConfigured`` without
+        ``http.passkey_registration_link``, ``MailError`` without a sender
+        and ``MailDeliveryError`` if the sender fails; in every case no link
+        is left behind.
+        """
+        self._relying_party()
+        http = self.config.http
+        if http.passkey_registration_link is None:
+            raise PasskeyLinkNotConfigured("http.passkey_registration_link is not configured")
+        if not self.mailer.configured:
+            raise MailError("no mail sender is configured; pass mail_sender to Identity")
+        refused: str | None = None
+        try:
+            async with self.db.transaction() as tx:
+                cur = await tx.execute(
+                    sql.SQL(
+                        "SELECT email, display_name, status, sign_in_method FROM {}"
+                        " WHERE id = %s FOR UPDATE"
+                    ).format(_USERS),
+                    (user_id,),
+                )
+                row = await cur.fetchone()
+                if row is None:
+                    raise UserError(f"user {user_id} does not exist")
+                email, display_name, status, method = row
+                refused = _link_refusal(status, method)
+                if refused is not None:
+                    raise PasskeyLinkRefused(refused)
+                revoked = await self.single_use.revoke_live(
+                    tx, user_id, Purpose.PASSKEY_REGISTRATION
+                )
+                issued = await self.single_use.issue(
+                    tx,
+                    user_id,
+                    Purpose.PASSKEY_REGISTRATION,
+                    ttl_seconds=self.config.identity.reset_ttl_seconds,
+                    created_by=actor,
+                )
+                await self.mailer.send(
+                    MailKind.PASSKEY_REGISTRATION,
+                    email=email,
+                    display_name=display_name,
+                    link=http.render_link(http.passkey_registration_link, token=issued.token),
+                    expires_at=issued.expires_at,
+                )
+                await record_audit(
+                    AuditEvent(
+                        action="warden.identity.passkey.link_sent",
+                        outcome="success",
+                        actor=actor,
+                        resource_type="user",
+                        resource_id=str(user_id),
+                        source_ip=source_ip,
+                        details={
+                            "previous_links_revoked": revoked,
+                            "expires_at": issued.expires_at.isoformat(),
+                        },
+                    ),
+                    conn=tx,
+                )
+        except (PasskeyLinkRefused, MailDeliveryError) as exc:
+            reason = exc.reason if isinstance(exc, PasskeyLinkRefused) else "delivery_failed"
+            await record_audit(
+                AuditEvent(
+                    action="warden.identity.passkey.link_sent",
+                    outcome="failure",
+                    actor=actor,
+                    resource_type="user",
+                    resource_id=str(user_id),
+                    source_ip=source_ip,
+                    details={"reason": reason},
+                )
+            )
+            raise
+        return issued.expires_at
+
+    async def begin_passkey_registration(
+        self, token: object, *, source_ip: SourceIp = None
+    ) -> WebAuthnOptions:
+        """The options for registering a passkey with an administrator's link.
+
+        Resident key and user verification required. Changes nothing but
+        the ceremony's challenge: the link stays usable. Every refusal (a
+        bad, used or expired link, a user who is no longer active or is now
+        ``sso_only``) is ``AuthenticationRefused``, its reason audited;
+        ``WebAuthnError`` (``limit_reached``) when the user holds as many
+        credentials as allowed.
+        """
+        if not well_formed(token):
+            await self._refuse_link("malformed", None, source_ip)
+        if self.webauthn is None:
+            await self._refuse_link("webauthn_unavailable", None, source_ip)
+        reason: str | None = None
+        user_id: uuid.UUID | None = None
+        options: WebAuthnOptions | None = None
+        async with self.db.transaction() as tx:
+            user_id = await self.single_use.owner(tx, token, Purpose.PASSKEY_REGISTRATION)
+            if user_id is None:
+                reason = "unknown_token"
+            elif await self.single_use.lock_live(tx, token, Purpose.PASSKEY_REGISTRATION) is None:
+                reason = "token_not_live"
+            else:
+                reason = await self._link_user_refusal(tx, user_id, lock=False)
+            if reason is None and user_id is not None:
+                options = await self.webauthn.begin_registration(
+                    user_id, WebAuthnPurpose.PASSKEY, conn=tx
+                )
+        if reason is not None or options is None:
+            await self._refuse_link(reason or "unknown_token", user_id, source_ip)
+        return options
+
+    async def finish_passkey_registration(
+        self,
+        token: object,
+        credential: object,
+        *,
+        nickname: object = None,
+        source_ip: SourceIp = None,
+    ) -> WebAuthnEnrolled:
+        """Register a passkey with an administrator's link, using the link up. No session.
+
+        In one transaction, under row locks on the user and then the link:
+        the browser's answer is checked and the passkey stored, the link is
+        used up by one guarded write (sending a link revokes the earlier
+        one, so it is the only live one), and a user holding no recovery
+        codes gets fresh ones (the
+        shared rule of ruling P4). A link whose user is no longer active, or
+        is now ``sso_only``, is refused and spent. An answer that is not a
+        passkey raises ``WebAuthnError`` and leaves the link usable; every
+        other refusal is ``AuthenticationRefused``. Reasons are audited.
+        """
+        if not well_formed(token):
+            await self._refuse_link("malformed", None, source_ip)
+        if nickname is not None and not isinstance(nickname, str):
+            raise WebAuthnError(WebAuthnRefusal.NICKNAME)
+        if self.webauthn is None:
+            await self._refuse_link("webauthn_unavailable", None, source_ip)
+        webauthn = self.webauthn
+        reason: str | None = None
+        user_id: uuid.UUID | None = None
+        enrolled: WebAuthnEnrolled | None = None
+        try:
+            async with self.db.transaction() as tx:
+                user_id = await self.single_use.owner(tx, token, Purpose.PASSKEY_REGISTRATION)
+                # The user first, then the link, as every single-use token is taken.
+                reason = (
+                    "unknown_token"
+                    if user_id is None
+                    else await self._link_user_refusal(tx, user_id, lock=True)
+                )
+                if reason == "unknown_token" or user_id is None:
+                    raise _Rollback
+                if await self.single_use.lock_live(tx, token, Purpose.PASSKEY_REGISTRATION) is None:
+                    reason = "token_not_live"
+                    raise _Rollback
+                if reason is None:
+                    registration = await webauthn.finish_registration(
+                        user_id, credential, nickname=nickname, conn=tx
+                    )
+                if await self.single_use.consume(tx, token, Purpose.PASSKEY_REGISTRATION) is None:
+                    reason = "token_not_live"
+                    raise _Rollback
+                if reason is not None:
+                    # The link is spent; record why in the same transaction.
+                    await self._audit_link(tx, reason, user_id, source_ip)
+                else:
+                    key = registration.credential
+                    codes = await self.mfa.issue_codes_if_none(tx, user_id)
+                    await self._audit(
+                        tx,
+                        "warden.identity.passkey.registered",
+                        user_id,
+                        source_ip,
+                        credential_id=str(key.id),
+                        first_factor=bool(codes),
+                    )
+                    enrolled = WebAuthnEnrolled(key, codes)
+        except _Rollback:
+            await self._refuse_link(reason or "unknown_token", user_id, source_ip)
+        except WebAuthnError as exc:
+            await self._audit_link(None, exc.reason.value, user_id, source_ip)
+            if exc.reason in (WebAuthnRefusal.INACTIVE_USER, WebAuthnRefusal.SSO_ONLY):
+                raise AuthenticationRefused(exc.reason.value) from None
+            raise
+        if reason is not None or enrolled is None:
+            raise AuthenticationRefused(reason or "unknown_token")  # audited with the spend
+        if enrolled.recovery_codes:
+            await self._notify_enrolled(enrolled.credential.user_id, key=enrolled.credential)
+        return enrolled
+
+    async def _link_user_refusal(
+        self, conn: AsyncConnection[Any], user_id: uuid.UUID, *, lock: bool
+    ) -> str | None:
+        """Why this user may not register a passkey from a link now, or None."""
+        query = "SELECT status, sign_in_method FROM {} WHERE id = %s"
+        if lock:
+            query += " FOR UPDATE"
+        cur = await conn.execute(sql.SQL(query).format(_USERS), (user_id,))
+        row = await cur.fetchone()
+        if row is None:
+            return "unknown_token"
+        return _link_refusal(row[0], row[1])
+
+    async def _audit_link(
+        self,
+        conn: AsyncConnection[Any] | None,
+        reason: str,
+        user_id: uuid.UUID | None,
+        source_ip: SourceIp,
+    ) -> None:
+        await record_audit(
+            AuditEvent(
+                action="warden.identity.passkey.registered",
+                outcome="failure",
+                actor=None if user_id is None else str(user_id),
+                resource_type=None if user_id is None else "user",
+                resource_id=None if user_id is None else str(user_id),
+                source_ip=source_ip,
+                details={"reason": reason},
+            ),
+            conn=conn,
+        )
+
+    async def _refuse_link(
+        self, reason: str, user_id: uuid.UUID | None, source_ip: SourceIp
+    ) -> NoReturn:
+        await self._audit_link(None, reason, user_id, source_ip)
+        raise AuthenticationRefused(reason)
+
+    # Invitations accepted by registering a passkey (ruling P9)
+
+    async def begin_passkey_invitation(
+        self, token: object, *, source_ip: SourceIp = None
+    ) -> WebAuthnOptions:
+        """The options for accepting a ``passkey_only`` invitation with a passkey.
+
+        Resident key and user verification required; the invitation stays
+        usable. Raises ``InvitationMismatch`` for an invitation accepted
+        another way, and ``AuthenticationRefused`` for every other refusal.
+        """
+        if self.webauthn is None:
+            await self._refuse_invitation_unavailable(source_ip)
+        user_id = await self.invitations.passkey_invitee(token, source_ip=source_ip)
+        return await self.webauthn.begin_registration(
+            user_id, WebAuthnPurpose.PASSKEY, for_invitation=True
+        )
+
+    async def _refuse_invitation_unavailable(self, source_ip: SourceIp) -> NoReturn:
+        await record_audit(
+            AuditEvent(
+                action="warden.identity.invitation.accepted",
+                outcome="failure",
+                source_ip=source_ip,
+                details={"reason": "webauthn_unavailable", "method": "passkey"},
+            )
+        )
+        raise AuthenticationRefused("webauthn_unavailable")
+
+    async def accept_invitation_with_passkey(
+        self,
+        token: object,
+        credential: object,
+        *,
+        nickname: object = None,
+        source_ip: SourceIp = None,
+    ) -> PasskeyInvitationAccepted:
+        """Accept a ``passkey_only`` invitation by registering a passkey. No session.
+
+        In the acceptance transaction (wave 9 question 20): the ceremony,
+        through its explicit invitation keyword, stores the passkey; the
+        invitation is used up; the user is activated with the staged roles
+        and given recovery codes (the shared rule of ruling P4). An answer
+        that is not a passkey raises ``WebAuthnError`` and leaves the
+        invitation usable; ``InvitationMismatch`` for an invitation accepted
+        another way; ``AuthenticationRefused`` for every other refusal.
+        """
+        if nickname is not None and not isinstance(nickname, str):
+            raise WebAuthnError(WebAuthnRefusal.NICKNAME)
+        webauthn = self.webauthn
+        if webauthn is None:
+            await self._refuse_invitation_unavailable(source_ip)
+        stored: list[WebAuthnCredential] = []
+        codes: list[str] = []
+
+        async def register(conn: AsyncConnection[Any], user_id: uuid.UUID) -> dict[str, Any]:
+            registration = await webauthn.finish_registration(
+                user_id, credential, nickname=nickname, for_invitation=True, conn=conn
+            )
+            stored.append(registration.credential)
+            codes.extend(await self.mfa.issue_codes_if_none(conn, user_id))
+            return {"credential_id": str(registration.credential.id)}
+
+        try:
+            accepted = await self.invitations.accept_with_passkey(
+                token, register=register, source_ip=source_ip
+            )
+        except WebAuthnError as exc:
+            await record_audit(
+                AuditEvent(
+                    action="warden.identity.invitation.accepted",
+                    outcome="failure",
+                    actor=None,
+                    resource_type="user" if exc.user_id else None,
+                    resource_id=None if exc.user_id is None else str(exc.user_id),
+                    source_ip=source_ip,
+                    details={"reason": exc.reason.value, "method": "passkey"},
+                )
+            )
+            if exc.reason in (WebAuthnRefusal.INACTIVE_USER, WebAuthnRefusal.SSO_ONLY):
+                raise AuthenticationRefused(exc.reason.value) from None
+            raise
+        return PasskeyInvitationAccepted(accepted, stored[0], codes)
 
     # Enrolment
 
@@ -1252,6 +1722,27 @@ class Identity:
         row = await cur.fetchone()
         if row is not None:
             await self.throttle.clear(conn, row[0], source_ip)
+
+
+def _link_refusal(status: str, method: str) -> str | None:
+    """Why a user may not have a passkey registration link, or None (ruling P8)."""
+    if status != UserStatus.ACTIVE:
+        return f"user_{status}"
+    if method == SignInMethod.SSO_ONLY:
+        return "sso_only"
+    return None
+
+
+def _credential_id(credential: object) -> bytes | None:
+    """The credential id a sign-in response names, for the throttle; None if unreadable."""
+    raw = credential.get("rawId") if isinstance(credential, Mapping) else None
+    if not isinstance(raw, str) or not 0 < len(raw) <= 2 * _MAX_CREDENTIAL_ID:
+        return None
+    try:
+        decoded = websafe_decode(raw)
+    except ValueError:
+        return None
+    return decoded if 0 < len(decoded) <= _MAX_CREDENTIAL_ID else None
 
 
 class _Rollback(Exception):

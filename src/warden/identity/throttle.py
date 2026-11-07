@@ -14,7 +14,15 @@ does not, or a password holder would get unlimited code guesses.
 The source address is the client's, resolved through the trusted-proxy
 resolver (``audit.trusted_proxies``), so clients behind one proxy are
 throttled separately. A per-address ceiling across identifiers is not
-implemented.
+implemented for passwords.
+
+A passkey sign-in names no identifier, so it is throttled on two keys of
+its own, each with the same limit and window: the source address, and the
+hash of the credential id the response offers, so that neither one address
+nor one credential gets unlimited attempts. Both are reserved for every
+attempt and both are cleared by a passkey sign-in that issues a session.
+Their key material starts with a byte no UTF-8 text contains, so they can
+never equal a password attempt's key.
 """
 
 from __future__ import annotations
@@ -38,6 +46,20 @@ def throttle_key(identifier: str, source_ip: SourceIp) -> bytes:
     return hashlib.sha256(material.encode("utf-8")).digest()
 
 
+# 0xFF never occurs in UTF-8, so these keys cannot equal a password key.
+_PASSKEY_ADDRESS = b"\xffpasskey-address\x00"
+_PASSKEY_CREDENTIAL = b"\xffpasskey-credential\x00"
+
+
+def passkey_keys(source_ip: SourceIp, credential_id: bytes) -> tuple[bytes, bytes]:
+    """The passkey throttle's keys: the source address, and the credential id's hash."""
+    address = str(source_ip if source_ip is not None else "-").encode("ascii")
+    return (
+        hashlib.sha256(_PASSKEY_ADDRESS + address).digest(),
+        hashlib.sha256(_PASSKEY_CREDENTIAL + hashlib.sha256(credential_id).digest()).digest(),
+    )
+
+
 class SignInThrottle:
     def __init__(self, db: Database, *, limit: int, window_seconds: int) -> None:
         if limit < 1 or window_seconds < 1:
@@ -48,6 +70,20 @@ class SignInThrottle:
 
     async def reserve(self, identifier: str, source_ip: SourceIp) -> bool:
         """Take one attempt; False if the pair has used up its window."""
+        return await self._reserve(throttle_key(identifier, source_ip))
+
+    async def reserve_passkey(self, source_ip: SourceIp, credential_id: bytes) -> bool:
+        """Take one passkey attempt on both keys; False if either has used up its window.
+
+        Both are always taken, so a throttled address still counts against
+        the credential and the other way round.
+        """
+        address, credential = passkey_keys(source_ip, credential_id)
+        by_address = await self._reserve(address)
+        by_credential = await self._reserve(credential)
+        return by_address and by_credential
+
+    async def _reserve(self, key: bytes) -> bool:
         async with self._db.transaction() as tx:
             cur = await tx.execute(
                 sql.SQL(
@@ -58,7 +94,7 @@ class SignInThrottle:
                     " window_started_at = CASE WHEN {} THEN t.window_started_at ELSE now() END"
                     " RETURNING attempts"
                 ).format(_ATTEMPTS, _IN_WINDOW, _IN_WINDOW),
-                {"key": throttle_key(identifier, source_ip), "window": self._window},
+                {"key": key, "window": self._window},
             )
             row = await cur.fetchone()
         return row is not None and int(row[0]) <= self._limit
@@ -68,6 +104,15 @@ class SignInThrottle:
         await conn.execute(
             sql.SQL("DELETE FROM {} WHERE key_hash = %s").format(_ATTEMPTS),
             (throttle_key(identifier, source_ip),),
+        )
+
+    async def clear_passkey(
+        self, conn: AsyncConnection[Any], source_ip: SourceIp, credential_id: bytes
+    ) -> None:
+        """Forget both passkey keys' attempts; call in the transaction that issues a session."""
+        await conn.execute(
+            sql.SQL("DELETE FROM {} WHERE key_hash = ANY(%s)").format(_ATTEMPTS),
+            (list(passkey_keys(source_ip, credential_id)),),
         )
 
     async def prune(self) -> int:

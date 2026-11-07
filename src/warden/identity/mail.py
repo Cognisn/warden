@@ -8,8 +8,9 @@ warden reports that as ``MailDeliveryError`` without the sender's detail.
 Templates use ``string.Template`` placeholders (``$link``), which can only
 substitute a value, never reach into an object. A product replaces warden's
 templates one at a time through ``mail.template_package``: a module whose
-``INVITATION``, ``PASSWORD_RESET`` or ``MFA_ENROLLED`` attribute, if
-present, is a ``MailTemplate`` used instead of warden's. Every template is
+``INVITATION``, ``PASSWORD_RESET``, ``MFA_ENROLLED`` or
+``PASSKEY_REGISTRATION`` attribute, if present, is a ``MailTemplate`` used
+instead of warden's. Every template is
 checked when the ``Mailer`` is built, so a bad one fails at start-up.
 
 Every value has its control characters replaced before substitution, so
@@ -56,6 +57,7 @@ class MailKind(StrEnum):
     INVITATION = "invitation"
     PASSWORD_RESET = "password_reset"  # noqa: S105 - a message kind, not a password
     MFA_ENROLLED = "mfa_enrolled"
+    PASSKEY_REGISTRATION = "passkey_registration"
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +94,7 @@ PLACEHOLDERS: Mapping[MailKind, frozenset[str]] = {
     MailKind.INVITATION: frozenset({"email", "display_name", "link", "expires_at"}),
     MailKind.PASSWORD_RESET: frozenset({"email", "display_name", "link", "expires_at"}),
     MailKind.MFA_ENROLLED: frozenset({"email", "display_name", "enrolled_at"}),
+    MailKind.PASSKEY_REGISTRATION: frozenset({"email", "display_name", "link", "expires_at"}),
 }
 
 DEFAULT_TEMPLATES: Mapping[MailKind, MailTemplate] = {
@@ -144,6 +147,26 @@ DEFAULT_TEMPLATES: Mapping[MailKind, MailTemplate] = {
             "<p>Hello $display_name,</p>"
             "<p>Two-step verification was set up on $email on $enrolled_at.</p>"
             "<p>If this was not you, contact your administrator straight away.</p>"
+        ),
+    ),
+    MailKind.PASSKEY_REGISTRATION: MailTemplate(
+        subject="Set up your passkey",
+        text=(
+            "Hello $display_name,\n\n"
+            "Your administrator has sent you a link to set up a passkey for $email."
+            " Register it here:\n\n"
+            "$link\n\n"
+            "The link can be used once and expires on $expires_at. It does not sign you in;"
+            " sign in with the passkey afterwards.\n\n"
+            "If you were not expecting this, contact your administrator straight away.\n"
+        ),
+        html=(
+            "<p>Hello $display_name,</p>"
+            "<p>Your administrator has sent you a link to set up a passkey for $email.</p>"
+            '<p><a href="$link">Register your passkey</a></p>'
+            "<p>The link can be used once and expires on $expires_at. It does not sign you in;"
+            " sign in with the passkey afterwards.</p>"
+            "<p>If you were not expecting this, contact your administrator straight away.</p>"
         ),
     ),
 }

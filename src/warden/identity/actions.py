@@ -31,6 +31,16 @@ IDENTITY_ACTIONS: tuple[tuple[str, Severity, str], ...] = (
         Severity.WARNING,
         "a security key of user {resource_id} may have been copied",
     ),
+    (
+        "warden.identity.passkey.link_sent",
+        Severity.NOTICE,
+        "{actor} sent user {resource_id} a passkey registration link: {outcome}",
+    ),
+    (
+        "warden.identity.passkey.registered",
+        Severity.NOTICE,
+        "passkey registered from a link for user {resource_id}: {outcome}",
+    ),
     ("warden.identity.session.refresh", Severity.INFO, "session refresh: {outcome}"),
     (
         "warden.identity.session.reuse_detected",

@@ -28,6 +28,9 @@ __all__ = [
     "InvitationAcceptBody",
     "InvitationCreateBody",
     "NewApiKeyBody",
+    "PasskeyRegistrationBody",
+    "PasskeySignInBody",
+    "PasskeyTokenBody",
     "RefreshBody",
     "ResetCompleteBody",
     "ResetRequestBody",
@@ -48,6 +51,9 @@ __all__ = [
     "WardenInvitationIssued",
     "WardenInvitationList",
     "WardenNewApiKeyIssued",
+    "WardenPasskeyInvitationAccepted",
+    "WardenPasskeyLinkSent",
+    "WardenPasskeyRegistered",
     "WardenPendingInvitation",
     "WardenRecoveryCodes",
     "WardenRefusal",
@@ -57,6 +63,7 @@ __all__ = [
     "WardenRoleAssignment",
     "WardenRoleList",
     "WardenSignInAnswer",
+    "WardenSignInMethodSet",
     "WardenSignedIn",
     "WardenSignedInAfterEnrolment",
     "WardenSsoCheck",
@@ -81,6 +88,9 @@ __all__ = [
     "json_body",
     "no_store",
 ]
+
+
+SignInMethodName = Literal["password_and_sso", "sso_only", "passkey_only"]
 
 
 class _Doc(BaseModel):
@@ -226,6 +236,33 @@ class WardenInvitationAccepted(_Doc):
     email: str
 
 
+class WardenPasskeyInvitationAccepted(WardenInvitationAccepted):
+    """A `passkey_only` invitation accepted by registering a passkey; not signed in."""
+
+    credential: WardenWebAuthnCredential
+    recovery_codes: list[str] = Field(
+        description="Fresh codes, shown only now, since the passkey is the user's first factor."
+    )
+
+
+class WardenPasskeyRegistered(_Doc):
+    """A passkey registered from an administrator's link; not signed in."""
+
+    status: Literal["registered"]
+    credential: WardenWebAuthnCredential
+    recovery_codes: list[str] = Field(
+        description=(
+            "Fresh codes, shown only now, when the user held none; otherwise empty, and the "
+            "codes they hold cover the passkey too."
+        )
+    )
+
+
+class WardenPasskeyLinkSent(_Doc):
+    status: Literal["sent"]
+    expires_at: datetime = Field(description="When the link stops working.")
+
+
 class WardenResetRequested(_Doc):
     status: Literal["requested"]
 
@@ -239,7 +276,7 @@ class WardenUser(_Doc):
     email: str
     display_name: str | None
     status: Literal["invited", "active", "suspended", "deactivated"]
-    sign_in_method: Literal["password_and_sso", "sso_only"]
+    sign_in_method: SignInMethodName
     has_password: bool
     created_at: datetime
     updated_at: datetime
@@ -258,6 +295,18 @@ class WardenUserList(_Doc):
 
 class WardenUserEnvelope(_Doc):
     user: WardenUser
+
+
+class WardenSignInMethodSet(_Doc):
+    user: WardenUser
+    has_passkey: bool | None = Field(
+        default=None,
+        description=(
+            "Only when the method set is `passkey_only`: whether the user holds a passkey (a "
+            "discoverable credential registered with user verification). When false, send "
+            "them a registration link (`POST /users/{user_id}/passkey-registration`)."
+        ),
+    )
 
 
 class WardenRoleAssignment(_Doc):
@@ -420,6 +469,26 @@ class InvitationAcceptBody(_Doc):
     password: str
 
 
+class PasskeySignInBody(_Doc):
+    credential: dict[str, Any] = Field(
+        description="The browser's answer to `navigator.credentials.get()`, as its `toJSON()`."
+    )
+
+
+class PasskeyTokenBody(_Doc):
+    token: str = Field(description="The token from the registration or invitation link.")
+
+
+class PasskeyRegistrationBody(_Doc):
+    token: str = Field(description="The token from the registration or invitation link.")
+    credential: dict[str, Any] = Field(
+        description="The browser's answer to `navigator.credentials.create()`, as its `toJSON()`."
+    )
+    nickname: str | None = Field(
+        default=None, description="1 to 64 characters without control characters."
+    )
+
+
 class ResetRequestBody(_Doc):
     email: str
 
@@ -442,7 +511,7 @@ class StatusBody(_Doc):
 
 
 class SignInMethodBody(_Doc):
-    sign_in_method: Literal["password_and_sso", "sso_only"]
+    sign_in_method: SignInMethodName
 
 
 class RoleAssignBody(_Doc):
@@ -460,7 +529,7 @@ class StagedGrantBody(_Doc):
 class InvitationCreateBody(_Doc):
     email: str
     display_name: str | None = None
-    sign_in_method: Literal["password_and_sso", "sso_only"] = "password_and_sso"
+    sign_in_method: SignInMethodName = "password_and_sso"
     roles: list[StagedGrantBody] = Field(default_factory=list)
 
 

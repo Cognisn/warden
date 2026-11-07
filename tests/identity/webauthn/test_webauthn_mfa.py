@@ -338,7 +338,12 @@ async def test_a_user_moved_to_sso_only_is_refused_at_the_second_step(
     key = await _with_key(http, user)
     challenge = await _challenge(http, user)
     assertion = await _assertion(http, challenge, key)
-    await identity.users.set_sign_in_method(user.id, SignInMethod.SSO_ONLY, actor="test")
+    # Behind the service's back: since wave 11 the service refuses sso_only while the
+    # user holds a key (Skuld question 25); the second step must still re-check.
+    async with db.transaction() as tx:
+        await tx.execute(
+            "UPDATE warden.users SET sign_in_method = 'sso_only' WHERE id = %s", (user.id,)
+        )
     _refused(await _verify(http, challenge, assertion))
 
 

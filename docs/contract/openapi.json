@@ -671,6 +671,127 @@
         }
       }
     },
+    "/auth/passkey/options": {
+      "post": {
+        "tags": [
+          "warden: sign-in"
+        ],
+        "summary": "Begin signing in with a passkey",
+        "description": "Answers with the options for `navigator.credentials.get()`: a fresh, single-use challenge, user verification required and no `allowCredentials`, so the answer is the same for every caller and reveals nothing about any account. The browser offers the user's passkeys, from a button or through conditional mediation (`mediation: \"conditional\"` with `autocomplete=\"username webauthn\"`). No request body. Without WebAuthn configured, the uniform refusal.",
+        "operationId": "passkey_options_auth_passkey_options_post",
+        "responses": {
+          "200": {
+            "description": "The browser's options.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenWebAuthnOptions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/passkey/sign-in": {
+      "post": {
+        "tags": [
+          "warden: sign-in"
+        ],
+        "summary": "Sign in with a passkey",
+        "description": "Sends the browser's answer to `navigator.credentials.get()` for options from `/passkey/options`. Answers with a new session (`status` `signed_in`) whose `amr` is `[\"hwk\", \"mfa\"]`, which satisfies a session policy that requires a second factor: there is no second step. Open to `password_and_sso` and `passkey_only` users, with a passkey: a discoverable credential registered with user verification. Each options' challenge is accepted once. Every failure (an unknown credential, a user handle that does not match, a user who is not active or is `sso_only`, a key that did not verify the user or is not a passkey, a signature counter that did not increase, a bad signature, a used or expired challenge, a throttled attempt) gets the uniform refusal.",
+        "operationId": "passkey_sign_in_auth_passkey_sign_in_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "credential": {
+                    "additionalProperties": true,
+                    "type": "object",
+                    "title": "Credential",
+                    "description": "The browser's answer to `navigator.credentials.get()`, as its `toJSON()`."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "credential"
+                ],
+                "title": "PasskeySignInBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSignedIn"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/webauthn/verify/options": {
       "post": {
         "tags": [
@@ -1421,7 +1542,7 @@
           "warden: invitations and password reset"
         ],
         "summary": "Accept an invitation with a password",
-        "description": "Sets the password, activates the user and applies the staged roles, using the link up. It does not sign the user in: sign in next. A bad, used or expired token, or a user who is no longer invited (which uses the link up), gets the uniform refusal. A password that is too short is a 400 and an invitation that must be accepted through single sign-on is a 409; both leave the link usable.",
+        "description": "Sets the password, activates the user and applies the staged roles, using the link up. It does not sign the user in: sign in next. A bad, used or expired token, or a user who is no longer invited (which uses the link up), gets the uniform refusal. A password that is too short is a 400, and an invitation that must be accepted through single sign-on or with a passkey is a 409; both leave the link usable.",
         "operationId": "accept_invitation_auth_invitations_accept_post",
         "requestBody": {
           "content": {
@@ -1487,7 +1608,7 @@
             }
           },
           "409": {
-            "description": "This invitation is accepted through single sign-on (`POST /sso/start`).",
+            "description": "This invitation is accepted through single sign-on (`POST /sso/start`) or with a passkey (`POST /invitations/accept/passkey/options`).",
             "headers": {
               "cache-control": {
                 "description": "Always `no-store`.",
@@ -1505,6 +1626,503 @@
                   "message 1": {
                     "value": {
                       "detail": "use single sign-on to accept this invitation"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "use a passkey to accept this invitation"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/invitations/accept/passkey/options": {
+      "post": {
+        "tags": [
+          "warden: invitations and password reset"
+        ],
+        "summary": "Begin accepting an invitation with a passkey",
+        "description": "For a `passkey_only` invitation. Answers with the options for `navigator.credentials.create()`: resident key and user verification required. The link stays usable. A bad, used or expired token, or a user who is no longer invited, gets the uniform refusal; an invitation accepted with a password or through single sign-on is a 409.",
+        "operationId": "passkey_invitation_options_auth_invitations_accept_passkey_options_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "title": "Token",
+                    "description": "The token from the registration or invitation link."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "token"
+                ],
+                "title": "PasskeyTokenBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The browser's options.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenWebAuthnOptions"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This invitation is accepted another way.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "accept this invitation with a password"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "use single sign-on to accept this invitation"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/invitations/accept/passkey": {
+      "post": {
+        "tags": [
+          "warden: invitations and password reset"
+        ],
+        "summary": "Accept an invitation by registering a passkey",
+        "description": "Sends the browser's answer to `navigator.credentials.create()` for options from `/invitations/accept/passkey/options`, and an optional nickname. Registers the passkey, activates the user, applies the staged roles and uses the link up, in one transaction. Answers with the passkey and fresh recovery codes, shown once. It does not sign the user in: sign in with the passkey next (`POST /passkey/options`). An answer that is not a passkey is a 400 and leaves the link usable; so is an invitation accepted another way (409). A bad, used or expired token, or a user who is no longer invited (which uses the link up), gets the uniform refusal.",
+        "operationId": "passkey_invitation_accept_auth_invitations_accept_passkey_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "title": "Token",
+                    "description": "The token from the registration or invitation link."
+                  },
+                  "credential": {
+                    "additionalProperties": true,
+                    "type": "object",
+                    "title": "Credential",
+                    "description": "The browser's answer to `navigator.credentials.create()`, as its `toJSON()`."
+                  },
+                  "nickname": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Nickname",
+                    "description": "1 to 64 characters without control characters."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "token",
+                  "credential"
+                ],
+                "title": "PasskeyRegistrationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenPasskeyInvitationAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The answer or the nickname was not accepted.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "credential not accepted"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "the nickname is not valid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This invitation is accepted another way.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "accept this invitation with a password"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "use single sign-on to accept this invitation"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/passkey-registration/options": {
+      "post": {
+        "tags": [
+          "warden: invitations and password reset"
+        ],
+        "summary": "Begin registering a passkey from an administrator's link",
+        "description": "Sends the token from the link an administrator mailed (`POST /users/{user_id}/passkey-registration` under the admin prefix). Answers with the options for `navigator.credentials.create()`: resident key and user verification required. The link stays usable. A bad, used or expired token, or a user who is no longer active or is now `sso_only`, gets the uniform refusal.",
+        "operationId": "passkey_registration_options_auth_passkey_registration_options_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "title": "Token",
+                    "description": "The token from the registration or invitation link."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "token"
+                ],
+                "title": "PasskeyTokenBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The browser's options.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenWebAuthnOptions"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The user holds as many credentials as allowed.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the credential limit is reached"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/passkey-registration": {
+      "post": {
+        "tags": [
+          "warden: invitations and password reset"
+        ],
+        "summary": "Register a passkey from an administrator's link",
+        "description": "Sends the browser's answer to `navigator.credentials.create()` for options from `/passkey-registration/options`, and an optional nickname. Registers the passkey and uses the link up, in one transaction, and answers with it and, when the user held no recovery codes, fresh ones, shown once (otherwise an empty list). It does not sign the user in: sign in with the passkey next (`POST /passkey/options`). An answer that is not a passkey is a 400 and leaves the link usable. A bad, used or expired token, or a user who is no longer active or is now `sso_only` (which uses the link up), gets the uniform refusal.",
+        "operationId": "passkey_registration_auth_passkey_registration_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "title": "Token",
+                    "description": "The token from the registration or invitation link."
+                  },
+                  "credential": {
+                    "additionalProperties": true,
+                    "type": "object",
+                    "title": "Credential",
+                    "description": "The browser's answer to `navigator.credentials.create()`, as its `toJSON()`."
+                  },
+                  "nickname": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Nickname",
+                    "description": "1 to 64 characters without control characters."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "token",
+                  "credential"
+                ],
+                "title": "PasskeyRegistrationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Registered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenPasskeyRegistered"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The answer or the nickname was not accepted.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "credential not accepted"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "the nickname is not valid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The user holds as many credentials as allowed.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the credential limit is reached"
                     }
                   }
                 }
@@ -2475,7 +3093,7 @@
           "warden: administration"
         ],
         "summary": "Set a user's sign-in method",
-        "description": "`password_and_sso` or `sso_only`. An `sso_only` user cannot sign in with, reset or change a password.",
+        "description": "`password_and_sso`, `sso_only` or `passkey_only`. An `sso_only` or `passkey_only` user cannot sign in with, reset or change a password; a `passkey_only` user signs in with a passkey alone (`POST /passkey/sign-in` under the auth prefix). Setting `passkey_only` also answers `has_passkey`: when false, the user cannot sign in until they register a passkey from a link (`POST /users/{user_id}/passkey-registration`). `sso_only` is refused (409) while the user holds security keys or passkeys: reset their second factors first (`DELETE /users/{user_id}/mfa`).",
         "operationId": "set_method_admin_users__user_id__sign_in_method_post",
         "parameters": [
           {
@@ -2494,7 +3112,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WardenUserEnvelope"
+                  "$ref": "#/components/schemas/WardenSignInMethodSet"
                 }
               }
             }
@@ -2540,6 +3158,31 @@
                   "message 1": {
                     "value": {
                       "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The user holds security keys or passkeys.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the user holds security keys or passkeys; reset their second factors first"
                     }
                   }
                 },
@@ -2618,7 +3261,8 @@
                   "sign_in_method": {
                     "enum": [
                       "password_and_sso",
-                      "sso_only"
+                      "sso_only",
+                      "passkey_only"
                     ],
                     "title": "Sign In Method",
                     "type": "string"
@@ -2764,6 +3408,215 @@
                   "message 1": {
                     "value": {
                       "detail": "mail is not configured"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}/passkey-registration": {
+      "post": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "Send a user a passkey registration link",
+        "description": "Mails a single-use link (`http.passkey_registration_link`) with which the user registers a passkey without signing in (`POST /passkey-registration/options` under the auth prefix), and reports the outcome. Sending again stops the earlier link working. For a `passkey_only` user who has no passkey yet or has lost every one: reset their second factors first (`DELETE /users/{user_id}/mfa`), then send the link. There is no self-service request. Refused (409) for a user who is not active or is `sso_only`, and without WebAuthn configured.",
+        "operationId": "send_passkey_link_admin_users__user_id__passkey_registration_post",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Sent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenPasskeyLinkSent"
+                }
+              }
+            },
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A link cannot be sent to this user, or WebAuthn is not configured.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "a passkey registration link cannot be sent to this user"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "WebAuthn is not configured"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The mail sender refused the message.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the message could not be delivered"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No mail sender or no link template is configured.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "mail is not configured"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "the passkey registration link is not configured"
                     }
                   }
                 },
@@ -3565,7 +4418,8 @@
                     "type": "string",
                     "enum": [
                       "password_and_sso",
-                      "sso_only"
+                      "sso_only",
+                      "passkey_only"
                     ],
                     "title": "Sign In Method",
                     "default": "password_and_sso"
@@ -3658,7 +4512,7 @@
             }
           },
           "409": {
-            "description": "A user with that address exists.",
+            "description": "A user with that address exists, or the invitation is `passkey_only` and WebAuthn is not configured.",
             "headers": {
               "cache-control": {
                 "description": "Always `no-store`.",
@@ -3676,6 +4530,11 @@
                   "message 1": {
                     "value": {
                       "detail": "a user with that email address already exists"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "WebAuthn is not configured"
                     }
                   }
                 }
@@ -6256,6 +7115,91 @@
         ],
         "title": "WardenNewApiKeyIssued"
       },
+      "WardenPasskeyInvitationAccepted": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "accepted",
+            "title": "Status"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "credential": {
+            "$ref": "#/components/schemas/WardenWebAuthnCredential"
+          },
+          "recovery_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Recovery Codes",
+            "description": "Fresh codes, shown only now, since the passkey is the user's first factor."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "email",
+          "credential",
+          "recovery_codes"
+        ],
+        "title": "WardenPasskeyInvitationAccepted",
+        "description": "A `passkey_only` invitation accepted by registering a passkey; not signed in."
+      },
+      "WardenPasskeyLinkSent": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "sent",
+            "title": "Status"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At",
+            "description": "When the link stops working."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "expires_at"
+        ],
+        "title": "WardenPasskeyLinkSent"
+      },
+      "WardenPasskeyRegistered": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "registered",
+            "title": "Status"
+          },
+          "credential": {
+            "$ref": "#/components/schemas/WardenWebAuthnCredential"
+          },
+          "recovery_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Recovery Codes",
+            "description": "Fresh codes, shown only now, when the user held none; otherwise empty, and the codes they hold cover the passkey too."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "credential",
+          "recovery_codes"
+        ],
+        "title": "WardenPasskeyRegistered",
+        "description": "A passkey registered from an administrator's link; not signed in."
+      },
       "WardenPendingInvitation": {
         "properties": {
           "user": {
@@ -6493,6 +7437,31 @@
         ],
         "title": "WardenSignInAnswer",
         "description": "What ``POST /sign-in`` answers: a session, or a challenge for the next step."
+      },
+      "WardenSignInMethodSet": {
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/WardenUser"
+          },
+          "has_passkey": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Passkey",
+            "description": "Only when the method set is `passkey_only`: whether the user holds a passkey (a discoverable credential registered with user verification). When false, send them a registration link (`POST /users/{user_id}/passkey-registration`)."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user"
+        ],
+        "title": "WardenSignInMethodSet"
       },
       "WardenSignedIn": {
         "properties": {
@@ -6875,7 +7844,8 @@
             "type": "string",
             "enum": [
               "password_and_sso",
-              "sso_only"
+              "sso_only",
+              "passkey_only"
             ],
             "title": "Sign In Method"
           },

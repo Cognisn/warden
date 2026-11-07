@@ -192,6 +192,8 @@ def test_every_json_body_route_documents_its_request_body(document: dict[str, An
                 ("/admin/sso/settings/reset", "post"),
                 ("/admin/sso/test", "post"),
                 ("/admin/users/{user_id}/password-reset", "post"),
+                ("/admin/users/{user_id}/passkey-registration", "post"),
+                ("/auth/passkey/options", "post"),
                 ("/admin/invitations/{user_id}/resend", "post"),
             }
             if (path, method) in bodiless:

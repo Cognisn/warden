@@ -10,6 +10,8 @@
 | ``POST /password`` | bearer token; ``current_password``, ``new_password`` | 204 |
 | ``POST /totp/enrolment`` | bearer token, or ``challenge`` | ``secret``, ``uri`` |
 | ``POST /totp/enrolment/confirm`` | bearer or ``challenge``; ``code`` | ``recovery_codes`` (*) |
+| ``POST /passkey/options`` | | options |
+| ``POST /passkey/sign-in`` | ``credential`` | tokens |
 
 (*) Under a challenge, the tokens as well.
 
@@ -18,7 +20,9 @@ Tokens are ``{"status": "signed_in", "access_token", "token_type": "Bearer",
 ``{"status": "mfa_required" | "mfa_enrolment_required", "challenge",
 "expires_in"}``; ``mfa_required`` also carries ``methods``, the kinds of
 second factor the user holds. Every authentication failure is the same 401
-response. The security key and passkey routes (``/webauthn/...``) are in
+response. Passkey options are ``{"public_key", "expires_at"}``; a passkey
+sign-in answers with the tokens alone, its ``amr`` ``["hwk", "mfa"]``. The
+security key and passkey routes (``/webauthn/...``) are in
 ``warden.identity.routers.webauthn`` and included here.
 """
 
@@ -39,12 +43,14 @@ from warden.identity.routers.contract import (
     CodeBody,
     EnrolmentBody,
     EnrolmentConfirmBody,
+    PasskeySignInBody,
     RefreshBody,
     SignInBody,
     WardenEnrolmentConfirmed,
     WardenSignedIn,
     WardenSignInAnswer,
     WardenTotpEnrolment,
+    WardenWebAuthnOptions,
     detail,
     json_body,
     no_store,
@@ -302,6 +308,59 @@ def build_auth_router(identity: Identity) -> APIRouter:
         if pair is None:
             return json_response({"recovery_codes": codes})
         return json_response(token_body(pair, recovery_codes=codes))
+
+    # Passkey-only sign-in (rulings P5, P6 and P7).
+
+    @router.post(
+        "/passkey/options",
+        summary="Begin signing in with a passkey",
+        description=(
+            "Answers with the options for `navigator.credentials.get()`: a fresh, single-use "
+            "challenge, user verification required and no `allowCredentials`, so the answer is "
+            "the same for every caller and reveals nothing about any account. The browser "
+            "offers the user's passkeys, from a button or through conditional mediation "
+            '(`mediation: "conditional"` with `autocomplete="username webauthn"`). No '
+            "request body. Without WebAuthn configured, the uniform refusal."
+        ),
+        responses={
+            200: {"model": WardenWebAuthnOptions, "description": "The browser's options."},
+            **REFUSED,
+        },
+    )
+    async def passkey_options(request: Request) -> Response:
+        try:
+            options = await identity.begin_passkey_sign_in(source_ip=source(request))
+        except AuthenticationRefused:
+            return refusal()
+        return json_response(
+            {"public_key": options.public_key, "expires_at": options.expires_at.isoformat()}
+        )
+
+    @router.post(
+        "/passkey/sign-in",
+        summary="Sign in with a passkey",
+        description=(
+            "Sends the browser's answer to `navigator.credentials.get()` for options from "
+            "`/passkey/options`. Answers with a new session (`status` `signed_in`) whose `amr` "
+            'is `["hwk", "mfa"]`, which satisfies a session policy that requires a second '
+            "factor: there is no second step. Open to `password_and_sso` and `passkey_only` "
+            "users, with a passkey: a discoverable credential registered with user "
+            "verification. Each options' challenge is accepted once. Every failure (an unknown "
+            "credential, a user handle that does not match, a user who is not active or is "
+            "`sso_only`, a key that did not verify the user or is not a passkey, a signature "
+            "counter that did not increase, a bad signature, a used or expired challenge, a "
+            "throttled attempt) gets the uniform refusal."
+        ),
+        responses={200: {"model": WardenSignedIn, "description": "Signed in."}, **REFUSED},
+        openapi_extra=json_body(PasskeySignInBody),
+    )
+    async def passkey_sign_in(request: Request) -> Response:
+        body = await read_object(request) or {}
+        try:
+            pair = await identity.passkey_sign_in(body.get("credential"), source_ip=source(request))
+        except AuthenticationRefused:
+            return refusal()
+        return json_response(token_body(pair))
 
     router.include_router(build_webauthn_router(identity))
     return router
