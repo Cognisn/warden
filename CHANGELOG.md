@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A live check that a real browser and warden's WebAuthn routes fit together (`tests/identity/webauthn/live/`, marked `integration` and skipped by default). Chromium, driven by Playwright with the DevTools WebAuthn domain's virtual authenticators (CTAP2, a USB security key without user verification and a platform passkey with resident keys and user verification), runs five flows against a test-only app over a testcontainers Postgres, with `localhost` as the relying party: a password then a security key as second factor; registering a passkey then signing in with it and no email; passkey sign-in refused by the browser when the authenticator cannot verify the user; a `passkey_only` invitation accepted with a passkey; and the administrator's reset then a registration link. Each flow checks what the page saw and what warden recorded. The page is served from the tests tree with no inline script. `playwright` (Apache-2.0) joins the `dev` extra only; it is not a runtime dependency. No change to the library.
+
 ## [0.1.0b12] - 2026-11-07
 
 Twelfth beta: documentation for security keys and passkeys, in the client-behaviour guide, the design overview and the README. No change to the library.

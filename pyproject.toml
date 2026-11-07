@@ -67,6 +67,9 @@ dev = [
     "build>=1.2",
     "hatchling>=1.25",
     "twine>=6.1",
+    # The live WebAuthn check (tests/identity/webauthn/live, marked integration):
+    # Chromium's virtual authenticators. Apache-2.0; never a runtime dependency.
+    "playwright>=1.48",
 ]
 # The sample console under examples/console (not part of the package): uvicorn
 # serves it, and it opens its own pool, as a product does. Never a runtime
