@@ -1,4 +1,4 @@
-"""Single-use tokens: invitation and password reset links.
+"""Single-use tokens: invitation, password reset and passkey registration links.
 
 A token is 32 random bytes, base64url-encoded, handed out once (in a link)
 and stored only as its SHA-256 hash. It expires, and it is used up by one
@@ -41,6 +41,8 @@ _LIVE = sql.SQL("consumed_at IS NULL AND revoked_at IS NULL AND expires_at > now
 class Purpose(StrEnum):
     INVITATION = "invitation"
     PASSWORD_RESET = "password_reset"  # noqa: S105 - a purpose name, not a password
+    PASSKEY_REGISTRATION = "passkey_registration"
+    """An administrator's link for registering a passkey without signing in (ruling P8)."""
 
 
 @dataclass(frozen=True, slots=True)

@@ -13,19 +13,24 @@ link. Revoking an invitation deletes the invited user, but only while the
 user is still invited: one guarded ``DELETE``, so it cannot remove a user
 who accepted concurrently (#129).
 
-Acceptance is one function, ``_accept``, used by the password variant and
-by the single sign-on entry point. Under row locks on the user and then the
-token, it decides:
+Acceptance is one function, ``_accept``, used by the password variant, by
+the single sign-on entry point and by the passkey variant (ruling P9).
+Under row locks on the user and then the token, it decides:
 
 1. whether the token is live (if not, the uniform refusal);
-2. whether the method fits (a password for an ``sso_only`` user, or an SSO
-   identity for another address): a mismatch is refused **before** the token
-   is touched, so the invitation stays usable (#154);
+2. whether the method fits (a password for an ``sso_only`` or
+   ``passkey_only`` user, single sign-on for a ``passkey_only`` user or for
+   another address, a passkey for anyone but a ``passkey_only`` user): a
+   mismatch is refused **before** the token is touched, so the invitation
+   stays usable (#154);
 3. whether the user is still invited (#128): if not, the token is used up
    and the acceptance refused (#154);
 4. otherwise it consumes the token with one guarded write (#127), completes
-   the method (sets the password, or pins the SSO subject through the
-   caller's ``pin``), activates the user and applies the staged grants.
+   the method (sets the password, pins the SSO subject through the caller's
+   ``pin``, or registers the passkey through the caller's ``register``),
+   activates the user and applies the staged grants, all in one
+   transaction: if completing the method fails, nothing is accepted and
+   the invitation stays usable.
 """
 
 from __future__ import annotations
@@ -60,6 +65,7 @@ __all__ = [
     "InvitationError",
     "InvitationMismatch",
     "Invitations",
+    "PasskeyRegistration",
     "PendingInvitation",
     "StagedGrant",
     "SubjectPin",
@@ -94,7 +100,13 @@ INVITATION_ACTIONS: tuple[tuple[str, Severity, str], ...] = (
 _USERS = table(schema.USERS)
 _GRANTS = table(INVITATION_GRANTS)
 
-Method = Literal["password", "sso"]
+Method = Literal["password", "sso", "passkey"]
+
+_HOW_TO_ACCEPT = {
+    SignInMethod.PASSWORD_AND_SSO: "this invitation must be accepted with a password",
+    SignInMethod.SSO_ONLY: "this invitation must be accepted through single sign-on",
+    SignInMethod.PASSKEY_ONLY: "this invitation must be accepted by registering a passkey",
+}
 
 
 def register_actions(registry: ActionRegistry) -> None:
@@ -107,7 +119,15 @@ class InvitationError(Exception):
 
 
 class InvitationMismatch(InvitationError):
-    """The invitation is valid but was accepted the wrong way; it stays usable."""
+    """The invitation is valid but was accepted the wrong way; it stays usable.
+
+    ``sign_in_method`` is the invited user's method, so a caller can say how
+    to accept it; None when single sign-on brought another address.
+    """
+
+    def __init__(self, message: str, *, sign_in_method: SignInMethod | None = None) -> None:
+        super().__init__(message)
+        self.sign_in_method = sign_in_method
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +182,18 @@ class AcceptedInvitation:
     email: str
     method: Method
     roles: tuple[str, ...]
+
+
+class PasskeyRegistration(Protocol):
+    """The WebAuthn registration, run inside the acceptance transaction.
+
+    Called with the invited user locked; it stores the credential (and
+    anything that goes with it) on ``conn`` and returns the identifiers to
+    audit with the acceptance. Raising rolls the acceptance back and leaves
+    the invitation usable.
+    """
+
+    async def __call__(self, conn: AsyncConnection[Any], user_id: uuid.UUID) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -405,6 +437,8 @@ class Invitations:
         """
 
         def check(invitee: _Invitee) -> str | None:
+            if invitee.sign_in_method == SignInMethod.PASSKEY_ONLY:
+                return "method_mismatch"
             if verified.email.lower() != invitee.email.lower():
                 return "identity_mismatch"
             return None
@@ -415,6 +449,65 @@ class Invitations:
         return await self._accept(
             token, "sso", check, complete, source_ip, {"issuer": verified.issuer}
         )
+
+    async def passkey_invitee(self, token: object, *, source_ip: SourceIp = None) -> uuid.UUID:
+        """The invited user a ``passkey_only`` invitation is for, before its passkey options.
+
+        Changes nothing: a refusal leaves the invitation as it was. Raises
+        ``InvitationMismatch`` for an invitation accepted another way and
+        ``AuthenticationRefused`` for a bad, used or expired token or a user
+        who is no longer invited, with the reason in the audit trail.
+        """
+        if not well_formed(token):
+            await self._refuse("malformed", None, "passkey", source_ip)
+        reason: str | None = None
+        invitee: _Invitee | None = None
+        async with self._db.transaction() as tx:
+            user_id = await self._tokens.owner(tx, token, Purpose.INVITATION)
+            invitee = None if user_id is None else await self._read_invitee(tx, user_id)
+            if invitee is None:
+                reason = "unknown_token"
+            elif await self._tokens.lock_live(tx, token, Purpose.INVITATION) is None:
+                reason = "token_not_live"
+            elif invitee.sign_in_method != SignInMethod.PASSKEY_ONLY:
+                reason = "method_mismatch"
+            elif invitee.status != UserStatus.INVITED:
+                reason = f"user_{invitee.status}"
+        user = None if invitee is None else invitee.id
+        if reason == "method_mismatch" and invitee is not None:
+            await self._mismatch(invitee, user, "passkey", source_ip)
+        if reason is not None or invitee is None:
+            await self._refuse(reason or "unknown_token", user, "passkey", source_ip)
+        return invitee.id
+
+    async def accept_with_passkey(
+        self,
+        token: object,
+        *,
+        register: PasskeyRegistration,
+        source_ip: SourceIp = None,
+    ) -> AcceptedInvitation:
+        """Accept a ``passkey_only`` invitation by registering a passkey (ruling P9).
+
+        ``register(conn, user_id)`` runs inside the acceptance transaction
+        after the token is used up and before the user is activated; it
+        registers the passkey on ``conn`` and returns identifiers for the
+        audit record. If it raises, nothing is accepted and the invitation
+        stays usable; its exception reaches the caller. Raises
+        ``InvitationMismatch`` for an invitation accepted another way, and
+        ``AuthenticationRefused`` for every other refusal.
+        """
+        details: dict[str, Any] = {}
+
+        def check(invitee: _Invitee) -> str | None:
+            if invitee.sign_in_method != SignInMethod.PASSKEY_ONLY:
+                return "method_mismatch"
+            return None
+
+        async def complete(conn: AsyncConnection[Any], invitee: _Invitee) -> None:
+            details.update(await register(conn, invitee.id))
+
+        return await self._accept(token, "passkey", check, complete, source_ip, details)
 
     async def _accept(
         self,
@@ -482,7 +575,9 @@ class Invitations:
         except _Abort:
             pass
         user = None if invitee is None else invitee.id
-        if mismatch is not None:
+        if mismatch is not None and invitee is not None:
+            if mismatch == "method_mismatch":
+                await self._mismatch(invitee, user, method, source_ip)
             await self._audit_failure(
                 "warden.identity.invitation.accepted",
                 None,
@@ -491,8 +586,6 @@ class Invitations:
                 mismatch,
                 method=method,
             )
-            if mismatch == "method_mismatch":
-                raise InvitationMismatch("this invitation must be accepted through single sign-on")
             raise InvitationMismatch("the identity does not match the invitation")
         if reason is not None:
             if reason.startswith("user_"):
@@ -592,6 +685,35 @@ class Invitations:
         )
         row = await cur.fetchone()
         return None if row is None else _Invitee(*row)
+
+    async def _read_invitee(self, tx: AsyncConnection[Any], user_id: uuid.UUID) -> _Invitee | None:
+        cur = await tx.execute(
+            sql.SQL("SELECT id, email, status, sign_in_method FROM {} WHERE id = %s").format(
+                _USERS
+            ),
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        return None if row is None else _Invitee(*row)
+
+    async def _mismatch(
+        self,
+        invitee: _Invitee,
+        user: uuid.UUID | None,
+        method: Method,
+        source_ip: SourceIp,
+    ) -> NoReturn:
+        """Audit an invitation accepted the wrong way and say how it must be accepted."""
+        await self._audit_failure(
+            "warden.identity.invitation.accepted",
+            None,
+            user,
+            source_ip,
+            "method_mismatch",
+            method=method,
+        )
+        expected = SignInMethod(invitee.sign_in_method)
+        raise InvitationMismatch(_HOW_TO_ACCEPT[expected], sign_in_method=expected)
 
     async def _activate(self, tx: AsyncConnection[Any], user_id: uuid.UUID) -> bool:
         cur = await tx.execute(

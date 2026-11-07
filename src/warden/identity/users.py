@@ -24,7 +24,14 @@ from warden.db import Database, schema, table
 from warden.identity.passwords import MAX_PASSWORD_LENGTH, PasswordHasher
 from warden.identity.roles import LastAdministratorError, Roles, lock_administrators
 
-__all__ = ["SignInMethod", "User", "UserError", "UserStatus", "Users"]
+__all__ = [
+    "SignInMethod",
+    "SignInMethodConflict",
+    "User",
+    "UserError",
+    "UserStatus",
+    "Users",
+]
 
 # Deliberately loose: one "@", no whitespace, a dot in the domain. Deliverability
 # is the product's concern; this only keeps obvious garbage out.
@@ -35,6 +42,7 @@ _MAX_EMAIL = 320
 _CURSOR = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 _USERS = table(schema.USERS)
+_CREDENTIALS = table(schema.WEBAUTHN_CREDENTIALS)
 _COLUMNS = sql.SQL(
     "id, email, display_name, status, sign_in_method, password_hash IS NOT NULL,"
     " created_at, updated_at"
@@ -51,10 +59,16 @@ class UserStatus(StrEnum):
 class SignInMethod(StrEnum):
     PASSWORD_AND_SSO = "password_and_sso"  # noqa: S105 - a method name, not a password
     SSO_ONLY = "sso_only"
+    PASSKEY_ONLY = "passkey_only"
+    """Signs in with a passkey alone: no password sign-in, reset or change (ruling P5)."""
 
 
 class UserError(Exception):
     """A user change was refused. Messages carry identifiers only, never values."""
+
+
+class SignInMethodConflict(UserError):
+    """The user cannot take that sign-in method now (``sso_only`` while holding keys)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,27 +307,85 @@ class Users:
         actor: str | None,
         conn: AsyncConnection[Any] | None = None,
     ) -> User:
-        async with self._db.transaction(conn) as tx:
-            cur = await tx.execute(
-                sql.SQL("SELECT sign_in_method FROM {} WHERE id = %s FOR UPDATE").format(_USERS),
-                (user_id,),
-            )
-            row = await cur.fetchone()
-            if row is None:
-                raise UserError(f"user {user_id} does not exist")
-            user = await self._update(tx, user_id, sql.SQL("sign_in_method = %s"), method.value)
+        """Change how a user signs in.
+
+        ``sso_only`` is refused with ``SignInMethodConflict`` while the user
+        holds any security key or passkey (ruling P5, Skuld question 25): the
+        administrator's reset of second factors removes them first. The
+        user's row is locked, as a registration locks it, so a key cannot be
+        added between the check and the change.
+        """
+        previous: str | None = None
+        try:
+            async with self._db.transaction(conn) as tx:
+                cur = await tx.execute(
+                    sql.SQL("SELECT sign_in_method FROM {} WHERE id = %s FOR UPDATE").format(
+                        _USERS
+                    ),
+                    (user_id,),
+                )
+                row = await cur.fetchone()
+                if row is None:
+                    raise UserError(f"user {user_id} does not exist")
+                previous = row[0]
+                if method is SignInMethod.SSO_ONLY and await self._holds_credentials(tx, user_id):
+                    raise SignInMethodConflict(f"user {user_id} holds WebAuthn credentials")
+                user = await self._update(tx, user_id, sql.SQL("sign_in_method = %s"), method.value)
+                await record_audit(
+                    AuditEvent(
+                        action="warden.identity.user.sign_in_method_changed",
+                        outcome="success",
+                        actor=actor,
+                        resource_type="user",
+                        resource_id=str(user_id),
+                        details={"from": previous, "to": method.value},
+                    ),
+                    conn=tx,
+                )
+        except SignInMethodConflict:
             await record_audit(
                 AuditEvent(
                     action="warden.identity.user.sign_in_method_changed",
-                    outcome="success",
+                    outcome="failure",
                     actor=actor,
                     resource_type="user",
                     resource_id=str(user_id),
-                    details={"from": row[0], "to": method.value},
-                ),
-                conn=tx,
+                    details={
+                        "from": previous,
+                        "to": method.value,
+                        "reason": "webauthn_credentials",
+                    },
+                )
             )
+            raise
         return user
+
+    async def holds_passkey(
+        self, user_id: uuid.UUID, *, conn: AsyncConnection[Any] | None = None
+    ) -> bool:
+        """Whether the user holds a credential that can sign in alone.
+
+        A discoverable credential registered with user verification (rulings
+        P6 and P7); a security key held only as a second factor is not one.
+        """
+        async with self._db.transaction(conn) as tx:
+            cur = await tx.execute(
+                sql.SQL(
+                    "SELECT EXISTS (SELECT 1 FROM {} WHERE user_id = %s"
+                    " AND discoverable AND user_verified)"
+                ).format(_CREDENTIALS),
+                (user_id,),
+            )
+            row = await cur.fetchone()
+        return bool(row and row[0])
+
+    async def _holds_credentials(self, tx: AsyncConnection[Any], user_id: uuid.UUID) -> bool:
+        cur = await tx.execute(
+            sql.SQL("SELECT EXISTS (SELECT 1 FROM {} WHERE user_id = %s)").format(_CREDENTIALS),
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        return bool(row and row[0])
 
     async def set_password(
         self,

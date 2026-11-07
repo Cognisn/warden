@@ -102,6 +102,12 @@ Request bodies are parsed by warden, not by FastAPI's validation, so a malformed
 - [`GET /auth/webauthn/credentials`](../contract/openapi.json), [`PATCH /auth/webauthn/credentials/{credential_id}`](../contract/openapi.json) and [`DELETE /auth/webauthn/credentials/{credential_id}`](../contract/openapi.json): the signed-in user's own list, rename and remove.
 - [`DELETE /admin/users/{user_id}/mfa`](../contract/openapi.json): the administrator's reset of every second factor, keys included.
 
+**Passkeys on their own (routes).** A passkey also signs a user in alone, with no email first, and a `passkey_only` user signs in no other way; the full section follows later in 0.1.0. The routes, each described in the contract:
+
+- [`POST /auth/passkey/options`](../contract/openapi.json) and [`POST /auth/passkey/sign-in`](../contract/openapi.json): sign in with a passkey.
+- [`POST /admin/users/{user_id}/passkey-registration`](../contract/openapi.json), then [`POST /auth/passkey-registration/options`](../contract/openapi.json) and [`POST /auth/passkey-registration`](../contract/openapi.json): the administrator's emailed link, and registering a passkey with it (reset, then link, for a user who lost theirs).
+- [`POST /auth/invitations/accept/passkey/options`](../contract/openapi.json) and [`POST /auth/invitations/accept/passkey`](../contract/openapi.json): accept a `passkey_only` invitation by registering a passkey.
+
 ## 6. Single sign-on
 
 Single sign-on is OIDC with one identity provider per deployment, for users an administrator has already created or invited (warden never creates an account from a sign-in). The flow is browser-based and needs three things from the product: a link or button that starts it, a completion screen at `http.sso_completion_link`, and HTTPS (the login cookie is `Secure`).

@@ -31,7 +31,7 @@ from sso_support import (
 
 from warden.config import WardenConfig
 from warden.db import Database
-from warden.identity import AuthenticationRefused, Identity, User, UserStatus
+from warden.identity import AuthenticationRefused, Identity, SignInMethod, User, UserStatus
 from warden.identity.sso.errors import SsoError
 from warden.identity.sso.provider import ProviderHttp
 from warden.identity.sso.service import COOKIE_NAME, SingleSignOn
@@ -626,3 +626,44 @@ async def test_unpin_lets_the_user_pin_a_new_subject(
     assert await pin_of(db, alice.id) == (ISSUER, "s-alice-2")
     rows = await audit_rows(db, "warden.identity.sso.subject_unpinned")
     assert rows[0]["actor"] == "admin"
+
+
+# A passkey_only user signs in with a passkey alone, never through the provider
+# (Skuld question 26).
+
+
+async def test_a_passkey_only_user_cannot_sign_in_through_single_sign_on(
+    client: httpx.AsyncClient, idp: FakeIdp, alice: User, identity: Identity, db: Database
+) -> None:
+    await identity.users.set_sign_in_method(alice.id, SignInMethod.PASSKEY_ONLY, actor="test")
+    response = await sign_in(client, idp, sub="s-alice", email=ALICE)
+    assert response.status_code == 401
+    assert (await refusals(db))[-1] == "passkey_only"
+    assert await pin_of(db, alice.id) is None
+    assert await sessions_of(db, alice.id) == 0
+
+
+async def test_a_pinned_user_moved_to_passkey_only_gets_no_handoff(
+    client: httpx.AsyncClient, idp: FakeIdp, alice: User, identity: Identity, db: Database
+) -> None:
+    await tokens(await sign_in(client, idp, sub="s-alice", email=ALICE))
+    await identity.users.set_sign_in_method(alice.id, SignInMethod.PASSKEY_ONLY, actor="test")
+    started = await start(client)
+    code = provider_code(idp, started, sub="s-alice", email=ALICE)
+    assert completion(await callback(client, code, started.state)) == {"error": "sso_failed"}
+    assert (await refusals(db))[-1] == "passkey_only"
+
+
+async def test_a_user_moved_to_passkey_only_before_the_handoff_gets_nothing(
+    client: httpx.AsyncClient, idp: FakeIdp, alice: User, identity: Identity, db: Database
+) -> None:
+    started = await start(client)
+    landed = completion(
+        await callback(
+            client, provider_code(idp, started, sub="s-alice", email=ALICE), started.state
+        )
+    )
+    await identity.users.set_sign_in_method(alice.id, SignInMethod.PASSKEY_ONLY, actor="test")
+    assert (await handoff(client, landed["code"])).status_code == 401
+    assert (await refusals(db))[-1] == "passkey_only"
+    assert await sessions_of(db, alice.id) == 0

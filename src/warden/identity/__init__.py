@@ -25,6 +25,7 @@ from warden.identity.invitations import (
     InvitationError,
     InvitationMismatch,
     Invitations,
+    PasskeyRegistration,
     PendingInvitation,
     StagedGrant,
     SubjectPin,
@@ -52,7 +53,15 @@ from warden.identity.roles import (
     RoleError,
     Roles,
 )
-from warden.identity.service import ChallengeIssued, Identity, SignInResult, WebAuthnEnrolled
+from warden.identity.service import (
+    ChallengeIssued,
+    Identity,
+    PasskeyInvitationAccepted,
+    PasskeyLinkNotConfigured,
+    PasskeyLinkRefused,
+    SignInResult,
+    WebAuthnEnrolled,
+)
 from warden.identity.sso.errors import SsoError
 from warden.identity.sso.service import (
     SSO_FAILURE_MESSAGE,
@@ -64,7 +73,14 @@ from warden.identity.sso.service import (
 )
 from warden.identity.sso.settings import SsoSettings, SsoSettingsError, SsoSettingsStore
 from warden.identity.tokens import TokenPair
-from warden.identity.users import SignInMethod, User, UserError, Users, UserStatus
+from warden.identity.users import (
+    SignInMethod,
+    SignInMethodConflict,
+    User,
+    UserError,
+    Users,
+    UserStatus,
+)
 from warden.identity.webauthn import (
     WebAuthn,
     WebAuthnAssertion,
@@ -107,6 +123,10 @@ __all__ = [
     "MailTemplate",
     "MfaError",
     "NewApiKey",
+    "PasskeyInvitationAccepted",
+    "PasskeyLinkNotConfigured",
+    "PasskeyLinkRefused",
+    "PasskeyRegistration",
     "PasswordHasher",
     "PasswordResets",
     "PendingInvitation",
@@ -124,6 +144,7 @@ __all__ = [
     "SecretKeyError",
     "SessionPolicy",
     "SignInMethod",
+    "SignInMethodConflict",
     "SignInResult",
     "SingleSignOn",
     "SsoError",

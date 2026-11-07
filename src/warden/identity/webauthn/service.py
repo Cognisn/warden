@@ -19,7 +19,12 @@ can be seen and tested on its own. Every response is checked for:
   increase is refused as a suspected clone.
 
 A user who is not active, or who signs in only through single sign-on
-(ruling P5), is refused at every step. User verification is preferred for a
+(ruling P5), is refused at every step. The one exception is explicit: a
+registration begun and finished with ``for_invitation`` admits an invited
+user (and only an invited one), for a ``passkey_only`` invitation accepted
+by registering a passkey (wave 9 question 20). A discoverable sign-in
+accepts only a credential that is discoverable and was registered with
+user verification (rulings P6 and P7). User verification is preferred for a
 second factor and required for a passkey (ruling P7). Nothing here records
 an audit event or logs: the callers that face a browser record each outcome
 with the refusal's reason.
@@ -135,6 +140,8 @@ class _Stored:
     user_id: uuid.UUID
     public_key: CoseKey
     backup_eligible: bool
+    discoverable: bool
+    user_verified: bool
 
 
 class WebAuthn:
@@ -175,12 +182,19 @@ class WebAuthn:
         user_id: uuid.UUID,
         purpose: WebAuthnPurpose,
         *,
+        for_invitation: bool = False,
         conn: AsyncConnection[Any] | None = None,
     ) -> WebAuthnOptions:
-        """Start registering a credential for an active user, for ``purpose``."""
+        """Start registering a credential for an active user, for ``purpose``.
+
+        ``for_invitation`` admits an invited user instead (and refuses an
+        active one): only for accepting a ``passkey_only`` invitation.
+        """
         passkey = purpose is WebAuthnPurpose.PASSKEY
         async with self._db.transaction(conn) as tx:
-            email, display_name = await self._active_user(tx, user_id)
+            email, display_name = await self._active_user(
+                tx, user_id, for_invitation=for_invitation
+            )
             existing = await self._descriptors(tx, user_id)
             if len(existing) >= self._limit:
                 raise WebAuthnError(R.LIMIT_REACHED, user_id=user_id)
@@ -225,9 +239,14 @@ class WebAuthn:
         response: object,
         *,
         nickname: str | None = None,
+        for_invitation: bool = False,
         conn: AsyncConnection[Any] | None = None,
     ) -> WebAuthnRegistration:
-        """Check the browser's registration response and store the credential."""
+        """Check the browser's registration response and store the credential.
+
+        ``for_invitation`` admits an invited user, as for ``begin_registration``;
+        the caller activates the user in the same transaction (``conn``).
+        """
         check_nickname(nickname, user_id)
         parsed = _parse(RegistrationResponse, response, user_id)
         client_data = parsed.response.client_data
@@ -260,7 +279,7 @@ class WebAuthn:
 
         try:
             async with self._db.transaction(conn) as tx:
-                await self._active_user(tx, user_id, lock=True)
+                await self._active_user(tx, user_id, lock=True, for_invitation=for_invitation)
                 cur = await tx.execute(
                     sql.SQL("SELECT count(*) FROM {} WHERE user_id = %s").format(_CREDENTIALS),
                     (user_id,),
@@ -385,6 +404,12 @@ class WebAuthn:
                 expected = await self._stored_user_handle(tx, owner)
                 if handle is None or expected is None or not hmac.compare_digest(handle, expected):
                     raise WebAuthnError(R.USER_HANDLE, **refusal)
+            if user_id is None:
+                # Signing in with the credential alone: it must be a passkey.
+                if not stored.discoverable:
+                    raise WebAuthnError(R.NOT_DISCOVERABLE, **refusal)
+                if not stored.user_verified:
+                    raise WebAuthnError(R.USER_VERIFICATION, **refusal)
             await self._active_user(tx, owner)
             if auth_data.is_backup_eligible() != stored.backup_eligible:
                 raise WebAuthnError(R.BACKUP_ELIGIBILITY, **refusal)
@@ -448,12 +473,18 @@ class WebAuthn:
     # Queries.
 
     async def _active_user(
-        self, conn: AsyncConnection[Any], user_id: uuid.UUID, *, lock: bool = False
+        self,
+        conn: AsyncConnection[Any],
+        user_id: uuid.UUID,
+        *,
+        lock: bool = False,
+        for_invitation: bool = False,
     ) -> tuple[str, str | None]:
         """The user's email and display name; refuses unless active and not SSO-only.
 
         ``lock`` holds the user's row until the transaction ends, so two
         registrations for one user count their credentials one at a time.
+        ``for_invitation`` requires the user to be invited instead of active.
         """
         query = "SELECT email, display_name, status, sign_in_method FROM {} WHERE id = %s"
         if lock:
@@ -462,7 +493,8 @@ class WebAuthn:
         row = await cur.fetchone()
         if row is None:
             raise WebAuthnError(R.UNKNOWN_USER, user_id=user_id)
-        if row[2] != UserStatus.ACTIVE.value:
+        wanted = UserStatus.INVITED if for_invitation else UserStatus.ACTIVE
+        if row[2] != wanted.value:
             raise WebAuthnError(R.INACTIVE_USER, user_id=user_id)
         if row[3] == SignInMethod.SSO_ONLY.value:
             raise WebAuthnError(R.SSO_ONLY, user_id=user_id)
@@ -510,7 +542,8 @@ class WebAuthn:
     async def _stored(self, conn: AsyncConnection[Any], credential_id: bytes) -> _Stored | None:
         cur = await conn.execute(
             sql.SQL(
-                "SELECT id, user_id, public_key, backup_eligible FROM {} WHERE credential_id = %s"
+                "SELECT id, user_id, public_key, backup_eligible, discoverable, user_verified"
+                " FROM {} WHERE credential_id = %s"
             ).format(_CREDENTIALS),
             (credential_id,),
         )
@@ -519,7 +552,7 @@ class WebAuthn:
             return None
         # warden wrote this COSE key itself at registration, so it is a map.
         public_key = CoseKey.parse(cast(Mapping[int, Any], cbor.decode(bytes(row[2]))))
-        return _Stored(row[0], row[1], public_key, row[3])
+        return _Stored(row[0], row[1], public_key, row[3], row[4], row[5])
 
 
 def _parse[T: (RegistrationResponse, AuthenticationResponse)](
