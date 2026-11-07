@@ -32,8 +32,8 @@ def secrets() -> MemorySecrets:
 
 
 @pytest.fixture
-async def console(pool: Any, secrets: MemorySecrets) -> AsyncIterator[Any]:
-    """The sample console, built exactly as ``serve`` builds it, on a test database."""
+async def make_console(pool: Any, secrets: MemorySecrets) -> AsyncIterator[Any]:
+    """Build the sample console as ``serve`` does, with configuration sections overridden."""
     from examples.console.app import build_console
     from warden.audit import get_recorder, set_recorder
     from warden.identity import PasswordHasher
@@ -41,18 +41,28 @@ async def console(pool: Any, secrets: MemorySecrets) -> AsyncIterator[Any]:
     previous = None
     with contextlib.suppress(RuntimeError):
         previous = get_recorder()
-    built = build_console(
-        console_config(),
-        pool,
-        secrets,
-        hasher=PasswordHasher(time_cost=1, memory_cost=8192, parallelism=1),
-    )
-    # The README's bootstrap creates the signing key with ``warden keys rotate``.
-    await built.keys.rotate()
+
+    async def build(**sections: Any) -> Any:
+        built = build_console(
+            console_config(**sections),
+            pool,
+            secrets,
+            hasher=PasswordHasher(time_cost=1, memory_cost=8192, parallelism=1),
+        )
+        # The README's bootstrap creates the signing key with ``warden keys rotate``.
+        await built.keys.rotate()
+        return built
+
     try:
-        yield built
+        yield build
     finally:
         set_recorder(previous)
+
+
+@pytest.fixture
+async def console(make_console: Any) -> Any:
+    """The sample console, built exactly as ``serve`` builds it, on a test database."""
+    return await make_console()
 
 
 @pytest.fixture

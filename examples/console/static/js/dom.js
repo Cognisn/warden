@@ -114,3 +114,9 @@ export function when(iso) {
 export function zoned(local) {
   return local ? new Date(local).toISOString() : undefined;
 }
+
+// Recovery codes, shown once: warden never returns them again.
+export function recoveryCodes(codes, lead = "Keep these recovery codes somewhere safe: each works once, and they are not shown again.") {
+  if (!codes || codes.length === 0) return null;
+  return h("div", {}, status("ok", lead), h("div", { class: "codes" }, codes.map((c) => h("div", {}, c))));
+}

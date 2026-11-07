@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- The sample console (`examples/console`, not part of the package) exercises passkeys and security keys through warden's routes: the account screen registers a key with a nickname, lists, renames and removes keys, and shows the refusal to remove the last second factor; sign-in offers a key beside the authenticator code when `mfa_required` lists `webauthn`, a key or an authenticator app in a forced enrolment, and **Sign in with a passkey** with conditional mediation in the email field's autofill; administration sets `passkey_only`, invites with it, resets every second factor and sends a passkey registration link, which the outbox shows and a new `/passkey` page completes (the example configuration sets `http.passkey_registration_link` to it); and an invitation can be accepted with a passkey. Recovery codes from link registration and invitation acceptance are shown once. The Content Security Policy is unchanged. `examples/console/README.md` describes the walk with a real YubiKey and with a synced passkey, and how to accept only YubiKeys with Yubico's attestation roots, and lists one new gap (question 29). Tests in `tests/examples` drive every new screen's routes with the test suite's software authenticator. warden's behaviour is unchanged.
+
 ## [0.1.0b11] - 2026-11-07
 
 Eleventh beta: signing in with a passkey alone, the `passkey_only` sign-in method, the administrator's passkey registration link, and `passkey_only` invitations accepted by registering a passkey. Users without keys see no difference, except that a user holding keys can no longer be switched to `sso_only` until the administrator's reset removes them.

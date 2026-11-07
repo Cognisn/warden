@@ -49,8 +49,8 @@ __all__ = ["PAGES", "STATIC", "Console", "build_console"]
 
 STATIC = Path(__file__).resolve().parent / "static"
 # Paths that answer with the console's single page. The link templates in the
-# example configuration point at the first three.
-PAGES = ("/accept", "/reset", "/signed-in", "/")
+# example configuration point at all but the last.
+PAGES = ("/accept", "/reset", "/signed-in", "/passkey", "/")
 
 # Windows can map .js to text/plain, which a browser refuses for a module
 # script under ``nosniff``.
