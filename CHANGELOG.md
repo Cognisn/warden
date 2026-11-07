@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `GET <auth>/webauthn/credentials` (and the credential in the registration, rename and link responses) gains a boolean `passkey`, and `WebAuthnCredential` gains a matching `passkey` property: true exactly when the credential is discoverable and was registered with user verification, the rule a discoverable sign-in applies. It is additive; existing fields are unchanged. No migration. The contract (`docs/contract/openapi.json`) and the client guide (section 16) describe it, and the sample console labels keys from it and drops its interim gap notice (question 29).
+
 ## [0.1.0b15] - 2026-11-07
 
 Fifteenth beta: a TOTP key rotation test no longer depends on where a 30-second step boundary falls. No change to the library.

@@ -52,6 +52,14 @@ class WebAuthnCredential:
     created_at: datetime
     last_used_at: datetime | None
 
+    @property
+    def passkey(self) -> bool:
+        """Whether it signs in on its own: discoverable and registered with user verification.
+
+        The rule a discoverable sign-in applies to a stored credential.
+        """
+        return self.discoverable and self.user_verified
+
 
 def credential_from_row(row: tuple[Any, ...]) -> WebAuthnCredential:
     return WebAuthnCredential(

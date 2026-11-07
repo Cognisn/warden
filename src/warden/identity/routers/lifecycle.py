@@ -96,6 +96,7 @@ def _credential(key: WebAuthnCredential) -> dict[str, object]:
         "backup_eligible": key.backup_eligible,
         "backup_state": key.backup_state,
         "discoverable": key.discoverable,
+        "passkey": key.passkey,
     }
 
 
