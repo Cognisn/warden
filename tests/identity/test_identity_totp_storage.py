@@ -88,7 +88,10 @@ async def test_rotation_keeps_enrolments_working_and_reseals(
     rotated = Identity(config, db, keys, permissions, secrets=secrets, hasher=FAST_HASHER)
     challenge = await rotated.sign_in(user.email, PASSWORD)
     assert challenge.challenge is not None
-    result = await rotated.verify_totp(challenge.challenge.token, current_code(enrolment.secret, 1))
+    # Computed once: the replay below must present this exact code, so a 30-second step
+    # boundary passing between the two verifications cannot turn it into a fresh code.
+    next_step_code = current_code(enrolment.secret, 1)
+    result = await rotated.verify_totp(challenge.challenge.token, next_step_code)
     assert isinstance(result, TokenPair)
 
     assert await rotated.mfa.reseal_all() == 1
@@ -102,7 +105,7 @@ async def test_rotation_keeps_enrolments_working_and_reseals(
     challenge = await only_new.sign_in(user.email, PASSWORD)
     assert challenge.challenge is not None
     with pytest.raises(AuthenticationRefused):  # the step was used above, so a replay fails
-        await only_new.verify_totp(challenge.challenge.token, current_code(enrolment.secret, 1))
+        await only_new.verify_totp(challenge.challenge.token, next_step_code)
     async with db.connection() as conn:  # free the step so the new key can be shown to work
         await conn.execute("UPDATE warden.totp_credentials SET last_used_step = 0")
     challenge = await only_new.sign_in(user.email, PASSWORD)
