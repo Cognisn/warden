@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b15] - 2026-11-07
+
+Fifteenth beta: a TOTP key rotation test no longer depends on where a 30-second step boundary falls. No change to the library.
+
 ## [0.1.0b14] - 2026-11-07
 
 Fourteenth beta: the sample console exercises passkeys and security keys. No change to the library.
