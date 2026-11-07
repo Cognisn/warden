@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b12] - 2026-11-07
+
+Twelfth beta: documentation for security keys and passkeys, in the client-behaviour guide, the design overview and the README. No change to the library.
+
 ### Added
 
 - The client-behaviour guide gains section 16, security keys and passkeys (WebAuthn), for a product's front end: the browser calls and the Level 3 JSON helpers with a fallback, registering a key as a second factor (signed in and in a forced enrolment), `methods` on `mfa_required` and completing a sign-in with a key, passkey sign-in with conditional mediation and a button, `passkey_only` users, the administrator's registration link and passkey invitations, the relying party ID and origins, optional attestation roots (Yubico's root as the worked example, and that synced passkeys are refused when roots are set), the credential limit, user verification and `amr`, and the uniform refusals. It also notes that passkey sign-in is throttled by source address and by credential, so clients behind one shared address share the address budget.
