@@ -394,8 +394,11 @@ async def test_failures_from_one_address_throttle_passkey_sign_in_from_it(
         for _ in range(3):
             bad = await passkey_assertion(http, first, signing_key=other_key())
             assert_refused(await passkey_sign_in(http, bad))
-        # A good assertion for another user from the same address is refused now.
-        assert_refused(await passkey_sign_in(http, await passkey_assertion(http, second)))
+        # A good assertion for another user from the same address is refused now. Its
+        # options come from elsewhere: this address has spent its options budget too.
+        async with http_client(identity, ("198.51.100.22", 1)) as fetcher:
+            good = await passkey_assertion(fetcher, second)
+        assert_refused(await passkey_sign_in(http, good))
         assert (await _last_sign_in_failure(db))["details"]["reason"] == "throttled"
     async with http_client(identity, ("198.51.100.21", 1)) as http:
         answer = await passkey_sign_in(http, await passkey_assertion(http, second))

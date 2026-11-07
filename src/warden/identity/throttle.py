@@ -23,6 +23,13 @@ nor one credential gets unlimited attempts. Both are reserved for every
 attempt and both are cleared by a passkey sign-in that issues a session.
 Their key material starts with a byte no UTF-8 text contains, so they can
 never equal a password attempt's key.
+
+The passkey options route is throttled on a third key of its own, the
+source address, with the same limit and window. It is separate from the
+passkey sign-in address key, so fetching options (on every sign-in page
+load, with conditional mediation) does not spend the sign-in budget, and
+sign-in failures do not spend the options budget. A passkey sign-in that
+issues a session clears it for its address along with the other two.
 """
 
 from __future__ import annotations
@@ -49,15 +56,24 @@ def throttle_key(identifier: str, source_ip: SourceIp) -> bytes:
 # 0xFF never occurs in UTF-8, so these keys cannot equal a password key.
 _PASSKEY_ADDRESS = b"\xffpasskey-address\x00"
 _PASSKEY_CREDENTIAL = b"\xffpasskey-credential\x00"
+_PASSKEY_OPTIONS = b"\xffpasskey-options\x00"
+
+
+def _address(source_ip: SourceIp) -> bytes:
+    return str(source_ip if source_ip is not None else "-").encode("ascii")
 
 
 def passkey_keys(source_ip: SourceIp, credential_id: bytes) -> tuple[bytes, bytes]:
     """The passkey throttle's keys: the source address, and the credential id's hash."""
-    address = str(source_ip if source_ip is not None else "-").encode("ascii")
     return (
-        hashlib.sha256(_PASSKEY_ADDRESS + address).digest(),
+        hashlib.sha256(_PASSKEY_ADDRESS + _address(source_ip)).digest(),
         hashlib.sha256(_PASSKEY_CREDENTIAL + hashlib.sha256(credential_id).digest()).digest(),
     )
+
+
+def passkey_options_key(source_ip: SourceIp) -> bytes:
+    """The passkey options throttle's key: the source address, apart from sign-in's."""
+    return hashlib.sha256(_PASSKEY_OPTIONS + _address(source_ip)).digest()
 
 
 class SignInThrottle:
@@ -82,6 +98,10 @@ class SignInThrottle:
         by_address = await self._reserve(address)
         by_credential = await self._reserve(credential)
         return by_address and by_credential
+
+    async def reserve_passkey_options(self, source_ip: SourceIp) -> bool:
+        """Take one passkey options request; False if the address has used up its window."""
+        return await self._reserve(passkey_options_key(source_ip))
 
     async def _reserve(self, key: bytes) -> bool:
         async with self._db.transaction() as tx:
@@ -109,10 +129,13 @@ class SignInThrottle:
     async def clear_passkey(
         self, conn: AsyncConnection[Any], source_ip: SourceIp, credential_id: bytes
     ) -> None:
-        """Forget both passkey keys' attempts; call in the transaction that issues a session."""
+        """Forget the passkey keys' attempts; call in the transaction that issues a session.
+
+        Both sign-in keys, and the options key for the same address.
+        """
+        keys = [*passkey_keys(source_ip, credential_id), passkey_options_key(source_ip)]
         await conn.execute(
-            sql.SQL("DELETE FROM {} WHERE key_hash = ANY(%s)").format(_ATTEMPTS),
-            (list(passkey_keys(source_ip, credential_id)),),
+            sql.SQL("DELETE FROM {} WHERE key_hash = ANY(%s)").format(_ATTEMPTS), (keys,)
         )
 
     async def prune(self) -> int:

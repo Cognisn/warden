@@ -552,7 +552,14 @@ class Identity:
         same for every caller and say nothing about any account, and user
         verification is required. Usable with conditional mediation. Without
         a relying party the refusal is ``AuthenticationRefused``, audited.
+
+        Throttled by source address on a budget of its own, checked before
+        a challenge is issued: once spent, the refusal is
+        ``AuthenticationRefused``, audited with reason ``options_throttled``.
+        A passkey sign-in that issues a session clears it for its address.
         """
+        if not await self.throttle.reserve_passkey_options(source_ip):
+            await self._refuse_passkey("options_throttled", None, None, source_ip)
         if self.webauthn is None:
             await self._refuse_passkey("webauthn_unavailable", None, None, source_ip)
         return await self.webauthn.begin_authentication(None, require_user_verification=True)
