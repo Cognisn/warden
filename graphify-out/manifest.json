@@ -36,9 +36,9 @@
     "semantic_hash": "6145dedca2d2d6820c2f14ca0fe2b9ef"
   },
   "docs/contract/openapi.json": {
-    "mtime": 1794045299.9982793,
-    "seen": 1794046928.6054668,
-    "ast_hash": "38942c0661bc1b0872e63bae6f7dbd7f",
+    "mtime": 1794048910.818548,
+    "seen": 1794050563.352158,
+    "ast_hash": "acf8bb88b4a80660e1045e4c8df8d520",
     "semantic_hash": ""
   },
   "examples/__init__.py": {
@@ -198,9 +198,9 @@
     "semantic_hash": "96f61c262b94dc4c2aede2eb10703965"
   },
   "src/warden/__init__.py": {
-    "mtime": 1794045897.5292857,
-    "seen": 1794046928.6054668,
-    "ast_hash": "b16600124d68e189cab4cc1a6836dfe3",
+    "mtime": 1794049503.0418136,
+    "seen": 1794050563.352158,
+    "ast_hash": "2b2f965e67251ebadeb66639c7bb37c3",
     "semantic_hash": ""
   },
   "src/warden/audit/__init__.py": {
@@ -540,10 +540,10 @@
     "semantic_hash": "9ce7dc401a429acafe00348c6b9b51e5"
   },
   "src/warden/identity/routers/auth.py": {
-    "mtime": 1794032701.3981886,
-    "seen": 1794034720.639449,
-    "ast_hash": "7b98d2fe67a20ed2a4840dd71581c810",
-    "semantic_hash": "7b98d2fe67a20ed2a4840dd71581c810"
+    "mtime": 1794048910.8206236,
+    "seen": 1794050563.352158,
+    "ast_hash": "8467b0179dac2a67ba8cec1741eff5e9",
+    "semantic_hash": ""
   },
   "src/warden/identity/routers/contract.py": {
     "mtime": 1794045300.002359,
@@ -588,10 +588,10 @@
     "semantic_hash": "87e5f7fb2f7bc2c0a5195b8eae53eca6"
   },
   "src/warden/identity/service.py": {
-    "mtime": 1794032701.4002118,
-    "seen": 1794034720.639449,
-    "ast_hash": "56cb7fdb67cebbdd6f4788bfcab13d59",
-    "semantic_hash": "56cb7fdb67cebbdd6f4788bfcab13d59"
+    "mtime": 1794048910.8206236,
+    "seen": 1794050563.352158,
+    "ast_hash": "40aa9d7faf4699030a049bbb1ec32c51",
+    "semantic_hash": ""
   },
   "src/warden/identity/single_use.py": {
     "mtime": 1794032701.4002118,
@@ -660,10 +660,10 @@
     "semantic_hash": "cd31008af6840fd6ba2ed18a20c0af82"
   },
   "src/warden/identity/throttle.py": {
-    "mtime": 1794032701.4022515,
-    "seen": 1794034720.639449,
-    "ast_hash": "543ebd711c4ab1a57484de4caf2ea639",
-    "semantic_hash": "543ebd711c4ab1a57484de4caf2ea639"
+    "mtime": 1794048910.8206236,
+    "seen": 1794050563.352158,
+    "ast_hash": "d883229da20864c198dc742d67e520e5",
+    "semantic_hash": ""
   },
   "src/warden/identity/tokens.py": {
     "mtime": 1793144692.026928,
@@ -1230,10 +1230,10 @@
     "semantic_hash": "2a0d272231da4910178fd1015da4927f"
   },
   "tests/identity/webauthn/test_passkey_sign_in.py": {
-    "mtime": 1794032701.4064562,
-    "seen": 1794034720.639449,
-    "ast_hash": "43148cd373bcbad8aec3c79a3d4a28db",
-    "semantic_hash": "43148cd373bcbad8aec3c79a3d4a28db"
+    "mtime": 1794048910.8226798,
+    "seen": 1794050563.352158,
+    "ast_hash": "11649f7f9e52dbf6a7436a7f006702a1",
+    "semantic_hash": ""
   },
   "tests/identity/webauthn/test_webauthn_authentication.py": {
     "mtime": 1793932604.467399,
@@ -1542,9 +1542,9 @@
     "semantic_hash": "93b2a84c8097f9ccaaf20fde64fb22d6"
   },
   "CHANGELOG.md": {
-    "mtime": 1794045897.4464667,
-    "seen": 1794046928.6063912,
-    "ast_hash": "95b6727f24928e992cfcaaef90eb6450",
+    "mtime": 1794049502.9469461,
+    "seen": 1794050563.3535657,
+    "ast_hash": "9503c557e3e9a4ba0725d9aa58ba4345",
     "semantic_hash": ""
   },
   "CLAUDE.md": {
@@ -1578,9 +1578,9 @@
     "semantic_hash": ""
   },
   "docs/guide/clients.md": {
-    "mtime": 1794045300.000309,
-    "seen": 1794046928.6063912,
-    "ast_hash": "7bdd5aebfc87a3e9201277e750380714",
+    "mtime": 1794048910.818548,
+    "seen": 1794050563.3535657,
+    "ast_hash": "5119daec87961a669e4c8fcef57282f5",
     "semantic_hash": ""
   },
   "docs/releasing.md": {
@@ -1641,6 +1641,12 @@
     "mtime": 1794045300.006261,
     "seen": 1794046928.6063912,
     "ast_hash": "f3a3fbc90853e9d621019d313a71b406",
+    "semantic_hash": ""
+  },
+  "tests/identity/webauthn/test_passkey_options_throttle.py": {
+    "mtime": 1794048910.8226798,
+    "seen": 1794050563.352158,
+    "ast_hash": "17ffdfa536844596bb21f741b23dcf12",
     "semantic_hash": ""
   }
 }
