@@ -197,6 +197,12 @@ class WardenWebAuthnCredential(_Doc):
     backup_eligible: bool = Field(description="Whether the credential may be synced (a passkey).")
     backup_state: bool = Field(description="Whether it was backed up when last used.")
     discoverable: bool = Field(description="Whether it can be used without naming the user.")
+    passkey: bool = Field(
+        description=(
+            "Whether it signs in on its own as a passkey: true exactly when it is "
+            "discoverable and was registered with user verification."
+        )
+    )
 
 
 class WardenWebAuthnCredentialList(_Doc):

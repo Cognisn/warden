@@ -748,6 +748,7 @@ async def test_a_user_lists_renames_and_removes_their_keys(
         "backup_eligible",
         "backup_state",
         "discoverable",
+        "passkey",
     }
     assert first["nickname"] == "One"
     assert first["aaguid"] == "2fc0579f-8113-47ea-b116-bb5a8db9202a"

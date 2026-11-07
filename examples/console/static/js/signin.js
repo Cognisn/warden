@@ -304,7 +304,8 @@ export async function ssoLanding(main) {
 }
 
 function kind(key) {
-  if (!key.discoverable) return "security key (second factor)";
+  // `passkey` is warden's own answer: discoverable and registered with user verification.
+  if (!key.passkey) return "security key (second factor)";
   return key.backup_eligible ? "passkey (synced)" : "passkey (on the device)";
 }
 
@@ -366,7 +367,6 @@ function keysCard(auth) {
   return card(
     "Security keys and passkeys",
     h("p", { class: "muted" }, "A security key or passkey is a second factor beside the authenticator app. One that is a passkey (registered with a PIN or biometric, and kept on the key or synced) also signs you in alone with Sign in with a passkey."),
-    gap("passkeyKind"),
     listArea,
     out,
     supported() ? keyRegistration({}, reload) : status("info", "This browser cannot use security keys or passkeys."),

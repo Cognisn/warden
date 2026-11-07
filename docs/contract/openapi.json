@@ -8002,6 +8002,11 @@
             "type": "boolean",
             "title": "Discoverable",
             "description": "Whether it can be used without naming the user."
+          },
+          "passkey": {
+            "type": "boolean",
+            "title": "Passkey",
+            "description": "Whether it signs in on its own as a passkey: true exactly when it is discoverable and was registered with user verification."
           }
         },
         "additionalProperties": false,
@@ -8014,7 +8019,8 @@
           "aaguid",
           "backup_eligible",
           "backup_state",
-          "discoverable"
+          "discoverable",
+          "passkey"
         ],
         "title": "WardenWebAuthnCredential",
         "description": "A security key or passkey, as its owner sees it. Never the public key."

@@ -40,6 +40,19 @@ def test_the_totp_reset_is_no_longer_a_gap() -> None:
     assert "question 6" not in gaps
 
 
+def test_the_passkey_flag_is_no_longer_a_gap() -> None:
+    """Question 29 was answered with a field: the console labels keys from it."""
+    source = GAPS.read_text(encoding="utf-8")
+    assert '"Q29"' not in source
+    assert "passkeyKind" not in source
+    readme = README.read_text(encoding="utf-8")
+    gaps = readme.split("## Gaps", 1)[1].split("\n## ", 1)[0]
+    assert "question 29" not in gaps
+    signin = (GAPS.parent / "signin.js").read_text(encoding="utf-8")
+    assert "key.passkey" in signin
+    assert "key.discoverable" not in signin
+
+
 def test_the_users_screen_resets_totp_through_wardens_route() -> None:
     admin = (GAPS.parent / "admin.js").read_text(encoding="utf-8")
     assert 'call("DELETE", `${admin}/users/${id}/totp`)' in admin
