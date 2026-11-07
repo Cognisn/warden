@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- `POST <auth>/passkey/options` is throttled by source address, with `identity.sign_in_attempt_limit` requests per `identity.sign_in_window_seconds` on a count of its own: once an address has used it up, the route gives the uniform refusal and issues no challenge, and the refusal is recorded on `warden.identity.sign_in` with method `passkey` and reason `options_throttled`. The count is separate from the passkey and password sign-in counts, and a passkey sign-in that issues a session clears it for its address. No new setting and no migration. The contract (`docs/contract/openapi.json`) and the client guide (section 16.3) describe it.
+
 ## [0.1.0b16] - 2026-11-07
 
 Sixteenth beta: the WebAuthn credential list says which credentials sign in on their own as passkeys. Additive; no other change.

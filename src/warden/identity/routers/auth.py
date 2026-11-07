@@ -320,7 +320,10 @@ def build_auth_router(identity: Identity) -> APIRouter:
             "the same for every caller and reveals nothing about any account. The browser "
             "offers the user's passkeys, from a button or through conditional mediation "
             '(`mediation: "conditional"` with `autocomplete="username webauthn"`). No '
-            "request body. Without WebAuthn configured, the uniform refusal."
+            "request body. Throttled by source address: once the address has made "
+            "`identity.sign_in_attempt_limit` requests within `identity.sign_in_window_seconds`, "
+            "the uniform refusal and no challenge. A passkey sign-in from the address clears "
+            "the count. Without WebAuthn configured, the uniform refusal."
         ),
         responses={
             200: {"model": WardenWebAuthnOptions, "description": "The browser's options."},
