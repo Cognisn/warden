@@ -125,6 +125,7 @@ def test_every_operation_has_a_summary_a_description_and_a_tag(
 # Routes with no failure to document: the reset request always answers 202,
 # and the published key sets are public and unconditional.
 NEVER_FAIL = {
+    ("/auth/capabilities", "get"),
     ("/auth/password-reset", "post"),
     ("/keys/jwks.json", "get"),
     ("/keys/jwks-historical.json", "get"),

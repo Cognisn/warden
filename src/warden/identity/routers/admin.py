@@ -9,6 +9,7 @@ and every error is a fixed message.
 
 | Route | Body | Success |
 |---|---|---|
+| ``GET /capabilities`` | | what this deployment can do, as booleans |
 | ``GET /users[?status=&limit=&after=]`` | | ``{"users": [...]}`` (*) |
 | ``GET /users/{id}`` | | ``{"user", "roles", "webauthn_credentials"}`` |
 | ``POST /users/{id}/status`` | ``status`` | ``{"user"}`` |
@@ -58,6 +59,7 @@ from warden.identity.routers.contract import (
     SignInMethodBody,
     StatusBody,
     WardenApiKeyList,
+    WardenCapabilities,
     WardenInvitationIssued,
     WardenInvitationList,
     WardenNewApiKeyIssued,
@@ -227,6 +229,43 @@ def build_admin_router(
     roles_admin = require_permission(needed["roles"])
     invitations_admin = require_permission(needed["invitations"])
     keys_admin = require_permission(needed["api_keys"])
+
+    # Capabilities
+
+    @router.get(
+        "/capabilities",
+        summary="What this deployment can do",
+        description=(
+            "Whether invitations, password reset links and passkey registration links can be "
+            "mailed, whether a mail sender is installed, whether single sign-on is enabled "
+            "and whether passkeys and security keys work, so an administration screen can "
+            "disable and explain those actions up front. Booleans only, never a setting's "
+            "value. Each is the condition the route behind it checks; that route's own "
+            "answer (such as its 503) stays the authority. Behind the user administration "
+            "permission."
+        ),
+        responses={
+            200: {
+                "model": WardenCapabilities,
+                "description": "The capabilities.",
+                "headers": no_store(),
+            },
+            **REFUSED,
+            **FORBIDDEN,
+        },
+    )
+    async def capabilities(principal: Annotated[Principal, Depends(users_admin)]) -> Response:
+        offered = await identity.capabilities()
+        return json_response(
+            {
+                "mail_sender": offered.mail_sender,
+                "invitations": offered.invitations,
+                "password_reset": offered.password_reset,
+                "passkey_registration_link": offered.passkey_registration_link,
+                "single_sign_on": offered.single_sign_on,
+                "webauthn": offered.webauthn,
+            }
+        )
 
     # Users
 

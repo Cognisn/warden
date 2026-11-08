@@ -68,6 +68,7 @@ from warden.keys import KeyStore
 __all__ = [
     "ChallengeIssued",
     "Identity",
+    "IdentityCapabilities",
     "PasskeyInvitationAccepted",
     "PasskeyLinkNotConfigured",
     "PasskeyLinkRefused",
@@ -138,6 +139,32 @@ class PasskeyLinkRefused(Exception):
     def __init__(self, reason: str) -> None:
         super().__init__(f"passkey registration link refused: {reason}")
         self.reason = reason
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityCapabilities:
+    """What this deployment can do, so a client can disable and explain a feature up front.
+
+    Each field is the exact condition the route or method behind it checks
+    before doing any work; the route's own refusal (a 503, a 409, the uniform
+    refusal) stays the authority. Only booleans: never a configuration value.
+    """
+
+    mail_sender: bool
+    """A ``MailSender`` is installed."""
+    invitations: bool
+    """Invitations can be mailed: a sender and ``http.accept_invitation_link``."""
+    password_reset: bool
+    """Reset links can be mailed, by request or by an administrator: a sender
+    and ``http.reset_password_link``."""
+    passkey_registration_link: bool
+    """An administrator can mail a passkey registration link: WebAuthn,
+    ``http.passkey_registration_link`` and a sender."""
+    single_sign_on: bool
+    """Single sign-on is enabled, with an issuer and a client id: the run-time
+    setting ``GET <auth>/sso/start`` reads."""
+    webauthn: bool
+    """Passkeys and security keys work: a relying party id is known."""
 
 
 class PasskeyLinkNotConfigured(MailError):
@@ -345,6 +372,29 @@ class Identity:
     @property
     def permissions(self) -> PermissionRegistry:
         return self.roles.registry
+
+    async def capabilities(self) -> IdentityCapabilities:
+        """What this deployment can do, for a client to disable and explain features.
+
+        Every field but ``single_sign_on`` is fixed at construction and read
+        with no I/O. ``single_sign_on`` follows the run-time setting through
+        the same cached read sign-in makes (``identity.policy_cache_seconds``),
+        so it agrees with ``GET <auth>/sso/start``.
+        """
+        http = self.config.http
+        mail = self.mailer.configured
+        webauthn = self.webauthn is not None
+        sso = await self.sso.settings.current()
+        return IdentityCapabilities(
+            mail_sender=mail,
+            invitations=mail and http.accept_invitation_link is not None,
+            password_reset=mail and http.reset_password_link is not None,
+            passkey_registration_link=webauthn
+            and mail
+            and http.passkey_registration_link is not None,
+            single_sign_on=sso.enabled and sso.issuer_url is not None and sso.client_id is not None,
+            webauthn=webauthn,
+        )
 
     def install(self, app: FastAPI) -> None:
         """Make this Identity the one ``require_user`` and ``require_permission`` use."""

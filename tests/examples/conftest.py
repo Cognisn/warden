@@ -33,7 +33,10 @@ def secrets() -> MemorySecrets:
 
 @pytest.fixture
 async def make_console(pool: Any, secrets: MemorySecrets) -> AsyncIterator[Any]:
-    """Build the sample console as ``serve`` does, with configuration sections overridden."""
+    """Build the sample console as ``serve`` does, with configuration sections overridden.
+
+    ``send_mail=False`` builds it as ``serve --without-mail`` does, with no mail sender.
+    """
     from examples.console.app import build_console
     from warden.audit import get_recorder, set_recorder
     from warden.identity import PasswordHasher
@@ -42,12 +45,13 @@ async def make_console(pool: Any, secrets: MemorySecrets) -> AsyncIterator[Any]:
     with contextlib.suppress(RuntimeError):
         previous = get_recorder()
 
-    async def build(**sections: Any) -> Any:
+    async def build(*, send_mail: bool = True, **sections: Any) -> Any:
         built = build_console(
             console_config(**sections),
             pool,
             secrets,
             hasher=PasswordHasher(time_cost=1, memory_cost=8192, parallelism=1),
+            send_mail=send_mail,
         )
         # The README's bootstrap creates the signing key with ``warden keys rotate``.
         await built.keys.rotate()

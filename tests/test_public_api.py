@@ -150,6 +150,7 @@ SNAPSHOT: dict[str, list[str]] = {
         "ConfigurationReport",
         "Enrolment",
         "Identity",
+        "IdentityCapabilities",
         "Invitation",
         "InvitationAcceptance",
         "InvitationError",

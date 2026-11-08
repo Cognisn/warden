@@ -13,6 +13,32 @@ function chosen(el, value) {
   return el;
 }
 
+// What warden says this deployment can do (GET <admin>/capabilities), so the
+// screens disable what cannot work and say why. If the answer is missing, every
+// action stays enabled and warden's own refusal (its 503) says what is wrong.
+async function capabilities(admin) {
+  const answer = await call("GET", `${admin}/capabilities`);
+  if (answer.ok) return answer.data;
+  return { mail_sender: true, invitations: true, password_reset: true, passkey_registration_link: true, single_sign_on: true, webauthn: true };
+}
+
+// Why an action that mails cannot be used, from the booleans alone.
+function why(can, field) {
+  if (!can.mail_sender) return "Unavailable: mail is not configured (the product installed no mail sender).";
+  if (field === "invitations") return "Unavailable: the link setting http.accept_invitation_link is missing.";
+  if (field === "password_reset") return "Unavailable: the link setting http.reset_password_link is missing.";
+  if (!can.webauthn) return "Unavailable: WebAuthn is not configured (no relying party for this address).";
+  return "Unavailable: the link setting http.passkey_registration_link is missing.";
+}
+
+// A button or form that cannot work here: disabled, with a short notice beside it.
+function unavailable(control, allowed, reason) {
+  if (allowed) return control;
+  const parts = control.matches("button") ? [control] : control.querySelectorAll("button, input, select");
+  for (const part of parts) part.disabled = true;
+  return h("span", {}, control, " ", reason ? h("span", { class: "muted" }, reason) : null);
+}
+
 async function roleNames(admin) {
   const answer = await call("GET", `${admin}/roles`);
   return answer.ok ? answer.data : { roles: [], permissions: {} };
@@ -23,6 +49,7 @@ async function roleNames(admin) {
 export async function usersScreen(main) {
   const { admin } = await prefixes();
   const registry = await roleNames(admin);
+  const can = await capabilities(admin);
   const listArea = h("div", {});
   const detail = h("div", {});
   let filter = "";
@@ -85,9 +112,17 @@ export async function usersScreen(main) {
         h(
           "p",
           {},
-          action("Send a password reset link", async () => outcome(await call("POST", `${admin}/users/${id}/password-reset`), "sent; see the outbox"), out, "quiet"),
+          unavailable(
+            action("Send a password reset link", async () => outcome(await call("POST", `${admin}/users/${id}/password-reset`), "sent; see the outbox"), out, "quiet"),
+            can.password_reset,
+            why(can, "password_reset"),
+          ),
           " ",
-          action("Send a passkey registration link", async () => outcome(await call("POST", `${admin}/users/${id}/passkey-registration`), "sent; see the outbox"), out, "quiet"),
+          unavailable(
+            action("Send a passkey registration link", async () => outcome(await call("POST", `${admin}/users/${id}/passkey-registration`), "sent; see the outbox"), out, "quiet"),
+            can.passkey_registration_link,
+            why(can, "passkey_registration_link"),
+          ),
         ),
         h(
           "p",
@@ -190,6 +225,7 @@ export async function usersScreen(main) {
 export async function invitationsScreen(main) {
   const { admin } = await prefixes();
   const registry = await roleNames(admin);
+  const can = await capabilities(admin);
   const listArea = h("div", {});
   const out = h("div", {});
 
@@ -210,11 +246,15 @@ export async function invitationsScreen(main) {
           h(
             "td",
             { class: "actions" },
-            action("Resend", async () => {
-              const result = await call("POST", `${admin}/invitations/${i.user.id}/resend`);
-              listArea.replaceChildren(await load());
-              return outcome(result, "resent; see the outbox");
-            }, out, "quiet"),
+            unavailable(
+              action("Resend", async () => {
+                const result = await call("POST", `${admin}/invitations/${i.user.id}/resend`);
+                listArea.replaceChildren(await load());
+                return outcome(result, "resent; see the outbox");
+              }, out, "quiet"),
+              can.invitations,
+              "",
+            ),
             action("Revoke", async () => {
               const result = await call("DELETE", `${admin}/invitations/${i.user.id}`);
               listArea.replaceChildren(await load());
@@ -249,7 +289,8 @@ export async function invitationsScreen(main) {
     h("h2", {}, "Invitations"),
     card(
       "Invite someone",
-      invite,
+      can.invitations ? null : status("info", `${why(can, "invitations")} Invitations cannot be sent or resent until it is set up.`),
+      unavailable(invite, can.invitations, ""),
       h("p", { class: "muted" }, "Choose sso_only to make the invitee accept through single sign-on, or passkey_only to make them accept by registering a passkey (the link opens /accept, where they choose With a passkey)."),
     ),
     card("Pending", listArea, out),
