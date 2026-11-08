@@ -56,6 +56,7 @@ from warden.identity.roles import (
 from warden.identity.service import (
     ChallengeIssued,
     Identity,
+    IdentityCapabilities,
     PasskeyInvitationAccepted,
     PasskeyLinkNotConfigured,
     PasskeyLinkRefused,
@@ -107,6 +108,7 @@ __all__ = [
     "ConfigurationReport",
     "Enrolment",
     "Identity",
+    "IdentityCapabilities",
     "Invitation",
     "InvitationAcceptance",
     "InvitationError",

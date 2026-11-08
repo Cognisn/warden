@@ -43,6 +43,7 @@ __all__ = [
     "StatusBody",
     "WardenApiKey",
     "WardenApiKeyList",
+    "WardenCapabilities",
     "WardenChallengeIssued",
     "WardenDetail",
     "WardenEnrolmentConfirmed",
@@ -63,6 +64,7 @@ __all__ = [
     "WardenRoleAssignment",
     "WardenRoleList",
     "WardenSignInAnswer",
+    "WardenSignInCapabilities",
     "WardenSignInMethodSet",
     "WardenSignedIn",
     "WardenSignedInAfterEnrolment",
@@ -267,6 +269,50 @@ class WardenPasskeyRegistered(_Doc):
 class WardenPasskeyLinkSent(_Doc):
     status: Literal["sent"]
     expires_at: datetime = Field(description="When the link stops working.")
+
+
+class WardenSignInCapabilities(_Doc):
+    """What a sign-in screen may offer. The same for every caller; booleans only."""
+
+    password_reset: bool = Field(
+        description=(
+            "A reset link can be mailed: `POST /password-reset` sends one to an account "
+            "that may have it. When false that route still answers 202 and sends nothing."
+        )
+    )
+    single_sign_on: bool = Field(
+        description=(
+            "Single sign-on is enabled: `/sso/start` goes to the identity provider. Follows "
+            "an administrator's run-time setting within `identity.policy_cache_seconds`."
+        )
+    )
+    passkey_sign_in: bool = Field(
+        description="Passkeys work here: `POST /passkey/options` answers with options."
+    )
+
+
+class WardenCapabilities(_Doc):
+    """What this deployment can do, for administration. Booleans only, never a setting."""
+
+    mail_sender: bool = Field(description="The product installed a mail sender.")
+    invitations: bool = Field(
+        description="Invitations can be mailed: a sender and `http.accept_invitation_link`."
+    )
+    password_reset: bool = Field(
+        description="Reset links can be mailed: a sender and `http.reset_password_link`."
+    )
+    passkey_registration_link: bool = Field(
+        description=(
+            "A passkey registration link can be mailed: WebAuthn, "
+            "`http.passkey_registration_link` and a sender."
+        )
+    )
+    single_sign_on: bool = Field(
+        description="Single sign-on is enabled, with an issuer and a client id."
+    )
+    webauthn: bool = Field(
+        description="Passkeys and security keys work: a relying party id is known."
+    )
 
 
 class WardenResetRequested(_Doc):

@@ -308,3 +308,34 @@ The values follow RFC 8176: `hwk` is proof of possession of a hardware-secured k
 ### 16.7 Refusals
 
 Every sign-in failure here is the uniform refusal (section 4): no key for the user, a wrong or reused challenge, a bad signature, an unknown credential, a user who is not `active`, a throttled attempt. The reason goes to the audit trail only, on `warden.identity.sign_in` (with method `passkey` for passkey sign-in) and the `warden.identity.mfa.webauthn.*` actions. A signed-in user's own registration is told what failed instead, with a fixed message that never echoes the request: 400 `credential not accepted` or `the nickname is not valid`, and 409 for WebAuthn not configured, the credential limit, or an `sso_only` user. These are 400 and 409, not 401, so a client does not mistake them for losing the session. No credential material (public key, signature, client data, attestation or challenge) is ever logged or audited.
+
+## 17. Capabilities: what a deployment can do
+
+Some features depend on how the product deployed warden: mail needs a `MailSender`, each emailed link needs its template, passkeys need a relying party, and single sign-on needs to be enabled. A client reads the capabilities to disable or hide those controls up front, and to say why, instead of finding out from a refusal after the click. Every value is a boolean; no address, provider, issuer, domain or other setting is ever returned.
+
+**The sign-in screen.** [`GET /auth/capabilities`](../contract/openapi.json) is anonymous and answers every caller the same way (it reads no bearer and no account), with `Cache-Control: no-store`:
+
+| Field | When true | What the screen does when false |
+|---|---|---|
+| `password_reset` | A reset link can be mailed: a mail sender and `http.reset_password_link`. | Hide "Forgot password". `POST /auth/password-reset` still answers 202 and sends nothing. |
+| `single_sign_on` | Single sign-on is enabled, with an issuer and a client id. | Hide the single sign-on button: `GET /auth/sso/start` would land on `?error=sso_failed`. |
+| `passkey_sign_in` | Passkeys work here: a relying party id is known. | Hide "Sign in with a passkey" and skip conditional mediation: `POST /auth/passkey/options` would be the uniform refusal. |
+
+Each of these is something the screen reveals anyway by showing or hiding the control, so the route tells an anonymous caller nothing new.
+
+**Administration.** [`GET /admin/capabilities`](../contract/openapi.json), behind the user administration permission, answers six booleans:
+
+| Field | When true | Disable when false |
+|---|---|---|
+| `mail_sender` | The product installed a mail sender. | Everything that mails; say "mail is not configured". |
+| `invitations` | A sender and `http.accept_invitation_link`. | Invite and resend (otherwise 503 `mail is not configured`). |
+| `password_reset` | A sender and `http.reset_password_link`. | Send a password reset link (otherwise 503). |
+| `passkey_registration_link` | WebAuthn, a sender and `http.passkey_registration_link`. | Send a passkey registration link (otherwise 503, or 409 without WebAuthn). |
+| `single_sign_on` | Single sign-on is enabled, with an issuer and a client id. | Inviting `sso_only` users is still allowed; they cannot accept until it is enabled. |
+| `webauthn` | Passkeys and security keys work. | Registering keys and inviting a `passkey_only` user (otherwise 409 `WebAuthn is not configured`); a `passkey_only` user cannot sign in. |
+
+To explain a disabled passkey registration link: with `mail_sender` false, mail is not configured; with `webauthn` false, WebAuthn is not configured; otherwise the link setting `http.passkey_registration_link` is missing. In Python, `await Identity.capabilities()` returns the same six fields as `IdentityCapabilities`.
+
+**When it changes.** Mail, the link templates and the relying party are start-up configuration: those fields are fixed while the process runs, so read them once per page load. `single_sign_on` follows the run-time setting an administrator changes with [`PUT /admin/sso/settings`](../contract/openapi.json), through the same cache sign-in uses, so it can lag a change by up to `identity.policy_cache_seconds` on another process.
+
+**The routes stay the authority.** Each field is the condition the route behind it checks, but the capabilities are advice for the screen: a route still refuses as before (its 503, 409 or the uniform refusal), and a client handles that refusal even when the capability said yes.

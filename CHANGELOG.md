@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Capabilities: a client can learn up front which optional features this deployment offers, to disable and explain them instead of finding out from a refusal. `await Identity.capabilities()` returns `IdentityCapabilities`, six booleans: `mail_sender`, `invitations` (a sender and `http.accept_invitation_link`), `password_reset` (a sender and `http.reset_password_link`), `passkey_registration_link` (WebAuthn, a sender and `http.passkey_registration_link`), `single_sign_on` (enabled, with an issuer and a client id, following the run-time setting through the cache sign-in uses) and `webauthn` (a relying party is known). Each is the exact condition its route checks, and a test per capability flips the condition and shows the answer and the route change together. `GET <auth>/capabilities` is anonymous, `no-store` and the same for every caller, and answers only `password_reset`, `single_sign_on` and `passkey_sign_in`; `GET <admin>/capabilities`, behind the user administration permission, answers all six. Neither returns any setting's value. Additive: no existing route, answer or refusal changes, and the 503s remain the authority. No new setting and no migration. The contract (`docs/contract/openapi.json`) and the client guide (section 17) describe them.
+
 ## [0.1.0b17] - 2026-11-07
 
 Seventeenth beta: the passkey sign-in options route is throttled by source address.

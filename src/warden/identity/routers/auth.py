@@ -12,6 +12,7 @@
 | ``POST /totp/enrolment/confirm`` | bearer or ``challenge``; ``code`` | ``recovery_codes`` (*) |
 | ``POST /passkey/options`` | | options |
 | ``POST /passkey/sign-in`` | ``credential`` | tokens |
+| ``GET /capabilities`` | | ``password_reset``, ``single_sign_on``, ``passkey_sign_in`` |
 
 (*) Under a challenge, the tokens as well.
 
@@ -49,6 +50,7 @@ from warden.identity.routers.contract import (
     WardenEnrolmentConfirmed,
     WardenSignedIn,
     WardenSignInAnswer,
+    WardenSignInCapabilities,
     WardenTotpEnrolment,
     WardenWebAuthnOptions,
     detail,
@@ -364,6 +366,36 @@ def build_auth_router(identity: Identity) -> APIRouter:
         except AuthenticationRefused:
             return refusal()
         return json_response(token_body(pair))
+
+    # What a sign-in screen may offer: three booleans, the same for every caller.
+
+    @router.get(
+        "/capabilities",
+        summary="What a sign-in screen may offer",
+        description=(
+            "Whether a password reset can be requested, single sign-on started and a passkey "
+            "used here, so a sign-in screen can hide or disable those controls up front. "
+            "Anonymous, and the same answer for every caller: it reads no bearer and no "
+            "account, and carries only these booleans, never an address, a provider or any "
+            "other setting. The routes' own answers stay the authority."
+        ),
+        responses={
+            200: {
+                "model": WardenSignInCapabilities,
+                "description": "The sign-in capabilities.",
+                "headers": no_store(),
+            },
+        },
+    )
+    async def capabilities() -> Response:
+        offered = await identity.capabilities()
+        return json_response(
+            {
+                "password_reset": offered.password_reset,
+                "single_sign_on": offered.single_sign_on,
+                "passkey_sign_in": offered.webauthn,
+            }
+        )
 
     router.include_router(build_webauthn_router(identity))
     return router

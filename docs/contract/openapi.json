@@ -792,6 +792,36 @@
         }
       }
     },
+    "/auth/capabilities": {
+      "get": {
+        "tags": [
+          "warden: sign-in"
+        ],
+        "summary": "What a sign-in screen may offer",
+        "description": "Whether a password reset can be requested, single sign-on started and a passkey used here, so a sign-in screen can hide or disable those controls up front. Anonymous, and the same answer for every caller: it reads no bearer and no account, and carries only these booleans, never an address, a provider or any other setting. The routes' own answers stay the authority.",
+        "operationId": "capabilities_auth_capabilities_get",
+        "responses": {
+          "200": {
+            "description": "The sign-in capabilities.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSignInCapabilities"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/webauthn/verify/options": {
       "post": {
         "tags": [
@@ -2617,6 +2647,84 @@
             }
           }
         ]
+      }
+    },
+    "/admin/capabilities": {
+      "get": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "What this deployment can do",
+        "description": "Whether invitations, password reset links and passkey registration links can be mailed, whether a mail sender is installed, whether single sign-on is enabled and whether passkeys and security keys work, so an administration screen can disable and explain those actions up front. Booleans only, never a setting's value. Each is the condition the route behind it checks; that route's own answer (such as its 503) stays the authority. Behind the user administration permission.",
+        "operationId": "capabilities_admin_capabilities_get",
+        "responses": {
+          "200": {
+            "description": "The capabilities.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenCapabilities"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                },
+                "example": {
+                  "detail": "forbidden"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/admin/users": {
@@ -6933,6 +7041,52 @@
         ],
         "title": "WardenApiKeyList"
       },
+      "WardenCapabilities": {
+        "properties": {
+          "mail_sender": {
+            "type": "boolean",
+            "title": "Mail Sender",
+            "description": "The product installed a mail sender."
+          },
+          "invitations": {
+            "type": "boolean",
+            "title": "Invitations",
+            "description": "Invitations can be mailed: a sender and `http.accept_invitation_link`."
+          },
+          "password_reset": {
+            "type": "boolean",
+            "title": "Password Reset",
+            "description": "Reset links can be mailed: a sender and `http.reset_password_link`."
+          },
+          "passkey_registration_link": {
+            "type": "boolean",
+            "title": "Passkey Registration Link",
+            "description": "A passkey registration link can be mailed: WebAuthn, `http.passkey_registration_link` and a sender."
+          },
+          "single_sign_on": {
+            "type": "boolean",
+            "title": "Single Sign On",
+            "description": "Single sign-on is enabled, with an issuer and a client id."
+          },
+          "webauthn": {
+            "type": "boolean",
+            "title": "Webauthn",
+            "description": "Passkeys and security keys work: a relying party id is known."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "mail_sender",
+          "invitations",
+          "password_reset",
+          "passkey_registration_link",
+          "single_sign_on",
+          "webauthn"
+        ],
+        "title": "WardenCapabilities",
+        "description": "What this deployment can do, for administration. Booleans only, never a setting."
+      },
       "WardenChallengeIssued": {
         "properties": {
           "status": {
@@ -7437,6 +7591,34 @@
         ],
         "title": "WardenSignInAnswer",
         "description": "What ``POST /sign-in`` answers: a session, or a challenge for the next step."
+      },
+      "WardenSignInCapabilities": {
+        "properties": {
+          "password_reset": {
+            "type": "boolean",
+            "title": "Password Reset",
+            "description": "A reset link can be mailed: `POST /password-reset` sends one to an account that may have it. When false that route still answers 202 and sends nothing."
+          },
+          "single_sign_on": {
+            "type": "boolean",
+            "title": "Single Sign On",
+            "description": "Single sign-on is enabled: `/sso/start` goes to the identity provider. Follows an administrator's run-time setting within `identity.policy_cache_seconds`."
+          },
+          "passkey_sign_in": {
+            "type": "boolean",
+            "title": "Passkey Sign In",
+            "description": "Passkeys work here: `POST /passkey/options` answers with options."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "password_reset",
+          "single_sign_on",
+          "passkey_sign_in"
+        ],
+        "title": "WardenSignInCapabilities",
+        "description": "What a sign-in screen may offer. The same for every caller; booleans only."
       },
       "WardenSignInMethodSet": {
         "properties": {
