@@ -186,8 +186,16 @@ function forcedEnrolment(challenge, area) {
   return status("info", "Password accepted: this account must set up a second factor first.");
 }
 
+// What a sign-in screen may offer (GET <auth>/capabilities): the same answer for
+// everyone. If it is missing, everything is offered and warden's routes refuse.
+async function signInCapabilities(auth) {
+  const answer = await call("GET", `${auth}/capabilities`, { anonymous: true });
+  return answer.ok ? answer.data : { password_reset: true, single_sign_on: true, passkey_sign_in: true };
+}
+
 export async function signInScreen(main) {
   const { auth } = await prefixes();
+  const offered = await signInCapabilities(auth);
   const next = h("div", {});
   let autofill = null;
   const stopAutofill = () => {
@@ -207,7 +215,7 @@ export async function signInScreen(main) {
   // email field's autofill. The options carry no allowCredentials, so they
   // are the same for everyone and reveal nothing about any account.
   const startAutofill = async () => {
-    if (!(await conditionalAvailable())) return;
+    if (!offered.passkey_sign_in || !(await conditionalAvailable())) return;
     stopAutofill();
     const controller = new AbortController();
     autofill = controller;
@@ -269,14 +277,20 @@ export async function signInScreen(main) {
     h("h2", {}, "Sign in"),
     card("Password", passwordForm),
     next,
-    card(
-      "Passkey",
-      h("p", { class: "muted" }, "No email needed: the browser offers this site's passkeys, here or in the email field's autofill. A passkey signs you in on its own, with no second step."),
-      supported() ? passkey : status("info", "This browser cannot use passkeys."),
-      passkeyArea,
-    ),
-    card("Single sign-on", h("p", { class: "muted" }, "Goes to the configured identity provider and back to /signed-in."), sso),
-    card("Forgotten password", reset),
+    offered.passkey_sign_in
+      ? card(
+          "Passkey",
+          h("p", { class: "muted" }, "No email needed: the browser offers this site's passkeys, here or in the email field's autofill. A passkey signs you in on its own, with no second step."),
+          supported() ? passkey : status("info", "This browser cannot use passkeys."),
+          passkeyArea,
+        )
+      : card("Passkey", status("info", "Passkeys are not available here: warden has no relying party for this address.")),
+    offered.single_sign_on
+      ? card("Single sign-on", h("p", { class: "muted" }, "Goes to the configured identity provider and back to /signed-in."), sso)
+      : card("Single sign-on", status("info", "Single sign-on is not enabled. An administrator can enable it under Single sign-on.")),
+    offered.password_reset
+      ? card("Forgotten password", reset)
+      : card("Forgotten password", status("info", "Reset links cannot be mailed here (mail is not configured), so ask an administrator.")),
   );
   // Leaving the screen ends the autofill's waiting request.
   window.addEventListener("hashchange", stopAutofill, { once: true });

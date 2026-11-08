@@ -93,8 +93,15 @@ def build_console(
     secrets: SecretStore,
     *,
     hasher: PasswordHasher | None = None,
+    send_mail: bool = True,
 ) -> Console:
-    """Build the console over the product's open pool and konfig's secrets store."""
+    """Build the console over the product's open pool and konfig's secrets store.
+
+    ``send_mail=False`` constructs ``Identity`` with no mail sender, as a
+    product without mail would (``serve --without-mail``): warden's capability
+    routes then say invitations and links cannot be mailed, and the screens
+    disable those actions and explain why. The outbox stays, empty.
+    """
     db = Database(pool)
 
     registry = ActionRegistry()
@@ -114,7 +121,7 @@ def build_console(
         secrets=secrets,
         hasher=hasher,
         resource_scope=NoteScope(notes),
-        mail_sender=outbox,
+        mail_sender=outbox if send_mail else None,
     )
 
     forwarder: SyslogForwarder | None = None

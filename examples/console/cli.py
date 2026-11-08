@@ -2,11 +2,12 @@
 
     python -m examples.console init --sandbox DIR [--ports-file FILE]
     python -m examples.console create-admin --config FILE --email ADDRESS
-    python -m examples.console serve --config FILE
+    python -m examples.console serve --config FILE [--without-mail]
 
 ``init`` writes ``<sandbox>/console.yaml`` and seeds konfig's secrets store.
 ``create-admin`` creates the first administrator. ``serve`` starts the app on
-127.0.0.1 at the configured console port. Migrations and the signing key
+127.0.0.1 at the configured console port; with ``--without-mail`` it installs
+no mail sender, to show how the screens follow warden's capabilities. Migrations and the signing key
 come from the warden CLI, as in a product: ``warden --config FILE migrate``
 and ``warden --config FILE keys rotate``.
 """
@@ -97,13 +98,13 @@ def _create_admin(loaded: LoadedSettings, email: str, password: str | None) -> i
     return 0
 
 
-def _serve(loaded: LoadedSettings) -> int:
+def _serve(loaded: LoadedSettings, *, send_mail: bool = True) -> int:
     import uvicorn
 
     _trust_provider_ca(loaded)
 
     async def work(pool: Any) -> None:
-        console = build_console(loaded.config, pool, loaded.secrets)
+        console = build_console(loaded.config, pool, loaded.secrets, send_mail=send_mail)
         server = uvicorn.Server(
             uvicorn.Config(console.app, host=HOST, port=loaded.port, loop="none", lifespan="on")
         )
@@ -132,6 +133,11 @@ def _parser() -> argparse.ArgumentParser:
 
     serve = commands.add_parser("serve", help="start the console on 127.0.0.1")
     serve.add_argument("--config", required=True)
+    serve.add_argument(
+        "--without-mail",
+        action="store_true",
+        help="install no mail sender, to see the screens disable what needs mail",
+    )
     return parser
 
 
@@ -143,7 +149,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         loaded = load_settings(Path(args.config))
         if args.command == "create-admin":
             return _create_admin(loaded, args.email, args.password)
-        return _serve(loaded)
+        return _serve(loaded, send_mail=not args.without_mail)
     except (ConfigError, ValueError, OSError) as exc:
         print(exc, file=sys.stderr)
         return 2

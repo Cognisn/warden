@@ -122,6 +122,16 @@ Single sign-on starts disabled. To try it, sign in as the administrator, open **
 
 For break-glass sign-in, stop the provider (`docker compose ... stop idp`) and sign in with a password: single sign-on fails with its one generic message, and password sign-in still works.
 
+### Without a mail sender
+
+The screens ask warden what the deployment can do before offering a control: the sign-in screen reads `GET <auth>/capabilities` (anonymous) and the Users and Invitations screens read `GET <admin>/capabilities` (see the client guide, section 17). To see them follow it, start the console with no mail sender, as a product without mail would:
+
+```
+python -m examples.console serve --config $sb/console.yaml --without-mail
+```
+
+The sign-in screen then says reset links cannot be mailed instead of offering **Forgotten password**. Under **Users and roles**, **Send a password reset link** and **Send a passkey registration link** are disabled with a notice that mail is not configured; under **Invitations**, **Invite** and **Resend** are too. warden's own refusals have not changed: a call made anyway still gets its 503 `mail is not configured`, and the public reset request still answers 202 and sends nothing. Remove `passkey_registration_link` from `console.yaml` instead, and only the passkey registration link is disabled, with a notice naming the missing setting. The sign-in screen also hides single sign-on until it is enabled, and passkeys when there is no relying party (a base URL on an IP address).
+
 ## Gaps
 
 These are things the console needed that warden's public surface does not provide. Each is recorded as a numbered question in warden 0.1.0's release tracking, and the screen that needs it says so. The sample works around none of them; where it builds its own route, it does so only from public names, as any product would have to.
@@ -135,4 +145,4 @@ These are things the console needed that warden's public surface does not provid
 
 ## Tests
 
-`tests/examples/` starts the console against a testcontainers Postgres: every router mounted, the Content Security Policy on every page and asset, a password sign-in round trip, an invitation followed from the outbox, and the notes refused without their permission and allowed with it. The passkey tests use the test suite's software authenticator in place of a browser and a key: every warden route a screen calls is mounted, a key registered, renamed and removed, the last second factor kept, a key as the second factor and in a forced enrolment, a passkey sign-in round trip, `passkey_only` with the registration link followed from the outbox, the administrator's reset, and a `passkey_only` invitation accepted with a passkey. Type checking: `mypy --strict examples/console`.
+`tests/examples/` starts the console against a testcontainers Postgres: every router mounted, the Content Security Policy on every page and asset, a password sign-in round trip, an invitation followed from the outbox, and the notes refused without their permission and allowed with it. The passkey tests use the test suite's software authenticator in place of a browser and a key: every warden route a screen calls is mounted, a key registered, renamed and removed, the last second factor kept, a key as the second factor and in a forced enrolment, a passkey sign-in round trip, `passkey_only` with the registration link followed from the outbox, the administrator's reset, and a `passkey_only` invitation accepted with a passkey. The capability tests build the console with and without a mail sender, and without the passkey link setting, and check both capability routes, the unchanged 503 and the screens that read them. Type checking: `mypy --strict examples/console`.
