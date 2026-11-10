@@ -1,7 +1,7 @@
 # warden
 
 # Project configuration
-- Kvasir library: warden
+- Kvasir library: devwork (tag project-warden); fallback: warden
 - Issue tracker: github
 - GitHub repository: Cognisn/warden
 - Default branch: main
