@@ -12,6 +12,7 @@ behaviour: identity's flows call it. Results and errors carry identifiers,
 rule codes and counts only, never a password, a hash or a hash prefix.
 """
 
+from warden.identity.password_policy.builtin import BUILTIN_REASON, BuiltinList
 from warden.identity.password_policy.errors import (
     HibpUnavailable,
     PasswordPolicyConflict,
@@ -21,6 +22,13 @@ from warden.identity.password_policy.errors import (
     WatchListImportError,
     WatchListNotFound,
 )
+from warden.identity.password_policy.fingerprint import (
+    Fingerprints,
+    OpenedFingerprint,
+    SealedFingerprint,
+    password_digest,
+)
+from warden.identity.password_policy.hibp import HibpRangeClient, RangeCache
 from warden.identity.password_policy.rules import (
     DESCRIPTION_VERSION,
     Evaluation,
@@ -34,20 +42,28 @@ from warden.identity.password_policy.rules import (
 )
 
 __all__ = [
+    "BUILTIN_REASON",
     "DESCRIPTION_VERSION",
+    "BuiltinList",
     "Evaluation",
+    "Fingerprints",
+    "HibpRangeClient",
     "HibpUnavailable",
+    "OpenedFingerprint",
     "PassphraseRule",
     "PasswordPolicyConflict",
     "PasswordPolicyError",
     "PasswordPolicyNotFound",
     "PasswordRules",
+    "RangeCache",
     "RuleCode",
     "RuleResult",
+    "SealedFingerprint",
     "Tier",
     "UserContext",
     "WatchListError",
     "WatchListImportError",
     "WatchListNotFound",
     "evaluate",
+    "password_digest",
 ]
