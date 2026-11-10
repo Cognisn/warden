@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Creating or changing a password policy with `forbid_user_details` in the body (`POST /password-policies` and `PUT /password-policies/{id}`) answered 500, because the field, which belongs to `PasswordRules`, was also passed to `PolicySettings`. It is now applied through the rules only, true or false, and an update that leaves it out keeps it. The sample console's policy form now sends the field whether ticked or not, and its note of the defect (gap Q39) is removed.
+
 ## [0.1.0b23] - 2026-11-10
 
 Twenty-third beta: password policies in the sample console, for the walk at the rc1 gate. Sample only; no library change.

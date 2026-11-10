@@ -260,6 +260,34 @@ async def test_update_round_trip_keeps_omitted_settings(
     assert row["details"] == {"fields": ["rules", "description"], "version": 2}
 
 
+@pytest.mark.parametrize("flag", [True, False])
+async def test_forbid_user_details_is_set_on_create_and_update(
+    client: httpx.AsyncClient, headers: dict[str, str], flag: bool
+) -> None:
+    """The rule is a PasswordRules field: it must reach the stored rules, not PolicySettings."""
+    created = await create_policy(client, headers, forbid_user_details=flag)
+    assert created["forbid_user_details"] is flag
+    fetched = await client.get(f"/admin/password-policies/{created['id']}", headers=headers)
+    assert fetched.json()["policy"]["forbid_user_details"] is flag
+    response = await client.put(
+        f"/admin/password-policies/{created['id']}",
+        json={"version": 1, "forbid_user_details": not flag},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    updated = response.json()["policy"]
+    assert updated["version"] == 2 and updated["forbid_user_details"] is (not flag)
+    # An update that leaves the field out keeps it.
+    again = await client.put(
+        f"/admin/password-policies/{created['id']}",
+        json={"version": 2, "description": "Kept"},
+        headers=headers,
+    )
+    assert again.status_code == 200, again.text
+    assert again.json()["policy"]["forbid_user_details"] is (not flag)
+    assert again.json()["policy"]["version"] == 3
+
+
 async def test_a_stale_update_is_a_409_and_changes_nothing(
     client: httpx.AsyncClient, headers: dict[str, str]
 ) -> None:

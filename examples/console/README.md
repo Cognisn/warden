@@ -167,7 +167,7 @@ Sign in as the administrator. The people for the walk are invented: `alice@examp
 
 Open **Password policies** and choose **New policy**.
 
-- **Staff**, priority 10: minimum length 12, at least 3 kinds of character, no character repeated more than 3 times, refuse part of the email or name (until the library defect in Skuld question 39 is fixed, saving with this ticked fails with 500: leave it unticked), recognise a passphrase (minimum length 20, 4 words, excused the kinds rule), remember 3 past passwords, tiers `passphrase` (met by a passphrase, never changes), `strong` (16 characters, 3 kinds, 365 days) and `standard` (12 characters, 0 kinds, 90 days), warning 14 days, and tick the fingerprint. Choose **Preview affected users** first: it shows the users under the policy now and with this priority, and saving does not change anyone else.
+- **Staff**, priority 10: minimum length 12, at least 3 kinds of character, no character repeated more than 3 times, refuse part of the email or name, recognise a passphrase (minimum length 20, 4 words, excused the kinds rule), remember 3 past passwords, tiers `passphrase` (met by a passphrase, never changes), `strong` (16 characters, 3 kinds, 365 days) and `standard` (12 characters, 0 kinds, 90 days), warning 14 days, and tick the fingerprint. Choose **Preview affected users** first: it shows the users under the policy now and with this priority, and saving does not change anyone else.
 - **Short expiry**, priority 20: minimum length 12, one tier `standard` (12 characters, 0 kinds, 30 days), warning 10 days, fingerprint on.
 
 You should see both in the table with their users, rules, checks and tiers. **Up**, **Down** and **Set priority** reorder them; a priority in use is refused. If the fingerprint key were missing, the form would say so and disable the fingerprint.
@@ -222,7 +222,6 @@ These are things the console needed that warden's public surface does not provid
 - Syslog settings come only from start-up configuration; nothing changes them at run time (question 9).
 - No setting for the identity provider's CA: the sample sets `SSL_CERT_FILE` for its own process (httpx reads it) so warden trusts the stub provider (question 10).
 - No "who am I" route: the sample's own `/api/me` answers it from `require_user` (question 11).
-- Creating or changing a password policy over HTTP with `forbid_user_details` in the body answers 500, so that rule cannot be set from the console yet; the policy form sends the field only when ticked (question 39, a defect in the admin route rather than a missing feature).
 - warden's CLI cannot create the first administrator, since the roles are the product's: the sample has its own `create-admin` command (question 11).
 
 ## Tests

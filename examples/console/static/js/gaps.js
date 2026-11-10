@@ -31,13 +31,6 @@ export const GAPS = {
       "warden has no setting for the identity provider's CA. The sample trusts the stub " +
       "provider's private CA through SSL_CERT_FILE for its own process.",
   },
-  forbidUserDetails: {
-    question: "Q39",
-    text:
-      "Creating or changing a password policy with forbid_user_details in the body answers 500 " +
-      "(a defect in the admin route). The form sends the field only when its box is ticked, so " +
-      "every other save works; ticking it fails until the route is fixed.",
-  },
   whoAmI: {
     question: "Q11",
     text:

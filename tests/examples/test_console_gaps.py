@@ -53,6 +53,19 @@ def test_the_passkey_flag_is_no_longer_a_gap() -> None:
     assert "key.discoverable" not in signin
 
 
+def test_forbid_user_details_is_no_longer_a_gap() -> None:
+    """Question 39 was a defect in the admin route, fixed in warden 0.1.0."""
+    source = GAPS.read_text(encoding="utf-8")
+    assert '"Q39"' not in source
+    assert "forbidUserDetails" not in source
+    readme = README.read_text(encoding="utf-8")
+    gaps = readme.split("## Gaps", 1)[1].split("\n## ", 1)[0]
+    assert "question 39" not in gaps
+    assert "question 39" not in readme
+    passwords = (GAPS.parent / "passwords.js").read_text(encoding="utf-8")
+    assert "forbidUserDetails" not in passwords
+
+
 def test_the_users_screen_resets_totp_through_wardens_route() -> None:
     admin = (GAPS.parent / "admin.js").read_text(encoding="utf-8")
     assert 'call("DELETE", `${admin}/users/${id}/totp`)' in admin
