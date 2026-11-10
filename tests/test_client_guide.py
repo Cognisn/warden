@@ -54,6 +54,7 @@ _AWAITING_GUIDE = frozenset(
         ("PUT", "/admin/users/{user_id}/password-policy"),
         ("DELETE", "/admin/users/{user_id}/password-policy"),
         ("PUT", "/admin/users/{user_id}/password-change-required"),
+        ("DELETE", "/admin/users/{user_id}/password-change-required"),
         ("GET", "/admin/watch-lists"),
         ("POST", "/admin/watch-lists"),
         ("GET", "/admin/watch-lists/{list_id}"),

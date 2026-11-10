@@ -78,6 +78,11 @@ PASSWORD_ACTIONS: tuple[tuple[str, Severity, str], ...] = (
         "user {resource_id} completed a required password change: {outcome}",
     ),
     (
+        "warden.identity.password.change_cleared",
+        Severity.NOTICE,
+        "{actor} cleared the required password change of user {resource_id}",
+    ),
+    (
         "warden.identity.password.rejected",
         Severity.INFO,
         "a new password for user {resource_id} was refused",

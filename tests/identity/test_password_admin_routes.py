@@ -18,7 +18,7 @@ from identity_support import PASSWORD, UserFactory, audit_rows, race
 from password_admin_support import bearer, create_policy, policy_body
 
 from warden.db import Database
-from warden.identity import Identity, SignInMethod
+from warden.identity import Identity, PermissionRegistry, SignInMethod
 from warden.identity.password_policy import ChangeReason
 
 pytestmark = pytest.mark.db
@@ -45,13 +45,7 @@ ROUTES = [
     ("PUT", "/admin/users/{user}/password-policy"),
     ("DELETE", "/admin/users/{user}/password-policy"),
     ("PUT", "/admin/users/{user}/password-change-required"),
-    pytest.param(
-        "DELETE",
-        "/admin/users/{user}/password-change-required",
-        marks=pytest.mark.xfail(
-            strict=True, reason="clearing waits on Skuld question 36 (its audit action)"
-        ),
-    ),
+    ("DELETE", "/admin/users/{user}/password-change-required"),
     ("GET", "/admin/watch-lists"),
     ("POST", "/admin/watch-lists"),
     ("GET", "/admin/watch-lists/{list}"),
@@ -660,3 +654,54 @@ async def test_responses_hold_nothing_secret(
     for text in texts:
         for fragment in (PASSWORD, "password_hash", "fingerprint_sealed", "$argon2"):
             assert fragment not in text
+
+
+async def test_clearing_change_at_next_sign_in_is_audited(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    make_user: UserFactory,
+    identity: Identity,
+    db: Database,
+) -> None:
+    user = await make_user()
+    url = f"/admin/users/{user.id}/password-change-required"
+    assert (await client.delete(url, headers=headers)).status_code == 404  # nothing required
+    await client.put(url, headers=headers)
+    cleared = await client.delete(url, headers=headers)
+    assert cleared.status_code == 204
+    state = await identity.password_states.get(user.id)
+    assert state is not None and state.change_reason is None
+    (row,) = await audit_rows(db, "warden.identity.password.change_cleared")
+    assert row["resource_id"] == str(user.id) and row["actor"] is not None
+    assert row["details"] == {"reason": "administrator"}
+    assert (await client.delete(url, headers=headers)).status_code == 404
+    missing = await client.delete(
+        f"/admin/users/{uuid.uuid4()}/password-change-required", headers=headers
+    )
+    assert missing.status_code == 404
+
+
+async def test_a_separate_permission_can_guard_the_password_routes(
+    identity: Identity, permissions: PermissionRegistry, make_user: UserFactory
+) -> None:
+    permissions.register_permission("passwords.manage", "Manage password policies")
+    permissions.define_role("password-admin", {"passwords.manage"})
+    app = FastAPI()
+    identity.install(app)
+    app.include_router(
+        identity.admin_router(permission="users.manage", password_policies="passwords.manage"),
+        prefix="/admin",
+    )
+    password_admin = await make_user(roles=("password-admin",))
+    user_admin = await make_user(roles=("admin",))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="https://app.example.com") as c:
+        headers = await bearer(identity, password_admin)
+        assert (await c.get("/admin/password-policies", headers=headers)).status_code == 200
+        assert (await c.get("/admin/watch-lists", headers=headers)).status_code == 200
+        assert (await c.get("/admin/users", headers=headers)).status_code == 403
+        other = await bearer(identity, user_admin)
+        assert (await c.get("/admin/password-policies", headers=other)).status_code == 403
+        assert (await c.get("/admin/users", headers=other)).status_code == 200
+    with pytest.raises(ValueError, match="registered"):
+        identity.admin_router(permission="users.manage", password_policies="no.such")

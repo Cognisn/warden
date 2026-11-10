@@ -32,7 +32,7 @@ field at fault with a fixed message.
 | ``PUT /users/{id}/password-policy`` | ``policy_id`` | the user's password status |
 | ``DELETE /users/{id}/password-policy`` | | 204 |
 | ``PUT /users/{id}/password-change-required`` | | ``{"change_required", "change_reason"}`` |
-| ``DELETE /users/{id}/password-change-required`` | | 204 |
+| ``DELETE /users/{id}/password-change-required`` | | 204 (404 if none was required) |
 | ``GET /watch-lists`` | | ``{"watch_lists": [...]}`` |
 | ``POST /watch-lists`` | ``name``, ``reason``, ``kind`` | 201 ``{"watch_list"}`` |
 | ``GET /watch-lists/{id}`` | | ``{"watch_list"}`` |
@@ -1203,6 +1203,54 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
         return json_response(
             {"change_required": reason is not None, "change_reason": reason and reason.value}
         )
+
+    @router.delete(
+        "/users/{user_id}/password-change-required",
+        status_code=204,
+        summary="Clear a user's required password change",
+        description=(
+            "Whatever its reason (`expired`, `watch_list`, `administrator` or `policy`), the "
+            "user is no longer required to change their password at next sign-in. Audited as "
+            "`warden.identity.password.change_cleared` with the reason cleared. A user with "
+            "no required change is a 404. A reason that still holds (an expired password, or "
+            "a password that fails an enforced policy) is found again at their next sign-in."
+        ),
+        responses={
+            204: {"description": "Cleared.", "headers": no_store()},
+            404: detail("No such user, or no change required.", "not found"),
+            **REFUSED,
+            **FORBIDDEN,
+        },
+    )
+    async def clear_change(user_id: str, principal: Admin) -> Response:
+        uid = _id(user_id)
+        if uid is None:
+            return _not_found()
+        async with identity.db.transaction() as tx:
+            # The row lock makes reading the reason and clearing it one step.
+            cur = await tx.execute(
+                sql.SQL(
+                    "SELECT change_reason FROM {}"
+                    " WHERE user_id = %s AND change_reason IS NOT NULL FOR UPDATE"
+                ).format(_STATES),
+                (uid,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return _not_found()
+            await identity.password_states.clear_change(uid, conn=tx)
+            await record_audit(
+                AuditEvent(
+                    action="warden.identity.password.change_cleared",
+                    outcome="success",
+                    actor=actor(principal),
+                    resource_type="user",
+                    resource_id=str(uid),
+                    details={"reason": row[0]},
+                ),
+                conn=tx,
+            )
+        return _no_content()
 
     # Watch lists
 

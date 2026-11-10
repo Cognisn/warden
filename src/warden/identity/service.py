@@ -429,16 +429,24 @@ class Identity:
         roles: str | None = None,
         invitations: str | None = None,
         api_keys: str | None = None,
+        password_policies: str | None = None,
     ) -> APIRouter:
         """Administration routes; mount under ``config.http.admin_prefix``.
 
-        ``permission`` guards the user routes, and the role, invitation and
-        API key routes unless they are given their own permission.
+        ``permission`` guards the user routes, and the role, invitation, API
+        key and password policy routes unless they are given their own
+        permission (``password_policies`` also guards the watch list and
+        exposure routes).
         """
         from warden.identity.routers.admin import build_admin_router
 
         return build_admin_router(
-            self, users=permission, roles=roles, invitations=invitations, api_keys=api_keys
+            self,
+            users=permission,
+            roles=roles,
+            invitations=invitations,
+            api_keys=api_keys,
+            password_policies=password_policies,
         )
 
     @property
