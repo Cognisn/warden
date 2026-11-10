@@ -159,6 +159,8 @@ _BOOLS = (
     "end_sessions_on_match",
     "enforce_on_sign_in",
 )
+# Booleans that belong to PasswordRules, applied through the rules and never to PolicySettings.
+_RULE_BOOLS = frozenset({"forbid_user_details"})
 _TEXTS = ("name", "description", "hibp_on_unavailable")
 _OTHERS = ("max_repeat", "passphrase", "tiers", "watch_list_ids")
 _SETTINGS = frozenset((*_INTS, *_BOOLS, *_TEXTS, *_OTHERS))
@@ -373,7 +375,7 @@ def _settings(
     changes = {
         name: body[name]
         for name in (*_TEXTS, *_BOOLS, "history_count", "min_age_hours")
-        if name in body
+        if name in body and name not in _RULE_BOOLS
     }
     return dataclasses.replace(start, rules=rules, watch_list_ids=lists, **changes), errors
 

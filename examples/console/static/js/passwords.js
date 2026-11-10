@@ -13,7 +13,6 @@
 
 import { call, consoleSettings, prefixes } from "./api.js";
 import { action, card, field, form, h, input, outcome, select, status, table, when } from "./dom.js";
-import { gap } from "./gaps.js";
 
 function chosen(el, value) {
   el.value = value;
@@ -173,9 +172,8 @@ function policyForm({ admin, policy, lists, fingerprint, onSaved }) {
       fingerprint_enabled: data.has("fingerprint_enabled"),
       end_sessions_on_match: data.has("end_sessions_on_match"),
       enforce_on_sign_in: data.has("enforce_on_sign_in"),
+      forbid_user_details: data.has("forbid_user_details"),
     };
-    // Only when ticked: the route fails on this field (see the gap shown above the form).
-    if (data.has("forbid_user_details")) values.forbid_user_details = true;
     // Leave out what the server needs absent rather than wrong.
     for (const key of ["min_length", "max_length", "warning_days"]) if (values[key] === undefined) delete values[key];
     return values;
@@ -184,7 +182,6 @@ function policyForm({ admin, policy, lists, fingerprint, onSaved }) {
   const el = form(
     "stack wide",
     [
-      gap("forbidUserDetails"),
       field("Name", input("name", { value: base.name, maxlength: 64, required: true })),
       field("Description", input("description", { value: base.description, maxlength: 500 })),
       fresh ? field("Priority (1 is the highest)", input("priority", { type: "number", min: 1, max: 10000, value: base.priority, required: true })) : null,

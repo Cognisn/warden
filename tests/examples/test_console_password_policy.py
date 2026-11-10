@@ -489,12 +489,6 @@ def test_the_gate_walk_is_in_the_readme_in_order() -> None:
     assert positions == sorted(positions)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=(TypeError, AssertionError),
-    reason="Skuld question 39: the admin route fails on forbid_user_details; when it is fixed "
-    "this test passes, so remove the marker, the gap in gaps.js and the README note",
-)
 async def test_forbid_user_details_can_be_set_over_http(
     console: Any, client: httpx.AsyncClient
 ) -> None:
