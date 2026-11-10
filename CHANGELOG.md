@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b24] - 2026-11-10
+
+Twenty-fourth beta: password policy follow-ups before the rc1 gate. `forbid_user_details` can be set over HTTP, the rule test cases cover digits in user-detail pieces, and `NOTICE` credits SecLists.
+
 ### Fixed
 
 - Creating or changing a password policy with `forbid_user_details` in the body (`POST /password-policies` and `PUT /password-policies/{id}`) answered 500, because the field, which belongs to `PasswordRules`, was also passed to `PolicySettings`. It is now applied through the rules only, true or false, and an update that leaves it out keeps it. The sample console's policy form now sends the field whether ticked or not, and its note of the defect (gap Q39) is removed.
