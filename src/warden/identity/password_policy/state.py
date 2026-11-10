@@ -121,17 +121,26 @@ class PasswordStates:
         *,
         tier: str | None,
         expires_at: datetime | None,
+        set_at: datetime | None = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> None:
-        """Re-evaluation at sign-in (PW11): a new tier and expiry for the same password."""
+        """Re-evaluation at sign-in (PW11): a new tier and expiry for the same password.
+
+        ``set_at`` records when the password was set only where that is not
+        yet known (a password set before enforcement began); a known time is
+        never moved. A required change is left as it is.
+        """
         async with self._db.transaction(conn) as tx:
             await tx.execute(
                 sql.SQL(
-                    "INSERT INTO {} (user_id, tier, expires_at) VALUES (%s, %s, %s)"
+                    "INSERT INTO {} AS s (user_id, tier, expires_at, password_set_at)"
+                    " VALUES (%s, %s, %s, %s)"
                     " ON CONFLICT (user_id) DO UPDATE SET tier = EXCLUDED.tier,"
-                    " expires_at = EXCLUDED.expires_at, updated_at = now()"
+                    " expires_at = EXCLUDED.expires_at,"
+                    " password_set_at = coalesce(s.password_set_at, EXCLUDED.password_set_at),"
+                    " updated_at = now()"
                 ).format(_STATES),
-                (user_id, tier, expires_at),
+                (user_id, tier, expires_at, set_at),
             )
 
     async def require_change(

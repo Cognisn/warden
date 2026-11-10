@@ -9,15 +9,21 @@
 | ``POST /password-reset/complete`` | ``token``, ``new_password`` | 204 |
 | ``POST /passkey-registration/options`` | ``token`` | options |
 | ``POST /passkey-registration`` | ``token``, ``credential`` (+) | 200 (**) |
+| ``POST /invitations/accept/password-policy`` | ``token`` | the policy (++) |
+| ``POST /invitations/accept/password-check`` | ``token``, ``password`` | the check (++) |
+| ``POST /password-reset/policy`` | ``token`` | the policy (++) |
+| ``POST /password-reset/check`` | ``token``, ``password`` | the check (++) |
 
 Options are ``{"public_key", "expires_at"}``. (+) And an optional
 ``nickname``. (*) ``{"status": "accepted", "email", "credential",
 "recovery_codes"}``. (**) ``{"status": "registered", "credential",
-"recovery_codes"}``. Neither signs the user in.
+"recovery_codes"}``. Neither signs the user in. (++) Live password
+feedback, bound to the link's token, which it leaves usable.
 
 A bad, used or expired token gets the uniform 401 refusal, and the reason
-goes to the audit trail. An unacceptable password is a 400 and leaves the
-link usable; so is an answer that is not a passkey. An invitation accepted
+goes to the audit trail (the feedback routes record nothing). A password
+the user's password policy refuses is a 400 naming every failure, and
+leaves the link usable; so is an answer that is not a passkey. An invitation accepted
 the wrong way (a password for single sign-on or a passkey, a passkey for
 a password) is a 409 and stays usable. A reset request is answered before
 any of its work is done, identically for every address, so neither the
@@ -35,9 +41,12 @@ from fastapi.responses import Response
 from warden.identity.errors import AuthenticationRefused
 from warden.identity.http import SourceIp, client_ip, json_response, read_object, refusal
 from warden.identity.invitations import InvitationMismatch
+from warden.identity.password_enforcement import PasswordAdvice, PasswordRejected
 from warden.identity.routers.contract import (
     REFUSED,
     InvitationAcceptBody,
+    LinkPasswordCheckBody,
+    LinkTokenBody,
     PasskeyRegistrationBody,
     PasskeyTokenBody,
     ResetCompleteBody,
@@ -45,13 +54,16 @@ from warden.identity.routers.contract import (
     WardenInvitationAccepted,
     WardenPasskeyInvitationAccepted,
     WardenPasskeyRegistered,
+    WardenPasswordCheck,
+    WardenPasswordPolicy,
     WardenResetRequested,
     WardenWebAuthnOptions,
     detail,
     json_body,
     no_store,
+    password_rejected,
 )
-from warden.identity.users import SignInMethod, UserError
+from warden.identity.users import SignInMethod
 from warden.identity.webauthn import WebAuthnCredential, WebAuthnError, WebAuthnOptions
 from warden.identity.webauthn import WebAuthnRefusal as R
 
@@ -112,13 +124,9 @@ def _ceremony_error(exc: WebAuthnError) -> Response:
 def build_lifecycle_router(identity: Identity) -> APIRouter:
     router = APIRouter(tags=["warden: invitations and password reset"])
     trusted_proxies = tuple(identity.config.audit.trusted_proxies)
-    minimum = identity.config.identity.password_min_length
 
     def source(request: Request) -> SourceIp:
         return client_ip(request, trusted_proxies)
-
-    def weak() -> Response:
-        return json_response({"detail": f"the password must be at least {minimum} characters"}, 400)
 
     @router.post(
         "/invitations/accept",
@@ -127,15 +135,13 @@ def build_lifecycle_router(identity: Identity) -> APIRouter:
             "Sets the password, activates the user and applies the staged roles, using the "
             "link up. It does not sign the user in: sign in next. A bad, used or expired token, "
             "or a user who is no longer invited (which uses the link up), gets the uniform "
-            "refusal. A password that is too short is a 400, and an invitation that must be "
-            "accepted through single sign-on or with a passkey is a 409; both leave the link "
-            "usable."
+            "refusal, whatever the password. A password the invitation's password policy "
+            "refuses is a 400 naming every failure, and an invitation that must be accepted "
+            "through single sign-on or with a passkey is a 409; both leave the link usable."
         ),
         responses={
             200: {"model": WardenInvitationAccepted, "description": "Accepted."},
-            400: detail(
-                "The password is too short.", "the password must be at least 12 characters"
-            ),
+            400: password_rejected("The invitation's password policy refused the password."),
             409: detail(
                 "This invitation is accepted through single sign-on (`POST /sso/start`) or with "
                 "a passkey (`POST /invitations/accept/passkey/options`).",
@@ -152,8 +158,8 @@ def build_lifecycle_router(identity: Identity) -> APIRouter:
             accepted = await identity.invitations.accept_with_password(
                 body.get("token"), body.get("password"), source_ip=source(request)
             )
-        except UserError:
-            return weak()
+        except PasswordRejected as exc:
+            return json_response(exc.body(), 400)
         except InvitationMismatch as exc:
             return _mismatch(exc)
         except AuthenticationRefused:
@@ -348,14 +354,13 @@ def build_lifecycle_router(identity: Identity) -> APIRouter:
         description=(
             "Uses the link up and ends every session of the user. A bad, used or expired "
             "token, or a user who has since become inactive or `sso_only` (which uses the link "
-            "up), gets the uniform refusal. A password that is too short is a 400 and leaves "
-            "the link usable."
+            "up), gets the uniform refusal, whatever the password. A password the user's "
+            "password policy refuses (its rules, watch lists and history) is a 400 naming "
+            "every failure and leaves the link usable."
         ),
         responses={
             204: {"description": "The password is set.", "headers": no_store()},
-            400: detail(
-                "The password is too short.", "the password must be at least 12 characters"
-            ),
+            400: password_rejected("The user's password policy refused the password."),
             **REFUSED,
         },
         openapi_extra=json_body(ResetCompleteBody),
@@ -366,10 +371,115 @@ def build_lifecycle_router(identity: Identity) -> APIRouter:
             await identity.resets.complete(
                 body.get("token"), body.get("new_password"), source_ip=source(request)
             )
-        except UserError:
-            return weak()
+        except PasswordRejected as exc:
+            return json_response(exc.body(), 400)
         except AuthenticationRefused:
             return refusal()
         return Response(status_code=204, headers={"cache-control": "no-store"})
 
+    # Live password feedback (ruling PW10), bound to the link's token.
+
+    _feedback_note = (
+        " The link is left usable. A bad, used or expired token gets the uniform refusal and "
+        "reveals nothing. Throttled per token and per source address; once either budget is "
+        "spent, the uniform refusal. Stores nothing and records nothing in the audit trail."
+    )
+
+    def _policy_route(path: str, kind: str, summary: str, what: str) -> None:
+        @router.post(
+            path,
+            summary=summary,
+            description=(
+                f"Sends the token from {what}; answers with the password policy the new "
+                "password must meet, to check it as it is typed." + _feedback_note
+            ),
+            responses={
+                200: {"model": WardenPasswordPolicy, "description": "The policy."},
+                **REFUSED,
+            },
+            openapi_extra=json_body(LinkTokenBody),
+            name=f"{kind}_password_policy",
+        )
+        async def link_policy(request: Request) -> Response:
+            body = await read_object(request) or {}
+            try:
+                advice = await _advice(kind, body.get("token"), source(request))
+            except AuthenticationRefused:
+                return refusal()
+            return json_response(advice.describe())
+
+    def _check_route(path: str, kind: str, summary: str, what: str) -> None:
+        @router.post(
+            path,
+            summary=summary,
+            description=(
+                f"Sends the token from {what} and a candidate; answers with each rule's "
+                "result, the passphrase and tier, and any watch-list match with its reason. "
+                "History is checked only when the password is submitted." + _feedback_note
+            ),
+            responses={
+                200: {"model": WardenPasswordCheck, "description": "The candidate's result."},
+                400: detail("No candidate was sent.", _NO_CANDIDATE),
+                **REFUSED,
+            },
+            openapi_extra=json_body(LinkPasswordCheckBody),
+            name=f"{kind}_password_check",
+        )
+        async def link_check(request: Request) -> Response:
+            body = await read_object(request) or {}
+            candidate = body.get("password")
+            token = body.get("token")
+            try:
+                if not isinstance(candidate, str):
+                    await _advice(kind, token, source(request))
+                    return json_response({"detail": _NO_CANDIDATE}, 400)
+                if kind == "reset_token":
+                    feedback = await identity.check_password(
+                        candidate, reset_token=_present(token), source_ip=source(request)
+                    )
+                else:
+                    feedback = await identity.check_password(
+                        candidate, invitation_token=_present(token), source_ip=source(request)
+                    )
+            except AuthenticationRefused:
+                return refusal()
+            return json_response(feedback.body())
+
+    async def _advice(kind: str, token: object, address: SourceIp) -> PasswordAdvice:
+        if kind == "reset_token":
+            return await identity.password_policy(reset_token=_present(token), source_ip=address)
+        return await identity.password_policy(invitation_token=_present(token), source_ip=address)
+
+    _policy_route(
+        "/invitations/accept/password-policy",
+        "invitation_token",
+        "The password policy an invitation's password must meet",
+        "the invitation link",
+    )
+    _check_route(
+        "/invitations/accept/password-check",
+        "invitation_token",
+        "Check a candidate password for an invitation",
+        "the invitation link",
+    )
+    _policy_route(
+        "/password-reset/policy",
+        "reset_token",
+        "The password policy a reset's new password must meet",
+        "the reset link",
+    )
+    _check_route(
+        "/password-reset/check",
+        "reset_token",
+        "Check a candidate password for a reset",
+        "the reset link",
+    )
     return router
+
+
+_NO_CANDIDATE = "send the candidate password as a string"
+
+
+def _present(value: object) -> object:
+    """A credential as sent, never None, so an absent one is refused rather than ignored."""
+    return "" if value is None else value

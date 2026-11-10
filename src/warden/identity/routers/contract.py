@@ -27,10 +27,16 @@ __all__ = [
     "HandoffBody",
     "InvitationAcceptBody",
     "InvitationCreateBody",
+    "LinkPasswordCheckBody",
+    "LinkTokenBody",
     "NewApiKeyBody",
     "PasskeyRegistrationBody",
     "PasskeySignInBody",
     "PasskeyTokenBody",
+    "PasswordChangeBody",
+    "PasswordChangeChallengeBody",
+    "PasswordChangeCheckBody",
+    "PasswordCheckBody",
     "RefreshBody",
     "ResetCompleteBody",
     "ResetRequestBody",
@@ -55,6 +61,16 @@ __all__ = [
     "WardenPasskeyInvitationAccepted",
     "WardenPasskeyLinkSent",
     "WardenPasskeyRegistered",
+    "WardenPasswordChangeRequired",
+    "WardenPasswordChangeRequiredAfterEnrolment",
+    "WardenPasswordChangeRequiredAfterWebAuthnRegistration",
+    "WardenPasswordCheck",
+    "WardenPasswordFailure",
+    "WardenPasswordPolicy",
+    "WardenPasswordRefusal",
+    "WardenPasswordRejected",
+    "WardenPasswordRuleResult",
+    "WardenPasswordWatchListMatch",
     "WardenPendingInvitation",
     "WardenRecoveryCodes",
     "WardenRefusal",
@@ -63,6 +79,7 @@ __all__ = [
     "WardenRole",
     "WardenRoleAssignment",
     "WardenRoleList",
+    "WardenSecondFactorAnswer",
     "WardenSignInAnswer",
     "WardenSignInCapabilities",
     "WardenSignInMethodSet",
@@ -89,6 +106,7 @@ __all__ = [
     "detail",
     "json_body",
     "no_store",
+    "password_rejected",
 ]
 
 
@@ -129,10 +147,49 @@ class WardenSignedIn(_Doc):
     expires_in: int = Field(description="Seconds until the access token expires.")
     refresh_token: str = Field(description="Single-use; replaced on every refresh.")
     refresh_expires_in: int = Field(description="Seconds until the refresh token expires.")
+    password_expires_in_days: int | None = Field(
+        default=None,
+        description=(
+            "Only after a password sign-in whose password expires within its policy's warning "
+            "window: whole days until it expires (at least 1). Absent otherwise."
+        ),
+    )
 
 
 class WardenSignedInAfterEnrolment(WardenSignedIn):
     """A new session after a forced enrolment, with the recovery codes, shown once."""
+
+    recovery_codes: list[str]
+
+
+ChangeReasonName = Literal["expired", "watch_list", "administrator", "policy"]
+
+
+class WardenPasswordChangeRequired(_Doc):
+    """The password and any second factor were right, but the password must change first.
+
+    No session yet: send the challenge and a new password to
+    `POST /password-change`, which answers with the session.
+    """
+
+    status: Literal["password_change_required"]
+    challenge: str = Field(description="Opaque and single-use; pass it to `/password-change`.")
+    expires_in: int = Field(description="Seconds until the challenge expires.")
+    reason: ChangeReasonName = Field(
+        description=(
+            "`expired` (the password reached its policy's maximum age), `watch_list` (it is on "
+            "a watch list), `administrator` (an administrator asked for a change) or `policy` "
+            "(it fails the current rules of a policy that enforces them at sign-in)."
+        )
+    )
+    watch_list_reason: str | None = Field(
+        default=None,
+        description="With `watch_list` only: the list's reason, to show the user.",
+    )
+
+
+class WardenPasswordChangeRequiredAfterEnrolment(WardenPasswordChangeRequired):
+    """A forced enrolment confirmed, with the recovery codes, but the password must change."""
 
     recovery_codes: list[str]
 
@@ -153,8 +210,15 @@ class WardenChallengeIssued(_Doc):
     )
 
 
-class WardenSignInAnswer(RootModel[WardenSignedIn | WardenChallengeIssued]):
-    """What ``POST /sign-in`` answers: a session, or a challenge for the next step."""
+class WardenSignInAnswer(
+    RootModel[WardenSignedIn | WardenChallengeIssued | WardenPasswordChangeRequired]
+):
+    """What ``POST /sign-in`` answers: a session, a challenge for the next step, or a
+    forced password change."""
+
+
+class WardenSecondFactorAnswer(RootModel[WardenSignedIn | WardenPasswordChangeRequired]):
+    """A completed second factor: a session, or a forced password change first."""
 
 
 class WardenTotpEnrolment(_Doc):
@@ -166,8 +230,15 @@ class WardenRecoveryCodes(_Doc):
     recovery_codes: list[str] = Field(description="Each usable once; shown only now.")
 
 
-class WardenEnrolmentConfirmed(RootModel[WardenRecoveryCodes | WardenSignedInAfterEnrolment]):
-    """The recovery codes; under a challenge, with the new session as well.
+class WardenEnrolmentConfirmed(
+    RootModel[
+        WardenRecoveryCodes
+        | WardenSignedInAfterEnrolment
+        | WardenPasswordChangeRequiredAfterEnrolment
+    ]
+):
+    """The recovery codes; under a challenge, with the new session (or a forced password
+    change) as well.
 
     The codes are fresh when TOTP is the user's first second factor; when
     the user already holds a security key or passkey the list is empty, and
@@ -233,10 +304,23 @@ class WardenSignedInAfterWebAuthnRegistration(WardenSignedInAfterEnrolment):
     credential: WardenWebAuthnCredential
 
 
-class WardenWebAuthnRegistrationConfirmed(
-    RootModel[WardenWebAuthnRegistered | WardenSignedInAfterWebAuthnRegistration]
+class WardenPasswordChangeRequiredAfterWebAuthnRegistration(
+    WardenPasswordChangeRequiredAfterEnrolment
 ):
-    """The key and the recovery codes; under a challenge, with the new session as well."""
+    """A forced enrolment completed with a key, but the password must change first."""
+
+    credential: WardenWebAuthnCredential
+
+
+class WardenWebAuthnRegistrationConfirmed(
+    RootModel[
+        WardenWebAuthnRegistered
+        | WardenSignedInAfterWebAuthnRegistration
+        | WardenPasswordChangeRequiredAfterWebAuthnRegistration
+    ]
+):
+    """The key and the recovery codes; under a challenge, with the new session (or a forced
+    password change) as well."""
 
 
 class WardenInvitationAccepted(_Doc):
@@ -442,6 +526,143 @@ class WardenSsoCheck(_Doc):
 class WardenSsoReport(_Doc):
     ok: bool
     checks: list[WardenSsoCheck]
+
+
+# Password policies in force (feat/0.1.0-password-enforcement, rulings PW3 to
+# PW12): refusals, the forced change and live feedback. Administration routes
+# keep their metadata in a block of their own.
+
+PasswordFailureCode = Literal[
+    "min_length",
+    "max_length",
+    "min_classes",
+    "max_repeat",
+    "no_email",
+    "no_display_name",
+    "watch_list",
+    "watch_list_unavailable",
+    "history",
+    "min_age",
+]
+
+
+class WardenPasswordFailure(_Doc):
+    code: PasswordFailureCode = Field(
+        description=(
+            "A rule's stable code, `watch_list` (the message is the list's reason), "
+            "`watch_list_unavailable` (the breached-password service could not be asked and "
+            "the policy refuses then), `history` (one of the user's recent passwords; which "
+            "is never said) or `min_age` (changed too recently)."
+        )
+    )
+    message: str = Field(description="A plain sentence to show the user.")
+
+
+class WardenPasswordRejected(_Doc):
+    """A new password the user's password policy refused: every reason, never the password."""
+
+    detail: Literal["password not accepted"]
+    failures: list[WardenPasswordFailure] = Field(description="Every failed check, rules first.")
+
+
+class WardenPasswordPolicy(_Doc):
+    """The policy a new password must meet here, for a client to evaluate as the user types."""
+
+    rules: dict[str, Any] = Field(
+        description=(
+            "The policy's rules in their versioned description (`version` 1): lengths in "
+            "Unicode code points after NFC, character classes, the longest run, the user-detail "
+            "rule, passphrases and tiers. `docs/contract/password-rule-vectors.json` holds test "
+            "cases a client's evaluation must agree with."
+        )
+    )
+    history_count: int = Field(
+        description="How many recent passwords the new one may not repeat (checked on submit)."
+    )
+
+
+class WardenPasswordRuleResult(_Doc):
+    code: Literal[
+        "min_length", "max_length", "min_classes", "max_repeat", "no_email", "no_display_name"
+    ]
+    passed: bool
+    waived: bool = Field(description="The class rule passed only because it is a passphrase.")
+    message: str = Field(description="What the rule asks, as a plain sentence.")
+
+
+class WardenPasswordWatchListMatch(_Doc):
+    reason: str = Field(description="The list's reason, to show the user.")
+
+
+class WardenPasswordCheck(_Doc):
+    """A candidate's result against the policy; history is never checked here."""
+
+    ok: bool = Field(
+        description="Every rule passed and no watch list refuses it (history is checked on submit)."
+    )
+    results: list[WardenPasswordRuleResult] = Field(description="Each configured rule, in order.")
+    passphrase: bool
+    tier: str | None = Field(description="The first change-period tier it meets, if any.")
+    watch_list: WardenPasswordWatchListMatch | None = Field(
+        description="The first watch list it is on, if any."
+    )
+    watch_list_unavailable: bool = Field(
+        description="The breached-password service could not be asked."
+    )
+
+
+class PasswordCheckBody(_Doc):
+    password: str = Field(description="The candidate; never stored or logged.")
+
+
+class LinkTokenBody(_Doc):
+    token: str = Field(description="The token from the link.")
+
+
+class LinkPasswordCheckBody(_Doc):
+    token: str = Field(description="The token from the link.")
+    password: str = Field(description="The candidate; never stored or logged.")
+
+
+class PasswordChangeChallengeBody(_Doc):
+    challenge: str = Field(description="The `password_change_required` challenge.")
+
+
+class PasswordChangeCheckBody(_Doc):
+    challenge: str = Field(description="The `password_change_required` challenge.")
+    password: str = Field(description="The candidate; never stored or logged.")
+
+
+class PasswordChangeBody(_Doc):
+    challenge: str = Field(description="The `password_change_required` challenge.")
+    new_password: str
+
+
+class WardenPasswordRefusal(RootModel[WardenDetail | WardenPasswordRejected]):
+    """A fixed message, or the password policy's refusal naming every failure."""
+
+
+def password_rejected(description: str, *, also: str | None = None) -> dict[str, Any]:
+    """A 400 answered with the password policy's refusal, or (``also``) a fixed message."""
+    examples: dict[str, Any] = {
+        "refused by the policy": {
+            "value": {
+                "detail": "password not accepted",
+                "failures": [
+                    {"code": "min_length", "message": "Use at least 12 characters"},
+                    {"code": "watch_list", "message": "This password is too common"},
+                ],
+            }
+        }
+    }
+    if also is not None:
+        examples["refused"] = {"value": {"detail": also}}
+    return {
+        "model": WardenPasswordRejected if also is None else WardenPasswordRefusal,
+        "description": description,
+        "headers": no_store(),
+        "content": {"application/json": {"examples": examples}},
+    }
 
 
 # Bodies identity reads.

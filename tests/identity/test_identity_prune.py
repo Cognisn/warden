@@ -54,7 +54,9 @@ async def test_expired_rows_are_pruned_and_live_ones_kept(
 ) -> None:
     """#134."""
     await _fixtures(identity, make_user, mail)
-    assert await identity.prune() == PruneReport(0, 0, 0, 0)
+    # Each password set is kept in the history (wave 17), and the seeded default
+    # policy keeps none, so the two users' entries are pruned.
+    assert await identity.prune() == PruneReport(0, 0, 0, 0, password_history=2)
     for table in ("refresh_tokens", "single_use_tokens", "mfa_challenges"):
         await _expire_all(db, table)
     # Live rows written after the expiry survive the prune.
@@ -65,9 +67,13 @@ async def test_expired_rows_are_pruned_and_live_ones_kept(
 
     report = await identity.prune()
     assert report == PruneReport(
-        refresh_tokens=1, single_use_tokens=1, mfa_challenges=1, sign_in_attempts=0
+        refresh_tokens=1,
+        single_use_tokens=1,
+        mfa_challenges=1,
+        sign_in_attempts=0,
+        password_history=1,
     )
-    assert report.total == 3
+    assert report.total == 4
     assert await _count(db, "refresh_tokens") == 1
     assert await _count(db, "single_use_tokens") == 1
     assert await _count(db, "mfa_challenges") == 0

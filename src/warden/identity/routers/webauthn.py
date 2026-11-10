@@ -12,7 +12,8 @@
 
 Options are ``{"public_key", "expires_at"}``. (+) ``credential`` and an
 optional ``nickname``. (*) ``credential`` and ``recovery_codes``; under a
-challenge, the tokens as well.
+challenge, the tokens as well. Where a session would be issued, a password
+that must change first answers ``password_change_required`` instead.
 
 The verify routes complete an ``mfa_required`` challenge as ``/totp/verify``
 does, with the same uniform refusal. Registration under an
@@ -35,7 +36,7 @@ from warden.identity.mfa import LastSecondFactorError, WebAuthnUnavailable
 from warden.identity.routers.contract import (
     REFUSED,
     EnrolmentBody,
-    WardenSignedIn,
+    WardenSecondFactorAnswer,
     WardenWebAuthnCredentialEnvelope,
     WardenWebAuthnCredentialList,
     WardenWebAuthnOptions,
@@ -48,7 +49,7 @@ from warden.identity.routers.contract import (
     json_body,
     no_store,
 )
-from warden.identity.routers.tokens import token_body
+from warden.identity.routers.tokens import session_body
 from warden.identity.webauthn import WebAuthnCredential, WebAuthnError, WebAuthnOptions
 from warden.identity.webauthn import WebAuthnRefusal as R
 
@@ -164,20 +165,27 @@ def build_webauthn_router(identity: Identity) -> APIRouter:
             "Sends the `mfa_required` challenge with the browser's answer to "
             '`navigator.credentials.get()`. The session\'s `amr` is `["pwd", "hwk"]`. Each '
             "options' challenge is accepted once; a refused answer counts as a wrong code "
-            "does, and too many end the challenge."
+            "does, and too many end the challenge. When the password must change first, the "
+            "answer is `password_change_required` instead of a session (`POST /password-change`)."
         ),
-        responses={200: {"model": WardenSignedIn, "description": "Signed in."}, **REFUSED},
+        responses={
+            200: {
+                "model": WardenSecondFactorAnswer,
+                "description": "Signed in, or the password must change first.",
+            },
+            **REFUSED,
+        },
         openapi_extra=json_body(WebAuthnVerifyBody),
     )
     async def verify(request: Request) -> Response:
         body = await read_object(request) or {}
         try:
-            pair = await identity.verify_webauthn(
+            answer = await identity.verify_webauthn(
                 body.get("challenge"), body.get("credential"), source_ip=source(request)
             )
         except AuthenticationRefused:
             return refusal()
-        return json_response(token_body(pair))
+        return json_response(session_body(answer))
 
     # Registration as a second factor.
 
@@ -224,8 +232,9 @@ def build_webauthn_router(identity: Identity) -> APIRouter:
             "nickname. Answers with the credential and, when it is the user's first second "
             "factor, fresh recovery codes, shown once (otherwise an empty list). Under a "
             "challenge (a forced enrolment) the answer is also the new session, with `amr` "
-            '`["pwd", "hwk"]`. A refused answer from a signed-in user is a 400, so a '
-            "client does not take it for a sign-out."
+            '`["pwd", "hwk"]`, or `password_change_required` when the password must change '
+            "first. A refused answer from a signed-in user is a 400, so a client does not take "
+            "it for a sign-out."
         ),
         responses={
             200: {
@@ -260,14 +269,13 @@ def build_webauthn_router(identity: Identity) -> APIRouter:
         except (WebAuthnError, WebAuthnUnavailable) as exc:
             return _registration_error(exc)
         credential = _credential(enrolled.credential)
-        if enrolled.tokens is None:
+        answer = enrolled.password_change or enrolled.tokens
+        if answer is None:
             return json_response(
                 {"credential": credential, "recovery_codes": enrolled.recovery_codes}
             )
         return json_response(
-            token_body(
-                enrolled.tokens, recovery_codes=enrolled.recovery_codes, credential=credential
-            )
+            session_body(answer, recovery_codes=enrolled.recovery_codes, credential=credential)
         )
 
     # The signed-in user's own credentials.

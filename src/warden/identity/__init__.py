@@ -42,6 +42,13 @@ from warden.identity.mail import (
     MailTemplate,
 )
 from warden.identity.mfa import Enrolment, LastSecondFactorError, WebAuthnUnavailable
+from warden.identity.password_enforcement import (
+    PasswordAdvice,
+    PasswordEnforcement,
+    PasswordFailure,
+    PasswordFeedback,
+    PasswordRejected,
+)
 from warden.identity.password_policy import (
     ChangeReason,
     EffectivePolicy,
@@ -90,6 +97,8 @@ from warden.identity.service import (
     PasskeyInvitationAccepted,
     PasskeyLinkNotConfigured,
     PasskeyLinkRefused,
+    PasswordChangeIssued,
+    PasswordTokenPair,
     SignInResult,
     WebAuthnEnrolled,
 )
@@ -164,7 +173,12 @@ __all__ = [
     "PasskeyLinkNotConfigured",
     "PasskeyLinkRefused",
     "PasskeyRegistration",
+    "PasswordAdvice",
     "PasswordChangeChallenges",
+    "PasswordChangeIssued",
+    "PasswordEnforcement",
+    "PasswordFailure",
+    "PasswordFeedback",
     "PasswordHasher",
     "PasswordHistory",
     "PasswordPolicies",
@@ -173,10 +187,12 @@ __all__ = [
     "PasswordPolicyError",
     "PasswordPolicyNotFound",
     "PasswordRecheck",
+    "PasswordRejected",
     "PasswordResets",
     "PasswordRules",
     "PasswordState",
     "PasswordStates",
+    "PasswordTokenPair",
     "PendingInvitation",
     "PermissionRegistry",
     "PolicyError",
