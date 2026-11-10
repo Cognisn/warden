@@ -11,7 +11,7 @@ and every error is a fixed message.
 |---|---|---|
 | ``GET /capabilities`` | | what this deployment can do, as booleans |
 | ``GET /users[?status=&limit=&after=]`` | | ``{"users": [...]}`` (*) |
-| ``GET /users/{id}`` | | ``{"user", "roles", "webauthn_credentials"}`` |
+| ``GET /users/{id}`` | | ``{"user", "roles", "webauthn_credentials", "password"}`` |
 | ``POST /users/{id}/status`` | ``status`` | ``{"user"}`` |
 | ``POST /users/{id}/sign-in-method`` | ``sign_in_method`` | ``{"user"}`` (+) |
 | ``POST /users/{id}/password-reset`` | | 202 |
@@ -28,6 +28,9 @@ and every error is a fixed message.
 | ``GET /api-keys[?user_id=]`` | | ``{"api_keys": [...]}`` |
 | ``POST /api-keys`` | ``user_id``, ``name``, ``scopes``, ``expires_at`` (*) | 201, with the key |
 | ``DELETE /api-keys/{id}`` | | 204 |
+
+The password policy, watch list and exposure routes are in
+``warden.identity.routers.password_admin``, mounted here.
 
 (*) ``display_name``, ``sign_in_method``, ``roles`` and ``expires_at`` are optional.
 (+) With ``has_passkey`` as well when the method set is ``passkey_only``.
@@ -50,6 +53,7 @@ from warden.identity.invitations import InvitationError, PendingInvitation, Stag
 from warden.identity.mail import MailDeliveryError, MailError
 from warden.identity.mfa import WebAuthnUnavailable
 from warden.identity.roles import LastAdministratorError, RoleAssignment, RoleError
+from warden.identity.routers import password_admin
 from warden.identity.routers.contract import (
     FORBIDDEN,
     REFUSED,
@@ -202,11 +206,13 @@ def build_admin_router(
     roles: str | None = None,
     invitations: str | None = None,
     api_keys: str | None = None,
+    password_policies: str | None = None,
 ) -> APIRouter:
-    """Routes for users, roles, invitations and API keys, each area behind one permission.
+    """Routes for users, roles, invitations, API keys and password policies, each area
+    behind one permission.
 
-    ``roles``, ``invitations`` and ``api_keys`` default to ``users``. Each
-    must be one of the product's registered permissions.
+    ``roles``, ``invitations``, ``api_keys`` and ``password_policies`` default
+    to ``users``. Each must be one of the product's registered permissions.
     """
     registered = identity.permissions.permissions()
     needed = {
@@ -214,6 +220,7 @@ def build_admin_router(
         "roles": roles or users,
         "invitations": invitations or users,
         "api_keys": api_keys or users,
+        "password_policies": password_policies or users,
     }
     for permission in needed.values():
         if permission not in registered:
@@ -229,6 +236,10 @@ def build_admin_router(
     roles_admin = require_permission(needed["roles"])
     invitations_admin = require_permission(needed["invitations"])
     keys_admin = require_permission(needed["api_keys"])
+
+    router.include_router(
+        password_admin.build_password_admin_router(identity, permission=needed["password_policies"])
+    )
 
     # Capabilities
 
@@ -328,7 +339,11 @@ def build_admin_router(
     @router.get(
         "/users/{user_id}",
         summary="Show a user and their roles",
-        description=("`user_id` is the user's UUID; anything else is a 404."),
+        description=(
+            "`user_id` is the user's UUID; anything else is a 404. `password` is the user's "
+            "password policy and password state, as `GET /users/{user_id}/password-policy` "
+            "answers it."
+        ),
         responses={
             200: {"model": WardenUserDetail, "description": "The user."},
             404: detail("No such user.", "not found"),
@@ -350,6 +365,7 @@ def build_admin_router(
                 "user": _user(user),
                 "roles": [_assignment(a) for a in assignments],
                 "webauthn_credentials": keys,
+                "password": await password_admin.password_status(identity, user),
             }
         )
 

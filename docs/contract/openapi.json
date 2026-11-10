@@ -2649,6 +2649,4559 @@
         ]
       }
     },
+    "/admin/password-policies": {
+      "get": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "List password policies",
+        "description": "Every password policy, highest priority (1) first, then the default. A policy applies to users who sign in with a password (`password_and_sso`): their pin, else the highest-priority policy mapped from a role they hold, else the default.",
+        "operationId": "list_policies_admin_password_policies_get",
+        "responses": {
+          "200": {
+            "description": "The policies.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenPasswordPolicyList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                },
+                "example": {
+                  "detail": "forbidden"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Create a password policy",
+        "description": "A new policy at `priority` (1 is the highest, unique), applying to no one until a role is mapped to it or it is pinned on a user. Omitted settings take their defaults (no class rule, no tiers, no history, the built-in list checked). Inconsistent settings are refused (400) with each field at fault.",
+        "operationId": "create_policy_admin_password_policies_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "title": "Name",
+                    "description": "1 to 64 characters, unique."
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "title": "Priority",
+                    "description": "1 to 10000, unique; 1 is the highest."
+                  },
+                  "description": {
+                    "type": "string",
+                    "title": "Description",
+                    "description": "At most 500 characters.",
+                    "default": ""
+                  },
+                  "min_length": {
+                    "type": "integer",
+                    "title": "Min Length"
+                  },
+                  "max_length": {
+                    "type": "integer",
+                    "title": "Max Length",
+                    "default": 1024
+                  },
+                  "min_classes": {
+                    "type": "integer",
+                    "title": "Min Classes",
+                    "default": 0
+                  },
+                  "max_repeat": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Max Repeat"
+                  },
+                  "forbid_user_details": {
+                    "type": "boolean",
+                    "title": "Forbid User Details",
+                    "default": false
+                  },
+                  "passphrase": {
+                    "anyOf": [
+                      {
+                        "properties": {
+                          "min_length": {
+                            "type": "integer",
+                            "title": "Min Length",
+                            "description": "Code points a passphrase has at least."
+                          },
+                          "min_words": {
+                            "type": "integer",
+                            "title": "Min Words",
+                            "description": "Words separated by spaces, hyphens, full stops or underscores."
+                          },
+                          "relaxes_classes": {
+                            "type": "boolean",
+                            "title": "Relaxes Classes",
+                            "description": "Whether a passphrase is excused the class rule."
+                          }
+                        },
+                        "additionalProperties": false,
+                        "type": "object",
+                        "required": [
+                          "min_length",
+                          "min_words",
+                          "relaxes_classes"
+                        ],
+                        "title": "WardenPassphraseRule"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "tiers": {
+                    "items": {
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "title": "Name"
+                        },
+                        "passphrase": {
+                          "type": "boolean",
+                          "title": "Passphrase",
+                          "description": "Met by a passphrase; the length and classes are unused.",
+                          "default": false
+                        },
+                        "min_length": {
+                          "type": "integer",
+                          "title": "Min Length",
+                          "default": 0
+                        },
+                        "min_classes": {
+                          "type": "integer",
+                          "title": "Min Classes",
+                          "default": 0
+                        },
+                        "max_age_days": {
+                          "anyOf": [
+                            {
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "title": "Max Age Days",
+                          "description": "Days until a change is due; null is never."
+                        }
+                      },
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "name"
+                      ],
+                      "title": "WardenPasswordTier"
+                    },
+                    "type": "array",
+                    "title": "Tiers"
+                  },
+                  "warning_days": {
+                    "type": "integer",
+                    "title": "Warning Days",
+                    "default": 14
+                  },
+                  "history_count": {
+                    "type": "integer",
+                    "title": "History Count",
+                    "default": 0
+                  },
+                  "min_age_hours": {
+                    "type": "integer",
+                    "title": "Min Age Hours",
+                    "default": 0
+                  },
+                  "include_builtin": {
+                    "type": "boolean",
+                    "title": "Include Builtin",
+                    "default": true
+                  },
+                  "watch_list_ids": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array",
+                    "title": "Watch List Ids"
+                  },
+                  "hibp_enabled": {
+                    "type": "boolean",
+                    "title": "Hibp Enabled",
+                    "default": false
+                  },
+                  "hibp_on_unavailable": {
+                    "type": "string",
+                    "enum": [
+                      "allow",
+                      "refuse"
+                    ],
+                    "title": "Hibp On Unavailable",
+                    "default": "allow"
+                  },
+                  "fingerprint_enabled": {
+                    "type": "boolean",
+                    "title": "Fingerprint Enabled",
+                    "default": false
+                  },
+                  "end_sessions_on_match": {
+                    "type": "boolean",
+                    "title": "End Sessions On Match",
+                    "default": false
+                  },
+                  "enforce_on_sign_in": {
+                    "type": "boolean",
+                    "title": "Enforce On Sign In",
+                    "default": false
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "name",
+                  "priority",
+                  "min_length"
+                ],
+                "title": "PasswordPolicyCreateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenPasswordPolicyEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The settings are not valid; `errors` names each field.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenPasswordPolicyInvalid"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The name or priority is in use.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "that name or priority is already in use"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                },
+                "example": {
+                  "detail": "forbidden"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/password-policies/affected-users": {
+      "post": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Count the users a proposed change would put under a policy",
+        "description": "For an existing policy (`policy_id`) or a new one (no `policy_id`): how many users who sign in with a password it applies to now (`current`) and would apply to (`proposed`) if it had `priority` and exactly the mapped `roles`. Either may be left out to keep the policy's own. Nothing is changed or audited.",
+        "operationId": "propose_admin_password_policies_affected_users_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "policy_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Policy Id",
+                    "description": "UUID; leave out for a new policy."
+                  },
+                  "priority": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Priority",
+                    "description": "Required for a new policy."
+                  },
+                  "roles": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Roles",
+                    "description": "Every role that would map to the policy; declared roles only."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "title": "AffectedUsersProposalBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The counts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenAffectedUsersProposal"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The proposal is not valid.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                },
+                "example": {
+                  "detail": "forbidden"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/password-policies/{policy_id}": {
+      "get": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Show a password policy",
+        "description": "`policy_id` is the policy's UUID; anything else is a 404.",
+        "operationId": "show_policy_admin_password_policies__policy_id__get",
+        "parameters": [
+          {
+            "name": "policy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Policy Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The policy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenPasswordPolicyEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such policy.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Change a password policy",
+        "description": "Changes the settings sent and keeps the rest, if the policy is still at `version` (the version read): otherwise 409, and nothing changes. The default can be changed too. Priorities change through `PUT .../priority`; users under the policy are re-evaluated at their next password sign-in (PW11).",
+        "operationId": "update_policy_admin_password_policies__policy_id__put",
+        "parameters": [
+          {
+            "name": "policy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Policy Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The changed policy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenPasswordPolicyEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The settings are not valid; `errors` names each field.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenPasswordPolicyInvalid"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such policy.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The policy changed since it was read, or the name is in use.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the policy changed since it was read"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "that name is already in use"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "version": {
+                    "description": "The version read; a stale one is a 409.",
+                    "title": "Version",
+                    "type": "integer"
+                  },
+                  "name": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Name"
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Description"
+                  },
+                  "min_length": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Min Length"
+                  },
+                  "max_length": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Max Length"
+                  },
+                  "min_classes": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Min Classes"
+                  },
+                  "max_repeat": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Max Repeat"
+                  },
+                  "forbid_user_details": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Forbid User Details"
+                  },
+                  "passphrase": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "min_length": {
+                            "description": "Code points a passphrase has at least.",
+                            "title": "Min Length",
+                            "type": "integer"
+                          },
+                          "min_words": {
+                            "description": "Words separated by spaces, hyphens, full stops or underscores.",
+                            "title": "Min Words",
+                            "type": "integer"
+                          },
+                          "relaxes_classes": {
+                            "description": "Whether a passphrase is excused the class rule.",
+                            "title": "Relaxes Classes",
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "min_length",
+                          "min_words",
+                          "relaxes_classes"
+                        ],
+                        "title": "WardenPassphraseRule",
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "tiers": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "name": {
+                              "title": "Name",
+                              "type": "string"
+                            },
+                            "passphrase": {
+                              "default": false,
+                              "description": "Met by a passphrase; the length and classes are unused.",
+                              "title": "Passphrase",
+                              "type": "boolean"
+                            },
+                            "min_length": {
+                              "default": 0,
+                              "title": "Min Length",
+                              "type": "integer"
+                            },
+                            "min_classes": {
+                              "default": 0,
+                              "title": "Min Classes",
+                              "type": "integer"
+                            },
+                            "max_age_days": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Days until a change is due; null is never.",
+                              "title": "Max Age Days"
+                            }
+                          },
+                          "required": [
+                            "name"
+                          ],
+                          "title": "WardenPasswordTier",
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Tiers"
+                  },
+                  "warning_days": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Warning Days"
+                  },
+                  "history_count": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "History Count"
+                  },
+                  "min_age_hours": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Min Age Hours"
+                  },
+                  "include_builtin": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Include Builtin"
+                  },
+                  "watch_list_ids": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Watch List Ids"
+                  },
+                  "hibp_enabled": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Hibp Enabled"
+                  },
+                  "hibp_on_unavailable": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "allow",
+                          "refuse"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Hibp On Unavailable"
+                  },
+                  "fingerprint_enabled": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Fingerprint Enabled"
+                  },
+                  "end_sessions_on_match": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "End Sessions On Match"
+                  },
+                  "enforce_on_sign_in": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Enforce On Sign In"
+                  }
+                },
+                "required": [
+                  "version"
+                ],
+                "title": "PasswordPolicyUpdateBody",
+                "type": "object"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Delete a password policy",
+        "description": "Its role mappings go with it, and its users return to another mapped policy or the default. Never the default (409), and never a policy pinned on a user (409): unpin them first.",
+        "operationId": "delete_policy_admin_password_policies__policy_id__delete",
+        "parameters": [
+          {
+            "name": "policy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Policy Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such policy.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The default policy, or a policy pinned on users.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the default policy cannot be deleted"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "the policy is pinned on 1 user; unpin them first"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/password-policies/{policy_id}/priority": {
+      "put": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Move a password policy to another priority",
+        "description": "1 is the highest. Each priority belongs to one policy at a time, even under concurrent requests: a priority in use is a 409. The default has none.",
+        "operationId": "set_priority_admin_password_policies__policy_id__priority_put",
+        "parameters": [
+          {
+            "name": "policy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Policy Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The moved policy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenPasswordPolicyEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a priority from 1 to 10000.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such policy.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The priority is in use, or the policy is the default.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "that priority is already in use"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "the default policy has no priority"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "priority": {
+                    "description": "1 to 10000; 1 is the highest.",
+                    "title": "Priority",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "priority"
+                ],
+                "title": "PasswordPolicyPriorityBody",
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/password-policy-order": {
+      "put": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Reorder every password policy",
+        "description": "`policy_ids` names every policy but the default once, highest first; they get priorities 1, 2, 3 and so on in one transaction.",
+        "operationId": "reorder_admin_password_policy_order_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "policy_ids": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array",
+                    "title": "Policy Ids",
+                    "description": "Every non-default policy's UUID once, highest first."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "policy_ids"
+                ],
+                "title": "PasswordPolicyOrderBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The reordered policies.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenPasswordPolicyList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The list does not name every non-default policy once.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                },
+                "example": {
+                  "detail": "forbidden"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/password-policies/{policy_id}/builtin-list": {
+      "put": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Include or exclude the built-in common-password list",
+        "description": "Whether the policy checks warden's bundled list of common passwords (PW12). Changed against the version read now; a concurrent change is a 409.",
+        "operationId": "set_builtin_admin_password_policies__policy_id__builtin_list_put",
+        "parameters": [
+          {
+            "name": "policy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Policy Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The changed policy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenPasswordPolicyEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`include` is not true or false.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such policy.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The policy changed meanwhile.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the policy changed since it was read"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "include": {
+                    "title": "Include",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "include"
+                ],
+                "title": "BuiltinListBody",
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/password-policies/{policy_id}/watch-lists/{list_id}": {
+      "put": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Attach a watch list to a password policy",
+        "description": "The policy checks the list's entries and terms as well. Attaching a list already attached changes nothing.",
+        "operationId": "attach_list_admin_password_policies__policy_id__watch_lists__list_id__put",
+        "parameters": [
+          {
+            "name": "policy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Policy Id"
+            }
+          },
+          {
+            "name": "list_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "List Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The policy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenPasswordPolicyEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such policy or watch list.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Detach a watch list from a password policy",
+        "description": "Detaching a list that is not attached changes nothing.",
+        "operationId": "detach_list_admin_password_policies__policy_id__watch_lists__list_id__delete",
+        "parameters": [
+          {
+            "name": "policy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Policy Id"
+            }
+          },
+          {
+            "name": "list_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "List Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The policy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenPasswordPolicyEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such policy.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/password-policies/{policy_id}/affected-users": {
+      "get": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Count the users a password policy applies to",
+        "description": "How many users who sign in with a password the policy applies to now, by pin, role or as the default.",
+        "operationId": "affected_admin_password_policies__policy_id__affected_users_get",
+        "parameters": [
+          {
+            "name": "policy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Policy Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The count.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenAffectedUsers"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such policy.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/password-policy-roles/{role}": {
+      "put": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Map a role to a password policy",
+        "description": "Users holding `role` come under the policy, unless a higher-priority mapped role or a pin applies. Only a role the product declares can be mapped, and never to the default, which covers every unmapped role. Mapping replaces the role's earlier mapping.",
+        "operationId": "map_role_admin_password_policy_roles__role__put",
+        "parameters": [
+          {
+            "name": "role",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Role"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Mapped.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a declared role, or not a policy.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the product declares no such role"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The policy is the default.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the default applies to unmapped roles; map a role to another policy"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "policy_id": {
+                    "description": "UUID of a policy other than the default.",
+                    "title": "Policy Id",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "policy_id"
+                ],
+                "title": "PasswordPolicyRoleBody",
+                "type": "object"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Remove a role's password policy mapping",
+        "description": "Its users return to another mapped policy or the default.",
+        "operationId": "unmap_role_admin_password_policy_roles__role__delete",
+        "parameters": [
+          {
+            "name": "role",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Role"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Unmapped.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a declared role.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the product declares no such role"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}/password-policy": {
+      "get": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Show a user's password policy and password state",
+        "description": "The policy that applies and why (`pin`, `role` with the role, or `default`), the tier the password met, when it was set and expires, and whether a change is required and why. For a user who does not sign in with a password, `applies` is false and the policy fields are null.",
+        "operationId": "show_status_admin_users__user_id__password_policy_get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenUserPasswordStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Pin a password policy on a user",
+        "description": "The pin overrides the user's role mappings until it is removed.",
+        "operationId": "pin_admin_users__user_id__password_policy_put",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user's new status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenUserPasswordStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a policy.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "policy_id": {
+                    "description": "UUID.",
+                    "title": "Policy Id",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "policy_id"
+                ],
+                "title": "PasswordPolicyPinBody",
+                "type": "object"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Remove a user's pinned password policy",
+        "description": "The user returns to their role mappings or the default.",
+        "operationId": "unpin_admin_users__user_id__password_policy_delete",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Unpinned.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user, or no pin.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}/password-change-required": {
+      "put": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Require a user to change their password at next sign-in",
+        "description": "At their next password sign-in, after the second factor, the user is answered `password_change_required` with the reason `administrator` and must set a new password before a session is issued. If a change is already required, the earlier reason stands and is answered. Refused (409) for a user who does not sign in with a password.",
+        "operationId": "require_change_admin_users__user_id__password_change_required_put",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenChangeRequired"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The user does not sign in with a password.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the user does not sign in with a password"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/watch-lists": {
+      "get": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "List watch lists",
+        "description": "Each list's name, the reason a user is shown, its kind, how many entries and terms it holds, its last import and threshold, and the policies that check it. Never its entries, terms or hashes.",
+        "operationId": "list_lists_admin_watch_lists_get",
+        "responses": {
+          "200": {
+            "description": "The lists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenWatchListList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                },
+                "example": {
+                  "detail": "forbidden"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Create a watch list",
+        "description": "`kind` is `manual` (exact passwords and terms an administrator adds) or `imported` (filled by `warden passwords import` from a file in Have I Been Pwned's downloader format). `reason` is what a user is shown when their password is on it.",
+        "operationId": "create_list_admin_watch_lists_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "title": "Name",
+                    "description": "1 to 64 characters, unique."
+                  },
+                  "reason": {
+                    "type": "string",
+                    "title": "Reason",
+                    "description": "1 to 200 characters, shown to a user whose password matches."
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "manual",
+                      "imported"
+                    ],
+                    "title": "Kind"
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "name",
+                  "reason",
+                  "kind"
+                ],
+                "title": "WatchListCreateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenWatchListEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The name is in use.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "a watch list with that name already exists"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                },
+                "example": {
+                  "detail": "forbidden"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/watch-lists/{list_id}": {
+      "get": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Show a watch list",
+        "description": "Counts, the last import and the threshold; never the entries or terms.",
+        "operationId": "show_list_admin_watch_lists__list_id__get",
+        "parameters": [
+          {
+            "name": "list_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "List Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenWatchListEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Rename a watch list or change its reason",
+        "description": "Send `name`, `reason` or both; what is left out is kept.",
+        "operationId": "update_list_admin_watch_lists__list_id__put",
+        "parameters": [
+          {
+            "name": "list_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "List Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The changed list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenWatchListEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The name is in use.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "a watch list with that name already exists"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Name"
+                  },
+                  "reason": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Reason"
+                  }
+                },
+                "title": "WatchListUpdateBody",
+                "type": "object"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Delete a watch list",
+        "description": "Refused (409) while any policy checks it: detach it first.",
+        "operationId": "delete_list_admin_watch_lists__list_id__delete",
+        "parameters": [
+          {
+            "name": "list_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "List Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The list is attached to a policy.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the watch list is attached to 1 password policy; detach it first"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/watch-lists/{list_id}/entries": {
+      "post": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Add exact passwords to a manual watch list",
+        "description": "`passwords` is a list of 1 to 100 exact passwords, each 1 to 1024 characters, sent over TLS. Each is hashed to SHA-1 of its NFC form at once; the plaintext is never stored, logged, echoed or audited, and no route returns an entry or its hash. Answers how many were new.",
+        "operationId": "add_entries_admin_watch_lists__list_id__entries_post",
+        "parameters": [
+          {
+            "name": "list_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "List Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How many were added.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenWatchListCount"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The list is imported, not manual.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "only a manual watch list takes entries and terms"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "passwords": {
+                    "description": "1 to 100 exact passwords; hashed at once, never kept.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Passwords",
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "passwords"
+                ],
+                "title": "WatchListEntriesBody",
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/watch-lists/{list_id}/entries/removal": {
+      "post": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Remove exact passwords from a manual watch list",
+        "description": "`passwords` is a list of 1 to 100 exact passwords, each 1 to 1024 characters, sent over TLS. Each is hashed to SHA-1 of its NFC form at once; the plaintext is never stored, logged, echoed or audited, and no route returns an entry or its hash. Answers how many were removed.",
+        "operationId": "remove_entries_admin_watch_lists__list_id__entries_removal_post",
+        "parameters": [
+          {
+            "name": "list_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "List Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How many were removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenWatchListCount"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The list is imported, not manual.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "only a manual watch list takes entries and terms"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "passwords": {
+                    "description": "1 to 100 exact passwords; hashed at once, never kept.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Passwords",
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "passwords"
+                ],
+                "title": "WatchListEntriesBody",
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/watch-lists/{list_id}/terms": {
+      "post": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Add contained terms to a manual watch list",
+        "description": "`terms` is a list of 1 to 100 terms, each 3 to 64 characters after NFC and case folding, matched anywhere in a password without regard to case at sign-in and when a password is set. No route returns a term. Answers how many were new.",
+        "operationId": "add_terms_admin_watch_lists__list_id__terms_post",
+        "parameters": [
+          {
+            "name": "list_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "List Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How many were added.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenWatchListCount"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The list is imported, not manual.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "only a manual watch list takes entries and terms"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "terms": {
+                    "description": "1 to 100 terms of 3 to 64 characters.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Terms",
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "terms"
+                ],
+                "title": "WatchListTermsBody",
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/watch-lists/{list_id}/terms/removal": {
+      "post": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Remove contained terms from a manual watch list",
+        "description": "`terms` is a list of 1 to 100 terms, each 3 to 64 characters after NFC and case folding, matched anywhere in a password without regard to case at sign-in and when a password is set. No route returns a term. Answers how many were removed.",
+        "operationId": "remove_terms_admin_watch_lists__list_id__terms_removal_post",
+        "parameters": [
+          {
+            "name": "list_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "List Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How many were removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenWatchListCount"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The list is imported, not manual.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "only a manual watch list takes entries and terms"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "terms": {
+                    "description": "1 to 100 terms of 3 to 64 characters.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Terms",
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "terms"
+                ],
+                "title": "WatchListTermsBody",
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/password-exposures": {
+      "get": {
+        "tags": [
+          "warden: administration",
+          "warden: password policies"
+        ],
+        "summary": "Users whose password was found on a watch list",
+        "description": "Every user required to change their password because it was found on a watch list, by the latest recheck (`warden passwords recheck`) or at a sign-in, until they change it: their id, where it was found (`builtin`, `list`, `term` or `hibp`), the list's id, and the policy that applies to them; with counts by list and by policy over every such user. Identifiers and counts only. Users in id order; without `limit` or `after` the body holds every user, and with either it also carries `next`, as `GET /users` does.",
+        "operationId": "exposures_admin_password_exposures_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size, a whole number from 1 to 1000.",
+              "title": "Limit"
+            },
+            "description": "Page size, a whole number from 1 to 1000."
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The `next` cursor from the previous page.",
+              "title": "After"
+            },
+            "description": "The `next` cursor from the previous page."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenPasswordExposures"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`limit` is not 1 to 1000, or `after` is not a cursor this route returned.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/capabilities": {
       "get": {
         "tags": [
@@ -2892,7 +7445,7 @@
           "warden: administration"
         ],
         "summary": "Show a user and their roles",
-        "description": "`user_id` is the user's UUID; anything else is a 404.",
+        "description": "`user_id` is the user's UUID; anything else is a 404. `password` is the user's password policy and password state, as `GET /users/{user_id}/password-policy` answers it.",
         "operationId": "show_user_admin_users__user_id__get",
         "parameters": [
           {
@@ -6936,6 +11489,39 @@
         ],
         "title": "ValidationError"
       },
+      "WardenAffectedUsers": {
+        "properties": {
+          "affected_users": {
+            "type": "integer",
+            "title": "Affected Users"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "affected_users"
+        ],
+        "title": "WardenAffectedUsers"
+      },
+      "WardenAffectedUsersProposal": {
+        "properties": {
+          "current": {
+            "type": "integer",
+            "title": "Current"
+          },
+          "proposed": {
+            "type": "integer",
+            "title": "Proposed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "current",
+          "proposed"
+        ],
+        "title": "WardenAffectedUsersProposal"
+      },
       "WardenApiKey": {
         "properties": {
           "id": {
@@ -7137,6 +11723,33 @@
         "title": "WardenChallengeIssued",
         "description": "The password was right; a second factor, or enrolment in one, comes next."
       },
+      "WardenChangeRequired": {
+        "properties": {
+          "change_required": {
+            "type": "boolean",
+            "const": true,
+            "title": "Change Required"
+          },
+          "change_reason": {
+            "type": "string",
+            "enum": [
+              "expired",
+              "watch_list",
+              "administrator",
+              "policy"
+            ],
+            "title": "Change Reason",
+            "description": "The reason that stands."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "change_required",
+          "change_reason"
+        ],
+        "title": "WardenChangeRequired"
+      },
       "WardenDetail": {
         "properties": {
           "detail": {
@@ -7163,6 +11776,97 @@
         ],
         "title": "WardenEnrolmentConfirmed",
         "description": "The recovery codes; under a challenge, with the new session as well.\n\nThe codes are fresh when TOTP is the user's first second factor; when\nthe user already holds a security key or passkey the list is empty, and\nthe codes they hold cover TOTP too."
+      },
+      "WardenExposureByList": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "builtin",
+              "list",
+              "term",
+              "hibp"
+            ],
+            "title": "Source"
+          },
+          "watch_list_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watch List Id"
+          },
+          "users": {
+            "type": "integer",
+            "title": "Users"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source",
+          "watch_list_id",
+          "users"
+        ],
+        "title": "WardenExposureByList"
+      },
+      "WardenExposureByPolicy": {
+        "properties": {
+          "policy_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Id"
+          },
+          "users": {
+            "type": "integer",
+            "title": "Users"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "policy_id",
+          "users"
+        ],
+        "title": "WardenExposureByPolicy"
+      },
+      "WardenFieldError": {
+        "properties": {
+          "field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field",
+            "description": "The body field at fault, such as `tiers[1]`."
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "A fixed message; never an echo of the value."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "field",
+          "message"
+        ],
+        "title": "WardenFieldError"
       },
       "WardenForbidden": {
         "properties": {
@@ -7354,6 +12058,423 @@
         "title": "WardenPasskeyRegistered",
         "description": "A passkey registered from an administrator's link; not signed in."
       },
+      "WardenPassphraseRule": {
+        "properties": {
+          "min_length": {
+            "type": "integer",
+            "title": "Min Length",
+            "description": "Code points a passphrase has at least."
+          },
+          "min_words": {
+            "type": "integer",
+            "title": "Min Words",
+            "description": "Words separated by spaces, hyphens, full stops or underscores."
+          },
+          "relaxes_classes": {
+            "type": "boolean",
+            "title": "Relaxes Classes",
+            "description": "Whether a passphrase is excused the class rule."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "min_length",
+          "min_words",
+          "relaxes_classes"
+        ],
+        "title": "WardenPassphraseRule"
+      },
+      "WardenPasswordExposure": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "builtin",
+              "list",
+              "term",
+              "hibp"
+            ],
+            "title": "Source"
+          },
+          "watch_list_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watch List Id"
+          },
+          "policy_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Id",
+            "description": "Null for a user who does not sign in with a password."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_id",
+          "source",
+          "watch_list_id",
+          "policy_id"
+        ],
+        "title": "WardenPasswordExposure"
+      },
+      "WardenPasswordExposures": {
+        "properties": {
+          "users": {
+            "items": {
+              "$ref": "#/components/schemas/WardenPasswordExposure"
+            },
+            "type": "array",
+            "title": "Users",
+            "description": "In user id order."
+          },
+          "by_list": {
+            "items": {
+              "$ref": "#/components/schemas/WardenExposureByList"
+            },
+            "type": "array",
+            "title": "By List"
+          },
+          "by_policy": {
+            "items": {
+              "$ref": "#/components/schemas/WardenExposureByPolicy"
+            },
+            "type": "array",
+            "title": "By Policy"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "next": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next",
+            "description": "Only when `limit` or `after` was given: the cursor for the following page, or null on the last page."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "users",
+          "by_list",
+          "by_policy",
+          "total"
+        ],
+        "title": "WardenPasswordExposures"
+      },
+      "WardenPasswordPolicy": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "UUID."
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority",
+            "description": "1 is the highest; null for the default."
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "description": "Send it back to change the policy."
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles",
+            "description": "The roles mapped to this policy."
+          },
+          "min_length": {
+            "type": "integer",
+            "title": "Min Length",
+            "description": "Code points, after NFC; at least 8."
+          },
+          "max_length": {
+            "type": "integer",
+            "title": "Max Length",
+            "description": "Code points, at most 1024."
+          },
+          "min_classes": {
+            "type": "integer",
+            "title": "Min Classes",
+            "description": "Character classes needed: lowercase, uppercase, digit, other letters, symbol."
+          },
+          "max_repeat": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Repeat",
+            "description": "The longest run of one character; null is any."
+          },
+          "forbid_user_details": {
+            "type": "boolean",
+            "title": "Forbid User Details",
+            "description": "Refuse a password containing the email local part or display name."
+          },
+          "passphrase": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WardenPassphraseRule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tiers": {
+            "items": {
+              "$ref": "#/components/schemas/WardenPasswordTier"
+            },
+            "type": "array",
+            "title": "Tiers",
+            "description": "Change-period tiers, strongest first; the first one met is recorded."
+          },
+          "warning_days": {
+            "type": "integer",
+            "title": "Warning Days",
+            "description": "Days before expiry that sign-in warns."
+          },
+          "history_count": {
+            "type": "integer",
+            "title": "History Count",
+            "description": "Previous passwords that may not be reused, 0 to 24."
+          },
+          "min_age_hours": {
+            "type": "integer",
+            "title": "Min Age Hours",
+            "description": "Hours before a password may change again."
+          },
+          "include_builtin": {
+            "type": "boolean",
+            "title": "Include Builtin",
+            "description": "Check the built-in common-password list."
+          },
+          "watch_list_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Watch List Ids",
+            "description": "UUIDs of the watch lists checked."
+          },
+          "hibp_enabled": {
+            "type": "boolean",
+            "title": "Hibp Enabled",
+            "description": "Ask the Pwned Passwords range API (k-anonymity)."
+          },
+          "hibp_on_unavailable": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "refuse"
+            ],
+            "title": "Hibp On Unavailable"
+          },
+          "fingerprint_enabled": {
+            "type": "boolean",
+            "title": "Fingerprint Enabled",
+            "description": "Keep a sealed fingerprint for `warden passwords recheck`; needs a key."
+          },
+          "end_sessions_on_match": {
+            "type": "boolean",
+            "title": "End Sessions On Match",
+            "description": "End live sessions when recheck finds a match."
+          },
+          "enforce_on_sign_in": {
+            "type": "boolean",
+            "title": "Enforce On Sign In",
+            "description": "Force a change at sign-in when the password fails the current rules."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "priority",
+          "is_default",
+          "version",
+          "roles",
+          "min_length",
+          "max_length",
+          "min_classes",
+          "max_repeat",
+          "forbid_user_details",
+          "passphrase",
+          "tiers",
+          "warning_days",
+          "history_count",
+          "min_age_hours",
+          "include_builtin",
+          "watch_list_ids",
+          "hibp_enabled",
+          "hibp_on_unavailable",
+          "fingerprint_enabled",
+          "end_sessions_on_match",
+          "enforce_on_sign_in",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "WardenPasswordPolicy"
+      },
+      "WardenPasswordPolicyEnvelope": {
+        "properties": {
+          "policy": {
+            "$ref": "#/components/schemas/WardenPasswordPolicy"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "policy"
+        ],
+        "title": "WardenPasswordPolicyEnvelope"
+      },
+      "WardenPasswordPolicyInvalid": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "const": "the password policy is not valid",
+            "title": "Detail"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/WardenFieldError"
+            },
+            "type": "array",
+            "title": "Errors"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "detail",
+          "errors"
+        ],
+        "title": "WardenPasswordPolicyInvalid"
+      },
+      "WardenPasswordPolicyList": {
+        "properties": {
+          "policies": {
+            "items": {
+              "$ref": "#/components/schemas/WardenPasswordPolicy"
+            },
+            "type": "array",
+            "title": "Policies",
+            "description": "Highest priority first, then the default."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "policies"
+        ],
+        "title": "WardenPasswordPolicyList"
+      },
+      "WardenPasswordTier": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "passphrase": {
+            "type": "boolean",
+            "title": "Passphrase",
+            "description": "Met by a passphrase; the length and classes are unused.",
+            "default": false
+          },
+          "min_length": {
+            "type": "integer",
+            "title": "Min Length",
+            "default": 0
+          },
+          "min_classes": {
+            "type": "integer",
+            "title": "Min Classes",
+            "default": 0
+          },
+          "max_age_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Age Days",
+            "description": "Days until a change is due; null is never."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "WardenPasswordTier"
+      },
       "WardenPendingInvitation": {
         "properties": {
           "user": {
@@ -7388,6 +12509,26 @@
           "roles"
         ],
         "title": "WardenPendingInvitation"
+      },
+      "WardenPolicyName": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "UUID."
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "WardenPolicyName"
       },
       "WardenPresetGuide": {
         "properties": {
@@ -8076,6 +13217,10 @@
             "type": "integer",
             "title": "Webauthn Credentials",
             "description": "How many security keys and passkeys the user holds."
+          },
+          "password": {
+            "$ref": "#/components/schemas/WardenUserPasswordStatus",
+            "description": "The user's password policy and password state."
           }
         },
         "additionalProperties": false,
@@ -8083,7 +13228,8 @@
         "required": [
           "user",
           "roles",
-          "webauthn_credentials"
+          "webauthn_credentials",
+          "password"
         ],
         "title": "WardenUserDetail"
       },
@@ -8129,6 +13275,306 @@
           "users"
         ],
         "title": "WardenUserList"
+      },
+      "WardenUserPasswordStatus": {
+        "properties": {
+          "applies": {
+            "type": "boolean",
+            "title": "Applies",
+            "description": "Whether the user signs in with a password."
+          },
+          "policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WardenPolicyName"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "pin",
+                  "role",
+                  "default"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source",
+            "description": "Why the policy applies."
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role",
+            "description": "The mapped role that chose it, when `source` is `role`."
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
+          },
+          "password_set_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password Set At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "change_required": {
+            "type": "boolean",
+            "title": "Change Required"
+          },
+          "change_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "expired",
+                  "watch_list",
+                  "administrator",
+                  "policy"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Reason"
+          },
+          "watch_list_source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "builtin",
+                  "list",
+                  "term",
+                  "hibp"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watch List Source"
+          },
+          "watch_list_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watch List Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "applies",
+          "policy",
+          "source",
+          "role",
+          "tier",
+          "password_set_at",
+          "expires_at",
+          "change_required",
+          "change_reason",
+          "watch_list_source",
+          "watch_list_id"
+        ],
+        "title": "WardenUserPasswordStatus"
+      },
+      "WardenWatchList": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "UUID."
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "description": "What a user is shown when their password is on the list."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "imported"
+            ],
+            "title": "Kind"
+          },
+          "entry_count": {
+            "type": "integer",
+            "title": "Entry Count"
+          },
+          "term_count": {
+            "type": "integer",
+            "title": "Term Count"
+          },
+          "import_threshold": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Import Threshold"
+          },
+          "last_imported_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Imported At"
+          },
+          "policy_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Policy Ids",
+            "description": "The policies that check this list."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "reason",
+          "kind",
+          "entry_count",
+          "term_count",
+          "import_threshold",
+          "last_imported_at",
+          "policy_ids",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "WardenWatchList"
+      },
+      "WardenWatchListCount": {
+        "properties": {
+          "added": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Added",
+            "description": "When adding: how many were new."
+          },
+          "removed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Removed",
+            "description": "When removing: how many went."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "WardenWatchListCount"
+      },
+      "WardenWatchListEnvelope": {
+        "properties": {
+          "watch_list": {
+            "$ref": "#/components/schemas/WardenWatchList"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "watch_list"
+        ],
+        "title": "WardenWatchListEnvelope"
+      },
+      "WardenWatchListList": {
+        "properties": {
+          "watch_lists": {
+            "items": {
+              "$ref": "#/components/schemas/WardenWatchList"
+            },
+            "type": "array",
+            "title": "Watch Lists"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "watch_lists"
+        ],
+        "title": "WardenWatchListList"
       },
       "WardenWebAuthnCredential": {
         "properties": {

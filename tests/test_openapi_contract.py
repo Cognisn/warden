@@ -196,6 +196,8 @@ def test_every_json_body_route_documents_its_request_body(document: dict[str, An
                 ("/admin/users/{user_id}/passkey-registration", "post"),
                 ("/auth/passkey/options", "post"),
                 ("/admin/invitations/{user_id}/resend", "post"),
+                ("/admin/password-policies/{policy_id}/watch-lists/{list_id}", "put"),
+                ("/admin/users/{user_id}/password-change-required", "put"),
             }
             if (path, method) in bodiless:
                 continue

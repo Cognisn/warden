@@ -19,6 +19,8 @@ __all__ = [
     "FORBIDDEN",
     "PRODUCT_AUTHORISATION",
     "REFUSED",
+    "AffectedUsersProposalBody",
+    "BuiltinListBody",
     "ChallengeBody",
     "ChangePasswordBody",
     "CodeBody",
@@ -31,6 +33,12 @@ __all__ = [
     "PasskeyRegistrationBody",
     "PasskeySignInBody",
     "PasskeyTokenBody",
+    "PasswordPolicyCreateBody",
+    "PasswordPolicyOrderBody",
+    "PasswordPolicyPinBody",
+    "PasswordPolicyPriorityBody",
+    "PasswordPolicyRoleBody",
+    "PasswordPolicyUpdateBody",
     "RefreshBody",
     "ResetCompleteBody",
     "ResetRequestBody",
@@ -41,12 +49,18 @@ __all__ = [
     "SsoInvitationBody",
     "StagedGrantBody",
     "StatusBody",
+    "WardenAffectedUsers",
+    "WardenAffectedUsersProposal",
     "WardenApiKey",
     "WardenApiKeyList",
     "WardenCapabilities",
     "WardenChallengeIssued",
+    "WardenChangeRequired",
     "WardenDetail",
     "WardenEnrolmentConfirmed",
+    "WardenExposureByList",
+    "WardenExposureByPolicy",
+    "WardenFieldError",
     "WardenForbidden",
     "WardenInvitationAccepted",
     "WardenInvitationIssued",
@@ -55,7 +69,16 @@ __all__ = [
     "WardenPasskeyInvitationAccepted",
     "WardenPasskeyLinkSent",
     "WardenPasskeyRegistered",
+    "WardenPassphraseRule",
+    "WardenPasswordExposure",
+    "WardenPasswordExposures",
+    "WardenPasswordPolicy",
+    "WardenPasswordPolicyEnvelope",
+    "WardenPasswordPolicyInvalid",
+    "WardenPasswordPolicyList",
+    "WardenPasswordTier",
     "WardenPendingInvitation",
+    "WardenPolicyName",
     "WardenRecoveryCodes",
     "WardenRefusal",
     "WardenResetRequested",
@@ -76,12 +99,21 @@ __all__ = [
     "WardenUserDetail",
     "WardenUserEnvelope",
     "WardenUserList",
+    "WardenUserPasswordStatus",
+    "WardenWatchList",
+    "WardenWatchListCount",
+    "WardenWatchListEnvelope",
+    "WardenWatchListList",
     "WardenWebAuthnCredential",
     "WardenWebAuthnCredentialEnvelope",
     "WardenWebAuthnCredentialList",
     "WardenWebAuthnOptions",
     "WardenWebAuthnRegistered",
     "WardenWebAuthnRegistrationConfirmed",
+    "WatchListCreateBody",
+    "WatchListEntriesBody",
+    "WatchListTermsBody",
+    "WatchListUpdateBody",
     "WebAuthnRegistrationConfirmBody",
     "WebAuthnRenameBody",
     "WebAuthnVerifyBody",
@@ -374,6 +406,9 @@ class WardenUserDetail(_Doc):
     webauthn_credentials: int = Field(
         description="How many security keys and passkeys the user holds."
     )
+    password: WardenUserPasswordStatus = Field(
+        description="The user's password policy and password state."
+    )
 
 
 class WardenRole(_Doc):
@@ -599,6 +634,287 @@ class NewApiKeyBody(_Doc):
 
 class SsoClientSecretBody(_Doc):
     client_secret: str = Field(description="1 to 4096 printable characters; never returned.")
+
+
+# Password policy administration (wave 17, feat/0.1.0-password-policy-admin).
+# Kept as one block, apart from the password enforcement routes' models.
+
+PolicySource = Literal["pin", "role", "default"]
+WatchListSourceName = Literal["builtin", "list", "term", "hibp"]
+ChangeReasonName = Literal["expired", "watch_list", "administrator", "policy"]
+
+
+class WardenPassphraseRule(_Doc):
+    min_length: int = Field(description="Code points a passphrase has at least.")
+    min_words: int = Field(
+        description="Words separated by spaces, hyphens, full stops or underscores."
+    )
+    relaxes_classes: bool = Field(description="Whether a passphrase is excused the class rule.")
+
+
+class WardenPasswordTier(_Doc):
+    name: str
+    passphrase: bool = Field(
+        default=False, description="Met by a passphrase; the length and classes are unused."
+    )
+    min_length: int = 0
+    min_classes: int = 0
+    max_age_days: int | None = Field(
+        default=None, description="Days until a change is due; null is never."
+    )
+
+
+class WardenPasswordPolicy(_Doc):
+    id: str = Field(description="UUID.")
+    name: str
+    description: str
+    priority: int | None = Field(description="1 is the highest; null for the default.")
+    is_default: bool
+    version: int = Field(description="Send it back to change the policy.")
+    roles: list[str] = Field(description="The roles mapped to this policy.")
+    min_length: int = Field(description="Code points, after NFC; at least 8.")
+    max_length: int = Field(description="Code points, at most 1024.")
+    min_classes: int = Field(
+        description="Character classes needed: lowercase, uppercase, digit, other letters, symbol."
+    )
+    max_repeat: int | None = Field(description="The longest run of one character; null is any.")
+    forbid_user_details: bool = Field(
+        description="Refuse a password containing the email local part or display name."
+    )
+    passphrase: WardenPassphraseRule | None
+    tiers: list[WardenPasswordTier] = Field(
+        description="Change-period tiers, strongest first; the first one met is recorded."
+    )
+    warning_days: int = Field(description="Days before expiry that sign-in warns.")
+    history_count: int = Field(description="Previous passwords that may not be reused, 0 to 24.")
+    min_age_hours: int = Field(description="Hours before a password may change again.")
+    include_builtin: bool = Field(description="Check the built-in common-password list.")
+    watch_list_ids: list[str] = Field(description="UUIDs of the watch lists checked.")
+    hibp_enabled: bool = Field(description="Ask the Pwned Passwords range API (k-anonymity).")
+    hibp_on_unavailable: Literal["allow", "refuse"]
+    fingerprint_enabled: bool = Field(
+        description="Keep a sealed fingerprint for `warden passwords recheck`; needs a key."
+    )
+    end_sessions_on_match: bool = Field(description="End live sessions when recheck finds a match.")
+    enforce_on_sign_in: bool = Field(
+        description="Force a change at sign-in when the password fails the current rules."
+    )
+    created_at: datetime
+    updated_at: datetime
+
+
+class WardenPasswordPolicyList(_Doc):
+    policies: list[WardenPasswordPolicy] = Field(
+        description="Highest priority first, then the default."
+    )
+
+
+class WardenPasswordPolicyEnvelope(_Doc):
+    policy: WardenPasswordPolicy
+
+
+class WardenFieldError(_Doc):
+    field: str | None = Field(description="The body field at fault, such as `tiers[1]`.")
+    message: str = Field(description="A fixed message; never an echo of the value.")
+
+
+class WardenPasswordPolicyInvalid(_Doc):
+    detail: Literal["the password policy is not valid"]
+    errors: list[WardenFieldError]
+
+
+class WardenAffectedUsers(_Doc):
+    affected_users: int
+
+
+class WardenAffectedUsersProposal(_Doc):
+    current: int
+    proposed: int
+
+
+class WardenPolicyName(_Doc):
+    id: str = Field(description="UUID.")
+    name: str
+
+
+class WardenUserPasswordStatus(_Doc):
+    applies: bool = Field(description="Whether the user signs in with a password.")
+    policy: WardenPolicyName | None
+    source: PolicySource | None = Field(description="Why the policy applies.")
+    role: str | None = Field(description="The mapped role that chose it, when `source` is `role`.")
+    tier: str | None
+    password_set_at: datetime | None
+    expires_at: datetime | None
+    change_required: bool
+    change_reason: ChangeReasonName | None
+    watch_list_source: WatchListSourceName | None
+    watch_list_id: str | None
+
+
+class WardenChangeRequired(_Doc):
+    change_required: Literal[True]
+    change_reason: ChangeReasonName = Field(description="The reason that stands.")
+
+
+class WardenWatchList(_Doc):
+    id: str = Field(description="UUID.")
+    name: str
+    reason: str = Field(description="What a user is shown when their password is on the list.")
+    kind: Literal["manual", "imported"]
+    entry_count: int
+    term_count: int
+    import_threshold: int | None
+    last_imported_at: datetime | None
+    policy_ids: list[str] = Field(description="The policies that check this list.")
+    created_at: datetime
+    updated_at: datetime
+
+
+class WardenWatchListList(_Doc):
+    watch_lists: list[WardenWatchList]
+
+
+class WardenWatchListEnvelope(_Doc):
+    watch_list: WardenWatchList
+
+
+class WardenWatchListCount(_Doc):
+    added: int | None = Field(default=None, description="When adding: how many were new.")
+    removed: int | None = Field(default=None, description="When removing: how many went.")
+
+
+class WardenPasswordExposure(_Doc):
+    user_id: str
+    source: WatchListSourceName
+    watch_list_id: str | None
+    policy_id: str | None = Field(
+        description="Null for a user who does not sign in with a password."
+    )
+
+
+class WardenExposureByList(_Doc):
+    source: WatchListSourceName
+    watch_list_id: str | None
+    users: int
+
+
+class WardenExposureByPolicy(_Doc):
+    policy_id: str | None
+    users: int
+
+
+class WardenPasswordExposures(_Doc):
+    users: list[WardenPasswordExposure] = Field(description="In user id order.")
+    by_list: list[WardenExposureByList]
+    by_policy: list[WardenExposureByPolicy]
+    total: int
+    next: str | None = Field(
+        default=None,
+        description=(
+            "Only when `limit` or `after` was given: the cursor for the following page, "
+            "or null on the last page."
+        ),
+    )
+
+
+class PasswordPolicyCreateBody(_Doc):
+    name: str = Field(description="1 to 64 characters, unique.")
+    priority: int = Field(description="1 to 10000, unique; 1 is the highest.")
+    description: str = Field(default="", description="At most 500 characters.")
+    min_length: int
+    max_length: int = 1024
+    min_classes: int = 0
+    max_repeat: int | None = None
+    forbid_user_details: bool = False
+    passphrase: WardenPassphraseRule | None = None
+    tiers: list[WardenPasswordTier] = Field(default_factory=list)
+    warning_days: int = 14
+    history_count: int = 0
+    min_age_hours: int = 0
+    include_builtin: bool = True
+    watch_list_ids: list[str] = Field(default_factory=list)
+    hibp_enabled: bool = False
+    hibp_on_unavailable: Literal["allow", "refuse"] = "allow"
+    fingerprint_enabled: bool = False
+    end_sessions_on_match: bool = False
+    enforce_on_sign_in: bool = False
+
+
+class PasswordPolicyUpdateBody(_Doc):
+    version: int = Field(description="The version read; a stale one is a 409.")
+    name: str | None = None
+    description: str | None = None
+    min_length: int | None = None
+    max_length: int | None = None
+    min_classes: int | None = None
+    max_repeat: int | None = None
+    forbid_user_details: bool | None = None
+    passphrase: WardenPassphraseRule | None = None
+    tiers: list[WardenPasswordTier] | None = None
+    warning_days: int | None = None
+    history_count: int | None = None
+    min_age_hours: int | None = None
+    include_builtin: bool | None = None
+    watch_list_ids: list[str] | None = None
+    hibp_enabled: bool | None = None
+    hibp_on_unavailable: Literal["allow", "refuse"] | None = None
+    fingerprint_enabled: bool | None = None
+    end_sessions_on_match: bool | None = None
+    enforce_on_sign_in: bool | None = None
+
+
+class PasswordPolicyPriorityBody(_Doc):
+    priority: int = Field(description="1 to 10000; 1 is the highest.")
+
+
+class PasswordPolicyOrderBody(_Doc):
+    policy_ids: list[str] = Field(
+        description="Every non-default policy's UUID once, highest first."
+    )
+
+
+class BuiltinListBody(_Doc):
+    include: bool
+
+
+class PasswordPolicyRoleBody(_Doc):
+    policy_id: str = Field(description="UUID of a policy other than the default.")
+
+
+class PasswordPolicyPinBody(_Doc):
+    policy_id: str = Field(description="UUID.")
+
+
+class AffectedUsersProposalBody(_Doc):
+    policy_id: str | None = Field(default=None, description="UUID; leave out for a new policy.")
+    priority: int | None = Field(default=None, description="Required for a new policy.")
+    roles: list[str] | None = Field(
+        default=None, description="Every role that would map to the policy; declared roles only."
+    )
+
+
+class WatchListCreateBody(_Doc):
+    name: str = Field(description="1 to 64 characters, unique.")
+    reason: str = Field(description="1 to 200 characters, shown to a user whose password matches.")
+    kind: Literal["manual", "imported"]
+
+
+class WatchListUpdateBody(_Doc):
+    name: str | None = None
+    reason: str | None = None
+
+
+class WatchListEntriesBody(_Doc):
+    passwords: list[str] = Field(
+        description="1 to 100 exact passwords; hashed at once, never kept."
+    )
+
+
+class WatchListTermsBody(_Doc):
+    terms: list[str] = Field(description="1 to 100 terms of 3 to 64 characters.")
+
+
+WardenUserDetail.model_rebuild()
 
 
 # Response fragments.
