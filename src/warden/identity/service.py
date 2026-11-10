@@ -46,6 +46,18 @@ from warden.identity.mfa import (
     SecondFactor,
     WebAuthnUnavailable,
 )
+from warden.identity.password_policy import (
+    Fingerprints,
+    HibpRangeClient,
+    PasswordChangeChallenges,
+    PasswordHistory,
+    PasswordPolicies,
+    PasswordRecheck,
+    PasswordStates,
+    WatchLists,
+)
+from warden.identity.password_policy.builtin import bundled_list
+from warden.identity.password_policy.maintenance import PasswordMaintenance
 from warden.identity.passwords import MAX_PASSWORD_LENGTH, PasswordHasher
 from warden.identity.policy import PolicyStore, SessionPolicy
 from warden.identity.roles import PermissionRegistry, Roles
@@ -271,7 +283,61 @@ class Identity:
             secrets,
             settings_max_age=settings.policy_cache_seconds,
         )
+        self._init_password_policies(
+            secrets,
+            max_age=settings.policy_cache_seconds if policy_max_age is None else policy_max_age,
+        )
         self._init_lifecycle(mail_sender)
+
+    def _init_password_policies(self, secrets: SecretStore, *, max_age: float) -> None:
+        """Password policies and watch lists (rulings PW0 to PW14): services only.
+
+        Nothing here changes sign-in or setting a password; wave 17 calls these
+        services from those flows. A configured fingerprint key must be in the
+        secrets store, as the TOTP key must.
+        """
+        passwords = self.config.passwords
+        box = None
+        if passwords.fingerprint_key_secret is not None:
+            box = SecretBox.from_secrets(
+                secrets,
+                current_name=passwords.fingerprint_key_secret,
+                # Without a previous key, the current key is the only one.
+                previous_name=passwords.fingerprint_previous_key_secret
+                or passwords.fingerprint_key_secret,
+            )
+        self.password_fingerprints = Fingerprints(box)
+        self.password_policies = PasswordPolicies(
+            self.db,
+            self.roles.registry,
+            seed_min_length=self.config.identity.password_min_length,
+            fingerprint_available=passwords.fingerprint_available,
+            max_age=max_age,
+        )
+        self.password_history = PasswordHistory(self.db, self.passwords)
+        self.password_states = PasswordStates(self.db)
+        self.password_challenges = PasswordChangeChallenges(
+            self.db,
+            ttl_seconds=self.config.identity.mfa_challenge_ttl_seconds,
+            max_failures=self.config.identity.mfa_max_failures,
+        )
+        self.watch_lists = WatchLists(
+            self.db,
+            self.password_policies,
+            builtin=bundled_list(),
+            hibp=HibpRangeClient(passwords),
+        )
+        self.password_recheck = PasswordRecheck(
+            self.db,
+            self.password_policies,
+            self.watch_lists,
+            self.password_fingerprints,
+            self.password_states,
+            self.sessions,
+        )
+        self._password_maintenance = PasswordMaintenance(
+            self.password_history, self.password_policies, self.password_challenges
+        )
 
     def _init_lifecycle(self, mail_sender: MailSender | None) -> None:
         """Identity lifecycle: mail, single-use tokens, invitations, password reset, API keys."""
@@ -292,7 +358,13 @@ class Identity:
         self.resets = reset.PasswordResets(
             self.config, self.db, self.single_use, self.mailer, self.passwords, self.sessions
         )
-        self.pruner = prune.Pruner(self.db, self.single_use, self.throttle, webauthn=self.webauthn)
+        self.pruner = prune.Pruner(
+            self.db,
+            self.single_use,
+            self.throttle,
+            webauthn=self.webauthn,
+            passwords=self._password_maintenance,
+        )
 
     async def prune(self) -> prune.PruneReport:
         """Delete expired tokens, MFA and WebAuthn challenges, and ended throttle windows."""
@@ -424,7 +496,7 @@ class Identity:
 
     @contextlib.asynccontextmanager
     async def running(self) -> AsyncIterator[None]:
-        """Run identity's background work (the session-policy listener) for a block.
+        """Run identity's background work (the session and password policy listeners) for a block.
 
         Wrap the product's FastAPI lifespan in it::
 
@@ -435,16 +507,24 @@ class Identity:
         """
         ready = asyncio.Event()
         task = asyncio.create_task(self.policy.listen(ready=ready))
+        # Password policies cache per replica too, and listen on the same channel.
+        passwords_ready = asyncio.Event()
+        passwords_task = asyncio.create_task(self.password_policies.listen(ready=passwords_ready))
         try:
             try:
                 await asyncio.wait_for(ready.wait(), timeout=10)
             except TimeoutError:
                 logger.warning("session policy listener not ready; it keeps retrying")
+            try:
+                await asyncio.wait_for(passwords_ready.wait(), timeout=10)
+            except TimeoutError:
+                logger.warning("password policy listener not ready; it keeps retrying")
             yield
         finally:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+            for running in (task, passwords_task):
+                running.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await running
             await self.sso.aclose()
 
     async def prune_sign_in_attempts(self) -> int:

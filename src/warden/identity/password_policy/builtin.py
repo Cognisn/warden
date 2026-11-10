@@ -9,13 +9,14 @@ are recorded in ``data/README.md`` beside it.
 
 from __future__ import annotations
 
+import functools
 import gzip
 import threading
 from importlib import resources
 from importlib.resources.abc import Traversable
 from pathlib import Path
 
-__all__ = ["BUILTIN_DATA", "BUILTIN_REASON", "BuiltinList"]
+__all__ = ["BUILTIN_DATA", "BUILTIN_REASON", "BuiltinList", "bundled_list"]
 
 BUILTIN_REASON = "This password is too common"
 BUILTIN_DATA = "common-passwords.sha1.gz"
@@ -87,3 +88,9 @@ def _check(data: bytes) -> bytes:
             raise ValueError("the built-in password list is not sorted without duplicates")
         previous = entry
     return data
+
+
+@functools.cache
+def bundled_list() -> BuiltinList:
+    """The bundled list, shared by every ``Identity`` in the process so it loads once."""
+    return BuiltinList()

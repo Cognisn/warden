@@ -31,6 +31,8 @@ from warden.identity.password_policy.fingerprint import (
 )
 from warden.identity.password_policy.hibp import HibpRangeClient, RangeCache
 from warden.identity.password_policy.history import PasswordHistory
+from warden.identity.password_policy.maintenance import PasswordMaintenance
+from warden.identity.password_policy.recheck import PasswordRecheck, RecheckReport
 from warden.identity.password_policy.rules import (
     DESCRIPTION_VERSION,
     Evaluation,
@@ -78,17 +80,20 @@ __all__ = [
     "PassphraseRule",
     "PasswordChangeChallenges",
     "PasswordHistory",
+    "PasswordMaintenance",
     "PasswordPolicies",
     "PasswordPolicy",
     "PasswordPolicyConflict",
     "PasswordPolicyError",
     "PasswordPolicyNotFound",
+    "PasswordRecheck",
     "PasswordRules",
     "PasswordState",
     "PasswordStates",
     "PolicySettings",
     "PolicySource",
     "RangeCache",
+    "RecheckReport",
     "RuleCode",
     "RuleResult",
     "SealedFingerprint",

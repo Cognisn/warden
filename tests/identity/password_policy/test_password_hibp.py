@@ -146,3 +146,15 @@ async def test_one_run_asks_once_per_prefix() -> None:
 async def test_a_digest_must_be_twenty_bytes() -> None:
     with pytest.raises(ValueError, match="20 bytes"):
         await _client(Recorder()).contains(DIGEST[:19])
+
+
+async def test_no_log_line_carries_the_prefix_or_the_url(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    caplog.set_level(logging.DEBUG)
+    recorder = Recorder(f"{SUFFIX}:1")
+    assert await _client(recorder).contains(DIGEST)
+    with pytest.raises(HibpUnavailable):
+        await _client(Recorder("", status=500)).contains(DIGEST)
+    assert PREFIX not in caplog.text
+    assert "pwnedpasswords" not in caplog.text

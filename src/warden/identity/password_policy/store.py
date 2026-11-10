@@ -414,6 +414,10 @@ class PasswordPolicies:
     def fingerprint_available(self) -> bool:
         return self._fingerprint_available
 
+    def declared_roles(self) -> builtins.list[str]:
+        """The roles the product declares now; mappings of any other role have no effect."""
+        return [role.name for role in self._registry.roles()]
+
     @property
     def listening(self) -> bool:
         return self._listening
@@ -541,7 +545,7 @@ class PasswordPolicies:
             # Pinned on another replica since this one cached: read again once.
             self.invalidate()
             snapshot = await self._seeded()
-        declared = {role.name for role in self._registry.roles()}
+        declared = set(self.declared_roles())
         policy, source, role = resolve(
             snapshot.policies, snapshot.role_map, _default_id(snapshot), pin, roles, declared
         )
@@ -550,7 +554,7 @@ class PasswordPolicies:
     async def affected_users(self, policy_id: uuid.UUID) -> int:
         """How many users who hold a password this policy currently applies to (PW11)."""
         await self._seeded()
-        declared = [role.name for role in self._registry.roles()]
+        declared = self.declared_roles()
         async with self._db.connection() as conn:
             cur = await conn.execute(
                 sql.SQL("SELECT count(*) FROM ({}) e WHERE e.policy_id = %(policy)s").format(

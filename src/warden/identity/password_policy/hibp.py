@@ -15,6 +15,7 @@ follows. No request is made unless a policy enables the range API.
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import re
 from dataclasses import dataclass, field
@@ -73,18 +74,33 @@ class HibpRangeClient:
         return found
 
     async def _range(self, prefix: str) -> tuple[tuple[str, bool], ...]:
+        # Sent through the transport directly: httpx's client logs every request's
+        # URL, which would put the prefix in the product's logs. No redirect is
+        # followed; anything but a 200 counts as unavailable.
+        request = httpx.Request(
+            "GET",
+            self._base + prefix,
+            headers=self._headers,
+            extensions={"timeout": httpx.Timeout(self._timeout).as_dict()},
+        )
+        transport = self._transport or httpx.AsyncHTTPTransport()
         try:
-            async with httpx.AsyncClient(
-                transport=self._transport, timeout=self._timeout, follow_redirects=False
-            ) as client:
-                response = await client.get(self._base + prefix, headers=self._headers)
-            if response.status_code != 200 or len(response.content) > _MAX_BODY:
+            async with asyncio.timeout(self._timeout):
+                response = await transport.handle_async_request(request)
+                try:
+                    body = await response.aread()
+                finally:
+                    await response.aclose()
+            if response.status_code != 200 or len(body) > _MAX_BODY:
                 raise HibpUnavailable()
-            return _parse(response.text)
+            return _parse(body.decode("ascii"))
         except HibpUnavailable:
             raise
-        except (httpx.HTTPError, UnicodeDecodeError, ValueError):
+        except (httpx.HTTPError, TimeoutError, UnicodeDecodeError, ValueError):
             raise HibpUnavailable() from None
+        finally:
+            if self._transport is None:
+                await transport.aclose()
 
 
 def _parse(body: str) -> tuple[tuple[str, bool], ...]:

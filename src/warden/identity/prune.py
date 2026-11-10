@@ -1,8 +1,10 @@
 """Pruning (#134): delete identity rows that can never be used again.
 
 ``Pruner.prune`` deletes expired refresh tokens, expired single-use tokens,
-expired MFA challenges, expired WebAuthn ceremony challenges and ended
-sign-in throttle windows, and reports how many of each. Only expired rows
+expired MFA challenges, expired WebAuthn ceremony challenges, ended sign-in
+throttle windows, password history beyond the largest count any password
+policy keeps, and expired forced-change challenges, and reports how many of
+each. Only expired rows
 go: a used refresh token is kept until it expires, because presenting it
 again is how reuse is detected.
 
@@ -19,7 +21,7 @@ import contextlib
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from psycopg import sql
 
@@ -30,12 +32,20 @@ from warden.identity.throttle import SignInThrottle
 if TYPE_CHECKING:
     from warden.identity.webauthn import WebAuthn
 
-__all__ = ["PruneReport", "Pruner"]
+__all__ = ["PasswordPruning", "PruneReport", "Pruner"]
 
 logger = logging.getLogger(__name__)
 
 _REFRESH_TOKENS = table(schema.REFRESH_TOKENS)
 _MFA_CHALLENGES = table(schema.MFA_CHALLENGES)
+
+
+class PasswordPruning(Protocol):
+    """What the pruner needs from password policies."""
+
+    async def prune_history(self) -> int: ...
+
+    async def prune_challenges(self) -> int: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +58,10 @@ class PruneReport:
     sign_in_attempts: int
     webauthn_challenges: int = 0
     """Expired passkey and security key ceremony challenges, used or not."""
+    password_history: int = 0
+    """Previous passwords beyond the largest history count any policy keeps."""
+    password_change_challenges: int = 0
+    """Expired forced-change challenges, used or not."""
 
     @property
     def total(self) -> int:
@@ -57,6 +71,8 @@ class PruneReport:
             + self.mfa_challenges
             + self.sign_in_attempts
             + self.webauthn_challenges
+            + self.password_history
+            + self.password_change_challenges
         )
 
 
@@ -68,12 +84,17 @@ class Pruner:
         throttle: SignInThrottle,
         *,
         webauthn: WebAuthn | None = None,
+        passwords: PasswordPruning | None = None,
     ) -> None:
-        """``webauthn`` is None where passkeys are not configured: nothing to prune."""
+        """``webauthn`` is None where passkeys are not configured: nothing to prune.
+
+        ``passwords`` prunes password history and forced-change challenges.
+        """
         self._db = db
         self._tokens = tokens
         self._throttle = throttle
         self._webauthn = webauthn
+        self._passwords = passwords
 
     async def prune(self) -> PruneReport:
         """Delete every expired row once; each kind in its own short transaction."""
@@ -82,16 +103,25 @@ class Pruner:
         challenges = await self._delete_expired(_MFA_CHALLENGES)
         attempts = await self._throttle.prune()
         ceremonies = 0 if self._webauthn is None else await self._webauthn.prune()
-        report = PruneReport(refresh, single_use, challenges, attempts, ceremonies)
+        history = changes = 0
+        if self._passwords is not None:
+            history = await self._passwords.prune_history()
+            changes = await self._passwords.prune_challenges()
+        report = PruneReport(
+            refresh, single_use, challenges, attempts, ceremonies, history, changes
+        )
         if report.total:
             logger.info(
                 "pruned %d refresh tokens, %d single-use tokens, %d MFA challenges,"
-                " %d sign-in windows, %d WebAuthn challenges",
+                " %d sign-in windows, %d WebAuthn challenges, %d previous passwords,"
+                " %d password change challenges",
                 refresh,
                 single_use,
                 challenges,
                 attempts,
                 ceremonies,
+                history,
+                changes,
             )
         return report
 
