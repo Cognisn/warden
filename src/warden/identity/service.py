@@ -17,7 +17,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime
 from typing import Any, NoReturn
 from urllib.parse import urlsplit
@@ -46,19 +46,30 @@ from warden.identity.mfa import (
     SecondFactor,
     WebAuthnUnavailable,
 )
+from warden.identity.password_enforcement import (
+    PasswordAdvice,
+    PasswordEnforcement,
+    PasswordFeedback,
+    PasswordRejected,
+    PendingChange,
+)
 from warden.identity.password_policy import (
+    ChangeChallenge,
+    ChangeReason,
     Fingerprints,
     HibpRangeClient,
     PasswordChangeChallenges,
     PasswordHistory,
     PasswordPolicies,
+    PasswordPolicy,
     PasswordRecheck,
     PasswordStates,
+    UserContext,
     WatchLists,
 )
 from warden.identity.password_policy.builtin import bundled_list
 from warden.identity.password_policy.maintenance import PasswordMaintenance
-from warden.identity.passwords import MAX_PASSWORD_LENGTH, PasswordHasher
+from warden.identity.passwords import PasswordHasher
 from warden.identity.policy import PolicyStore, SessionPolicy
 from warden.identity.roles import PermissionRegistry, Roles
 from warden.identity.single_use import Purpose, SingleUseTokens, well_formed
@@ -84,6 +95,8 @@ __all__ = [
     "PasskeyInvitationAccepted",
     "PasskeyLinkNotConfigured",
     "PasskeyLinkRefused",
+    "PasswordChangeIssued",
+    "PasswordTokenPair",
     "SignInResult",
     "WebAuthnEnrolled",
 ]
@@ -101,6 +114,16 @@ _PASSKEY_AMR = ["hwk", "mfa"]
 _MAX_CREDENTIAL_ID = 1023
 # Refusals that say nothing about the second factor offered, so cost no attempt.
 _NOT_AN_ATTEMPT = frozenset({"unknown_challenge", "user_inactive", "sso_only", "challenge_used"})
+# How a forced-change challenge remembers the sign-in's amr (RFC 8176): one
+# letter at the start of its token, covered by the token's stored hash, so a
+# session issued after the change carries the factors actually proven.
+_AMR_TAG: dict[tuple[str, ...], str] = {
+    ("pwd",): "p",
+    ("pwd", "otp"): "o",
+    ("pwd", "recovery_code"): "r",
+    tuple(_KEY_AMR): "h",
+}
+_TAG_AMR: dict[str, list[str]] = {tag: list(amr) for amr, tag in _AMR_TAG.items()}
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,11 +138,36 @@ class ChallengeIssued:
 
 
 @dataclass(frozen=True, slots=True)
+class PasswordChangeIssued:
+    """The password and any second factor were right, but the password must change first.
+
+    ``token`` is a short-lived, single-use challenge for
+    ``complete_password_change``; no session exists until then (ruling PW9).
+    """
+
+    token: str
+    reason: ChangeReason
+    expires_in: int
+    watch_list_reason: str | None = None
+    """For ``watch_list``: the list's user-facing reason."""
+
+
+@dataclass(frozen=True, slots=True)
+class PasswordTokenPair(TokenPair):
+    """A session from a password sign-in, with the password's expiry warning."""
+
+    password_expires_in_days: int | None = None
+    """Days until the password expires, while within the policy's warning
+    window (ruling PW5); otherwise None."""
+
+
+@dataclass(frozen=True, slots=True)
 class SignInResult:
-    """Exactly one of ``tokens`` and ``challenge`` is set."""
+    """Exactly one of ``tokens``, ``challenge`` and ``password_change`` is set."""
 
     tokens: TokenPair | None = None
     challenge: ChallengeIssued | None = None
+    password_change: PasswordChangeIssued | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +179,8 @@ class WebAuthnEnrolled:
     """Fresh codes when it is the user's first second factor; otherwise none."""
     tokens: TokenPair | None = None
     """The new session, when registered under an enrolment challenge."""
+    password_change: PasswordChangeIssued | None = None
+    """Under an enrolment challenge, instead of ``tokens``, when the password must change."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +240,15 @@ class _Account:
     status: str
     sign_in_method: str
     password_hash: str | None
+    display_name: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ChangeDue:
+    """A forced-change challenge issued in a transaction, answered once it commits."""
+
+    token: str
+    pending: PendingChange
 
 
 class Identity:
@@ -210,6 +269,7 @@ class Identity:
         sign_in_window_seconds: int | None = None,
         clock: Callable[[], float] = time.time,
         mail_sender: MailSender | None = None,
+        password_check_limit: int | None = None,
     ) -> None:
         """``secrets`` is konfig's secrets store. It must hold the TOTP encryption
         key (named by ``identity.totp_key_secret``) or construction fails.
@@ -220,6 +280,9 @@ class Identity:
         ``policy_max_age``, ``sign_in_attempt_limit`` and ``sign_in_window_seconds``
         override ``identity.policy_cache_seconds``, ``identity.sign_in_attempt_limit``
         and ``identity.sign_in_window_seconds``; normally leave them unset.
+        ``password_check_limit`` overrides the live password check budget per
+        credential (by default ten times the sign-in limit; an address gets
+        five times it).
         """
         settings = config.identity
         box = SecretBox.from_secrets(
@@ -234,12 +297,7 @@ class Identity:
         self.resource_scope = resource_scope
         self.passwords = hasher or PasswordHasher()
         self.roles = Roles(db, permissions)
-        self.users = Users(
-            db,
-            self.passwords,
-            self.roles,
-            password_min_length=config.identity.password_min_length,
-        )
+        self._clock = clock
         self.policy = PolicyStore(
             db,
             SessionPolicy.from_config(settings),
@@ -263,6 +321,7 @@ class Identity:
             window_seconds=settings.sign_in_window_seconds
             if sign_in_window_seconds is None
             else sign_in_window_seconds,
+            check_limit=password_check_limit,
         )
         self.sessions = Sessions(db, keys, self.policy, issuer=issuer, clock=clock)
         # Passkeys and security keys: built only where a relying party id is
@@ -287,14 +346,15 @@ class Identity:
             secrets,
             max_age=settings.policy_cache_seconds if policy_max_age is None else policy_max_age,
         )
+        self.users = Users(db, self.roles, passwords=self.password_enforcement)
         self._init_lifecycle(mail_sender)
 
     def _init_password_policies(self, secrets: SecretStore, *, max_age: float) -> None:
-        """Password policies and watch lists (rulings PW0 to PW14): services only.
+        """Password policies and watch lists (rulings PW0 to PW14).
 
-        Nothing here changes sign-in or setting a password; wave 17 calls these
-        services from those flows. A configured fingerprint key must be in the
-        secrets store, as the TOTP key must.
+        ``password_enforcement`` is the one path every set point and the
+        password sign-in take through them. A configured fingerprint key
+        must be in the secrets store, as the TOTP key must.
         """
         passwords = self.config.passwords
         box = None
@@ -338,6 +398,16 @@ class Identity:
         self._password_maintenance = PasswordMaintenance(
             self.password_history, self.password_policies, self.password_challenges
         )
+        self.password_enforcement = PasswordEnforcement(
+            self.db,
+            self.passwords,
+            self.password_policies,
+            self.watch_lists,
+            self.password_history,
+            self.password_states,
+            self.password_fingerprints,
+            clock=self._clock,
+        )
 
     def _init_lifecycle(self, mail_sender: MailSender | None) -> None:
         """Identity lifecycle: mail, single-use tokens, invitations, password reset, API keys."""
@@ -353,10 +423,15 @@ class Identity:
             self.roles,
             self.single_use,
             self.mailer,
-            self.passwords,
+            self.password_enforcement,
         )
         self.resets = reset.PasswordResets(
-            self.config, self.db, self.single_use, self.mailer, self.passwords, self.sessions
+            self.config,
+            self.db,
+            self.single_use,
+            self.mailer,
+            self.password_enforcement,
+            self.sessions,
         )
         self.pruner = prune.Pruner(
             self.db,
@@ -541,6 +616,13 @@ class Identity:
         Unknown users, wrong passwords, SSO-only users and inactive users all
         take the same path and get the same refusal; only the audit trail
         records which it was.
+
+        After a correct password from an active user, and before anything
+        else, the password is assessed against the user's password policy
+        (``PasswordEnforcement.assess_sign_in``: watch lists, re-evaluation,
+        expiry). A required change is answered only where a session would
+        be issued: here when no second factor is needed, otherwise after
+        it, as ``password_change`` with a single-use challenge (ruling PW9).
         """
         if not isinstance(email, str) or not isinstance(password, str):
             await self._refuse_sign_in("malformed", None, None, source_ip)
@@ -567,12 +649,19 @@ class Identity:
         if account.status != UserStatus.ACTIVE:
             await self._refuse_sign_in("user_inactive", account.id, email, source_ip)
 
+        await self.password_enforcement.assess_sign_in(
+            account.id,
+            password,
+            UserContext(account.email, account.display_name),
+            source_ip=source_ip,
+        )
         new_hash = None
         if verification.needs_rehash:
             new_hash = await self.passwords.hash(password)
         policy = await self.policy.current()
         challenge: ChallengeIssued | None = None
         new: NewSession | None = None
+        change: _ChangeDue | None = None
         async with self.db.transaction() as tx:
             rehashed = False
             if new_hash is not None:
@@ -606,36 +695,107 @@ class Identity:
                     **details,
                 )
             else:
-                new = await self.sessions.start(tx, account.id, ["pwd"], policy)
-                await self.throttle.clear(tx, email, source_ip)
-                await self._audit(
-                    tx, "warden.identity.sign_in", account.id, source_ip, amr=["pwd"], **details
+                new, change = await self._session_or_change(
+                    tx, account.id, ["pwd"], policy, source_ip, **details
                 )
         if challenge is not None:
             return SignInResult(challenge=challenge)
-        if new is None:
+        if new is None and change is None:
             raise RuntimeError("sign-in produced neither a session nor a challenge")
-        return SignInResult(tokens=await self.sessions.finish(new))
+        answer = await self._session_answer(new, change)
+        if isinstance(answer, PasswordChangeIssued):
+            return SignInResult(password_change=answer)
+        return SignInResult(tokens=answer)
+
+    # Issuing a session after a password sign-in (rulings PW5 and PW9)
+
+    async def _session_or_change(
+        self,
+        tx: AsyncConnection[Any],
+        user_id: uuid.UUID,
+        amr: list[str],
+        policy: SessionPolicy,
+        source_ip: SourceIp,
+        **details: Any,
+    ) -> tuple[NewSession | None, _ChangeDue | None]:
+        """Where a password sign-in would issue a session: the session, or a forced change.
+
+        Called last, after the second factor (or with none needed), in the
+        transaction that would issue the session. A required change (from
+        the sign-in's assessment, a recheck or an administrator) issues a
+        forced-change challenge instead, and nothing else: no session, and
+        the sign-in throttle is not cleared until the change is complete.
+        """
+        pending = await self.password_enforcement.pending(tx, user_id)
+        if pending is not None:
+            token = await self.password_challenges.create(
+                tx, user_id, pending.reason, match=pending.match, tag=_AMR_TAG[tuple(amr)]
+            )
+            await self._audit(
+                tx,
+                "warden.identity.password.change_required",
+                user_id,
+                source_ip,
+                reason=pending.reason.value,
+                trigger="challenge_issued",
+                amr=amr,
+                **details,
+            )
+            return None, _ChangeDue(token, pending)
+        new = await self.sessions.start(tx, user_id, amr, policy)
+        await self._clear_throttle(tx, user_id, source_ip)
+        await self._audit(tx, "warden.identity.sign_in", user_id, source_ip, amr=amr, **details)
+        return new, None
+
+    async def _session_answer(
+        self, new: NewSession | None, change: _ChangeDue | None
+    ) -> PasswordTokenPair | PasswordChangeIssued:
+        """After the transaction: the signed tokens with any expiry warning, or the change."""
+        if change is not None:
+            pending = change.pending
+            text = None
+            if pending.reason is ChangeReason.WATCH_LIST:
+                match = pending.match
+                text = await self.password_enforcement.reason_text(
+                    None if match is None else match.source,
+                    None if match is None else match.list_id,
+                )
+            return PasswordChangeIssued(
+                change.token, pending.reason, self.password_challenges.ttl_seconds, text
+            )
+        if new is None:
+            raise RuntimeError("neither a session nor a password change to answer with")
+        pair = await self.sessions.finish(new)
+        days = await self.password_enforcement.expiry_warning(new.user_id)
+        values = {f.name: getattr(pair, f.name) for f in fields(TokenPair)}
+        return PasswordTokenPair(**values, password_expires_in_days=days)
 
     async def verify_totp(
         self, challenge: object, code: object, *, source_ip: SourceIp = None
-    ) -> TokenPair:
-        """Complete a sign-in with a TOTP code. A code is accepted once per step."""
+    ) -> PasswordTokenPair | PasswordChangeIssued:
+        """Complete a sign-in with a TOTP code. A code is accepted once per step.
+
+        A ``PasswordChangeIssued`` instead of tokens when the password must change.
+        """
         return await self._second_factor(challenge, code, "totp", source_ip)
 
     async def use_recovery_code(
         self, challenge: object, code: object, *, source_ip: SourceIp = None
-    ) -> TokenPair:
-        """Complete a sign-in with a recovery code, using it up."""
+    ) -> PasswordTokenPair | PasswordChangeIssued:
+        """Complete a sign-in with a recovery code, using it up.
+
+        A ``PasswordChangeIssued`` instead of tokens when the password must change.
+        """
         return await self._second_factor(challenge, code, "recovery_code", source_ip)
 
     async def _second_factor(
         self, token: object, code: object, method: str, source_ip: SourceIp
-    ) -> TokenPair:
+    ) -> PasswordTokenPair | PasswordChangeIssued:
         policy = await self.policy.current()
         reason: str | None = None
         opened: Challenge | None = None
         new: NewSession | None = None
+        change: _ChangeDue | None = None
         try:
             async with self.db.transaction() as tx:
                 opened = await self.mfa.open_challenge(tx, token, "verify")
@@ -658,20 +818,18 @@ class Identity:
                         reason = "challenge_used"
                         raise _Rollback
                     else:
-                        new = await self.sessions.start(tx, opened.user_id, amr, policy)
-                        await self._clear_throttle(tx, opened.user_id, source_ip)
-                        await self._audit(
-                            tx, "warden.identity.sign_in", opened.user_id, source_ip, amr=amr
+                        new, change = await self._session_or_change(
+                            tx, opened.user_id, amr, policy, source_ip
                         )
         except _Rollback:
             pass
-        if reason is not None or new is None:
+        if reason is not None or (new is None and change is None):
             if reason == "wrong_code" and opened is not None:
                 await self.mfa.record_failure(opened)
             await self._refuse_second_factor(
                 reason or "unknown_challenge", opened, method, source_ip
             )
-        return await self.sessions.finish(new)
+        return await self._session_answer(new, change)
 
     # Passkey-only sign-in (rulings P5, P6 and P7)
 
@@ -1133,8 +1291,12 @@ class Identity:
         challenge: object = None,
         principal: Principal | None = None,
         source_ip: SourceIp = None,
-    ) -> tuple[list[str], TokenPair | None]:
-        """Confirm enrolment. Under a challenge, also completes the sign-in."""
+    ) -> tuple[list[str], PasswordTokenPair | PasswordChangeIssued | None]:
+        """Confirm enrolment. Under a challenge, also completes the sign-in.
+
+        Under a challenge, a ``PasswordChangeIssued`` instead of tokens when
+        the password must change; the recovery codes are returned either way.
+        """
         if principal is not None:
             codes = await self.mfa.confirm_enrolment(principal.user_id, code)
             if codes is None:
@@ -1150,6 +1312,7 @@ class Identity:
         reason: str | None = None
         opened: Challenge | None = None
         new: NewSession | None = None
+        change: _ChangeDue | None = None
         codes = None
         try:
             async with self.db.transaction() as tx:
@@ -1166,23 +1329,25 @@ class Identity:
                         reason = "challenge_used"
                         raise _Rollback
                     else:
-                        amr = ["pwd", "otp"]
-                        new = await self.sessions.start(tx, opened.user_id, amr, policy)
-                        await self._clear_throttle(tx, opened.user_id, source_ip)
-                        await self._audit(
-                            tx, "warden.identity.sign_in", opened.user_id, source_ip, amr=amr
+                        new, change = await self._session_or_change(
+                            tx, opened.user_id, ["pwd", "otp"], policy, source_ip
                         )
         except _Rollback:
             pass
-        if reason is not None or new is None or codes is None:
+        if (
+            reason is not None
+            or opened is None
+            or codes is None
+            or (new is None and change is None)
+        ):
             if reason == "wrong_code" and opened is not None:
                 await self.mfa.record_failure(opened)
             await self._refuse_second_factor(
                 reason or "unknown_challenge", opened, "enrolment", source_ip
             )
         if codes:  # the user's first second factor
-            await self._notify_enrolled(new.user_id)
-        return codes, await self.sessions.finish(new)
+            await self._notify_enrolled(opened.user_id)
+        return codes, await self._session_answer(new, change)
 
     # Security keys and passkeys as a second factor (rulings P4 and P7)
 
@@ -1226,8 +1391,10 @@ class Identity:
 
     async def verify_webauthn(
         self, challenge: object, credential: object, *, source_ip: SourceIp = None
-    ) -> TokenPair:
+    ) -> PasswordTokenPair | PasswordChangeIssued:
         """Complete a sign-in with a security key or passkey; ``amr`` ``["pwd", "hwk"]``.
+
+        A ``PasswordChangeIssued`` instead of tokens when the password must change.
 
         Under the challenge's attempt limit and single use, with the user's
         status and sign-in method checked again in the transaction that
@@ -1242,6 +1409,7 @@ class Identity:
         policy = await self.policy.current()
         opened, reason = await self._open_challenge(challenge, "verify")
         new: NewSession | None = None
+        change: _ChangeDue | None = None
         clone: WebAuthnError | None = None
         if reason is None and opened is not None:
             try:
@@ -1259,17 +1427,15 @@ class Identity:
                     if reason is None and not await self.mfa.consume_challenge(tx, opened):
                         reason = "challenge_used"
                     if reason is None:
-                        new = await self.sessions.start(tx, opened.user_id, _KEY_AMR, policy)
-                        await self._clear_throttle(tx, opened.user_id, source_ip)
-                        await self._audit(
+                        new, change = await self._session_or_change(
                             tx,
-                            "warden.identity.sign_in",
                             opened.user_id,
+                            _KEY_AMR,
+                            policy,
                             source_ip,
-                            amr=_KEY_AMR,
                             credential_id=str(assertion.credential.id),
                         )
-        if reason is not None or new is None:
+        if reason is not None or (new is None and change is None):
             if opened is not None and reason not in _NOT_AN_ATTEMPT:
                 await self.mfa.record_failure(opened)
             if clone is not None:
@@ -1277,7 +1443,7 @@ class Identity:
             await self._refuse_second_factor(
                 reason or "unknown_challenge", opened, "webauthn", source_ip
             )
-        return await self.sessions.finish(new)
+        return await self._session_answer(new, change)
 
     async def begin_webauthn_registration(
         self,
@@ -1330,6 +1496,7 @@ class Identity:
         policy = await self.policy.current()
         opened, reason = await self._open_challenge(challenge, "enrol")
         new: NewSession | None = None
+        change: _ChangeDue | None = None
         enrolled: WebAuthnEnrolled | None = None
         if reason is None and opened is not None:
             try:
@@ -1354,27 +1521,33 @@ class Identity:
                     if reason is not None or enrolled is None:
                         await self.webauthn_credentials.remove(opened.user_id, key.id, conn=tx)
                     else:
-                        new = await self.sessions.start(tx, opened.user_id, _KEY_AMR, policy)
-                        await self._clear_throttle(tx, opened.user_id, source_ip)
-                        await self._audit(
+                        new, change = await self._session_or_change(
                             tx,
-                            "warden.identity.sign_in",
                             opened.user_id,
+                            _KEY_AMR,
+                            policy,
                             source_ip,
-                            amr=_KEY_AMR,
                             credential_id=str(key.id),
                         )
-        if reason is not None or new is None or enrolled is None:
+        if (
+            reason is not None
+            or opened is None
+            or enrolled is None
+            or (new is None and change is None)
+        ):
             if opened is not None and reason not in _NOT_AN_ATTEMPT:
                 await self.mfa.record_failure(opened)
             await self._refuse_second_factor(
                 reason or "unknown_challenge", opened, "enrolment", source_ip
             )
         if enrolled.recovery_codes:
-            await self._notify_enrolled(new.user_id, key=enrolled.credential)
-        return WebAuthnEnrolled(
-            enrolled.credential, enrolled.recovery_codes, await self.sessions.finish(new)
-        )
+            await self._notify_enrolled(opened.user_id, key=enrolled.credential)
+        answer = await self._session_answer(new, change)
+        if isinstance(answer, PasswordChangeIssued):
+            return WebAuthnEnrolled(
+                enrolled.credential, enrolled.recovery_codes, password_change=answer
+            )
+        return WebAuthnEnrolled(enrolled.credential, enrolled.recovery_codes, answer)
 
     async def _register_signed_in(
         self, principal: Principal, credential: object, nickname: str | None, source_ip: SourceIp
@@ -1678,6 +1851,9 @@ class Identity:
     ) -> str | None:
         """Change the signed-in user's password; None on success, else a refusal reason.
 
+        The reasons are ``not_permitted`` and ``wrong_password``. A new
+        password the user's policy refuses (rules, watch lists, history and
+        the minimum age) raises ``PasswordRejected``, naming every failure.
         Ends the user's other sessions.
         """
         account = await self._account_by_id(principal.user_id)
@@ -1694,10 +1870,6 @@ class Identity:
             reason = "not_permitted"
         elif not (await self.passwords.verify(account.password_hash, current)).ok:
             reason = "wrong_password"
-        elif not (
-            self.config.identity.password_min_length <= len(new_password) <= MAX_PASSWORD_LENGTH
-        ):
-            reason = "weak_password"
         if reason is not None:
             await record_audit(
                 AuditEvent(
@@ -1713,25 +1885,237 @@ class Identity:
             return reason
         if account is None or not isinstance(new_password, str):  # narrowed above
             return "not_permitted"
-        new_hash = await self.passwords.hash(new_password)
+        accepted = await self.password_enforcement.accept(
+            new_password,
+            policy=await self.password_enforcement.policy_for(account.id),
+            context=UserContext(account.email, account.display_name),
+            user_id=account.id,
+            place="change",
+            actor=str(account.id),
+            source_ip=source_ip,
+            min_age=True,
+        )
         async with self.db.transaction() as tx:
             await tx.execute(
                 sql.SQL(
                     "UPDATE {} SET password_hash = %s, updated_at = now() WHERE id = %s"
                 ).format(_USERS),
-                (new_hash, account.id),
+                (accepted.password_hash, account.id),
             )
             ended = await self.sessions.revoke_all(
                 account.id, reason="password_changed", keep=principal.session_id, conn=tx
             )
-            await self._audit(
+            await self.password_enforcement.record(
                 tx,
-                "warden.identity.password.changed",
                 account.id,
-                source_ip,
+                accepted,
+                place="change",
+                actor=str(account.id),
+                source_ip=source_ip,
                 other_sessions_ended=ended,
             )
         return None
+
+    # The forced change (ruling PW9)
+
+    async def complete_password_change(
+        self, challenge: object, new_password: object, *, source_ip: SourceIp = None
+    ) -> PasswordTokenPair:
+        """Set a new password under a forced-change challenge, then issue the session.
+
+        The challenge proves the password and any second factor, so the
+        session carries the same ``amr`` as the sign-in it completes. The new
+        password meets the user's policy (rules, watch lists and history; not
+        the minimum age, which could otherwise forbid a change that is
+        required). A refused password raises ``PasswordRejected`` and costs
+        the challenge an attempt. Under the challenge's attempt limit and
+        single use (one guarded write), with the user's status checked again
+        under a row lock: every other refusal is ``AuthenticationRefused``,
+        its reason audited on ``warden.identity.password.change_completed``.
+        The user's other sessions end.
+        """
+        policy = await self.policy.current()
+        opened, reason = await self._open_change(challenge)
+        if reason is not None or opened is None or not isinstance(challenge, str):
+            await self._refuse_change(reason or "unknown_challenge", opened, source_ip)
+        amr = _TAG_AMR.get(challenge[0])
+        account = await self._account_by_id(opened.user_id)
+        if amr is None or account is None:
+            await self._refuse_change("unknown_challenge", opened, source_ip)
+        try:
+            accepted = await self.password_enforcement.accept(
+                new_password,
+                policy=await self.password_enforcement.policy_for(account.id),
+                context=UserContext(account.email, account.display_name),
+                user_id=account.id,
+                place="forced_change",
+                actor=str(account.id),
+                source_ip=source_ip,
+            )
+        except PasswordRejected:
+            await self.password_challenges.record_failure(opened)
+            raise
+        new: NewSession | None = None
+        async with self.db.transaction() as tx:
+            reason = await self._account_refusal(tx, account.id, lock=True)
+            if reason is None and not await self.password_challenges.consume(tx, opened):
+                reason = "challenge_used"
+            if reason is None:
+                await tx.execute(
+                    sql.SQL(
+                        "UPDATE {} SET password_hash = %s, updated_at = now() WHERE id = %s"
+                    ).format(_USERS),
+                    (accepted.password_hash, account.id),
+                )
+                ended = await self.sessions.revoke_all(
+                    account.id, reason="password_changed", conn=tx
+                )
+                await self.password_enforcement.record(
+                    tx,
+                    account.id,
+                    accepted,
+                    place="forced_change",
+                    actor=str(account.id),
+                    source_ip=source_ip,
+                    reason=opened.reason.value,
+                )
+                await self._audit(
+                    tx,
+                    "warden.identity.password.change_completed",
+                    account.id,
+                    source_ip,
+                    reason=opened.reason.value,
+                    other_sessions_ended=ended,
+                )
+                new = await self.sessions.start(tx, account.id, amr, policy)
+                await self._clear_throttle(tx, account.id, source_ip)
+                await self._audit(tx, "warden.identity.sign_in", account.id, source_ip, amr=amr)
+        if reason is not None or new is None:
+            await self._refuse_change(reason or "challenge_used", opened, source_ip)
+        answer = await self._session_answer(new, None)
+        if not isinstance(answer, PasswordTokenPair):
+            raise RuntimeError("a completed password change issued no session")
+        return answer
+
+    async def _open_change(self, token: object) -> tuple[ChangeChallenge | None, str | None]:
+        """The live forced-change challenge and why its user may not continue (None if they may)."""
+        async with self.db.transaction() as tx:
+            opened = await self.password_challenges.open(tx, token)
+            if opened is None:
+                return None, "unknown_challenge"
+            return opened, await self._account_refusal(tx, opened.user_id)
+
+    async def _refuse_change(
+        self, reason: str, challenge: ChangeChallenge | None, source_ip: SourceIp
+    ) -> NoReturn:
+        user = None if challenge is None else str(challenge.user_id)
+        await record_audit(
+            AuditEvent(
+                action="warden.identity.password.change_completed",
+                outcome="failure",
+                actor=user,
+                resource_type="user" if user else None,
+                resource_id=user,
+                source_ip=source_ip,
+                details={"reason": reason},
+            )
+        )
+        raise AuthenticationRefused(reason)
+
+    # Live password feedback (ruling PW10)
+
+    async def password_policy(
+        self,
+        *,
+        principal: Principal | None = None,
+        reset_token: object = None,
+        invitation_token: object = None,
+        change_challenge: object = None,
+        source_ip: SourceIp = None,
+    ) -> PasswordAdvice:
+        """The policy a new password must meet at one of the four places it is set.
+
+        Bound to that place's own credential, exactly one of: the signed-in
+        ``principal``, a reset link's token, an invitation link's token, or a
+        forced-change challenge. Throttled per credential and source address.
+        A bad credential, or a spent budget, is ``AuthenticationRefused``,
+        revealing nothing. Stores nothing and audits nothing.
+        """
+        policy, _, _ = await self._feedback_subject(
+            principal, reset_token, invitation_token, change_challenge, source_ip
+        )
+        return self.password_enforcement.advice(policy)
+
+    async def check_password(
+        self,
+        password: str,
+        *,
+        principal: Principal | None = None,
+        reset_token: object = None,
+        invitation_token: object = None,
+        change_challenge: object = None,
+        source_ip: SourceIp = None,
+    ) -> PasswordFeedback:
+        """A candidate's result against the policy of one of the four places (ruling PW10).
+
+        Each rule's result, the passphrase and tier, and any watch-list
+        match with its reason. Never history; bound, throttled and refused
+        as ``password_policy``; stores nothing and audits nothing.
+        """
+        policy, context, _ = await self._feedback_subject(
+            principal, reset_token, invitation_token, change_challenge, source_ip
+        )
+        return await self.password_enforcement.feedback(password, policy, context)
+
+    async def _feedback_subject(
+        self,
+        principal: Principal | None,
+        reset_token: object,
+        invitation_token: object,
+        change_challenge: object,
+        source_ip: SourceIp,
+    ) -> tuple[PasswordPolicy, UserContext, uuid.UUID]:
+        given = [
+            c for c in (principal, reset_token, invitation_token, change_challenge) if c is not None
+        ]
+        if len(given) != 1:
+            raise ValueError("pass exactly one credential")
+        credential = (
+            principal.session_id.bytes
+            if principal is not None
+            else str(given[0]).encode("utf-8", "surrogatepass")
+        )
+        if not await self.throttle.reserve_password_check(source_ip, credential):
+            raise AuthenticationRefused("throttled")
+        subject: tuple[uuid.UUID, UserContext, PasswordPolicy] | None = None
+        if principal is not None:
+            account = await self._account_by_id(principal.user_id)
+            if (
+                account is not None
+                and account.sign_in_method == SignInMethod.PASSWORD_AND_SSO
+                and account.password_hash is not None
+            ):
+                context = UserContext(account.email, account.display_name)
+                policy = await self.password_enforcement.policy_for(account.id)
+                subject = (account.id, context, policy)
+        elif reset_token is not None:
+            found = await self.resets.subject(reset_token)
+            if found is not None:
+                user_id, context = found
+                subject = (user_id, context, await self.password_enforcement.policy_for(user_id))
+        elif invitation_token is not None:
+            subject = await self.invitations.password_subject(invitation_token)
+        else:
+            opened, reason = await self._open_change(change_challenge)
+            account = None if opened is None else await self._account_by_id(opened.user_id)
+            if reason is None and account is not None:
+                context = UserContext(account.email, account.display_name)
+                policy = await self.password_enforcement.policy_for(account.id)
+                subject = (account.id, context, policy)
+        if subject is None:
+            raise AuthenticationRefused("unknown_credential")
+        user_id, context, policy = subject
+        return policy, context, user_id
 
     async def permissions_of(self, user_id: uuid.UUID) -> frozenset[str]:
         return self.permissions.permissions_for(await self.roles.roles_of(user_id))
@@ -1744,7 +2128,7 @@ class Identity:
         async with self.db.connection() as conn:
             cur = await conn.execute(
                 sql.SQL(
-                    "SELECT id, email, status, sign_in_method, password_hash FROM {}"
+                    "SELECT id, email, status, sign_in_method, password_hash, display_name FROM {}"
                     " WHERE lower(email) = lower(%s)"
                 ).format(_USERS),
                 (email,),
@@ -1756,19 +2140,22 @@ class Identity:
         async with self.db.connection() as conn:
             cur = await conn.execute(
                 sql.SQL(
-                    "SELECT id, email, status, sign_in_method, password_hash FROM {} WHERE id = %s"
+                    "SELECT id, email, status, sign_in_method, password_hash, display_name"
+                    " FROM {} WHERE id = %s"
                 ).format(_USERS),
                 (user_id,),
             )
             row = await cur.fetchone()
         return None if row is None else _Account(*row)
 
-    async def _account_refusal(self, conn: AsyncConnection[Any], user_id: uuid.UUID) -> str | None:
+    async def _account_refusal(
+        self, conn: AsyncConnection[Any], user_id: uuid.UUID, *, lock: bool = False
+    ) -> str | None:
         """Why this user may not complete a password sign-in now, or None."""
-        cur = await conn.execute(
-            sql.SQL("SELECT status, sign_in_method FROM {} WHERE id = %s").format(_USERS),
-            (user_id,),
-        )
+        query = "SELECT status, sign_in_method FROM {} WHERE id = %s"
+        if lock:
+            query += " FOR UPDATE"
+        cur = await conn.execute(sql.SQL(query).format(_USERS), (user_id,))
         row = await cur.fetchone()
         if row is None or row[0] != UserStatus.ACTIVE:
             return "user_inactive"

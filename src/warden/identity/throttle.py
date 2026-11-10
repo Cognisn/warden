@@ -24,6 +24,13 @@ attempt and both are cleared by a passkey sign-in that issues a session.
 Their key material starts with a byte no UTF-8 text contains, so they can
 never equal a password attempt's key.
 
+The live password feedback routes (ruling PW10) are throttled on two keys
+of their own: the credential they are bound to (a session, a link's token
+or a forced-change challenge, hashed) and the source address. A check is
+made as the user types, so their budgets are larger than sign-in's: by
+default ten times ``limit`` per credential and fifty times per address,
+in the same window. Nothing clears them; the window ends.
+
 The passkey options route is throttled on a third key of its own, the
 source address, with the same limit and window. It is separate from the
 passkey sign-in address key, so fetching options (on every sign-in page
@@ -57,6 +64,11 @@ def throttle_key(identifier: str, source_ip: SourceIp) -> bytes:
 _PASSKEY_ADDRESS = b"\xffpasskey-address\x00"
 _PASSKEY_CREDENTIAL = b"\xffpasskey-credential\x00"
 _PASSKEY_OPTIONS = b"\xffpasskey-options\x00"
+_CHECK_ADDRESS = b"\xffpassword-check-address\x00"
+_CHECK_CREDENTIAL = b"\xffpassword-check-credential\x00"
+# The password check budgets, as multiples of the sign-in limit.
+CHECK_CREDENTIAL_FACTOR = 10
+CHECK_ADDRESS_FACTOR = 50
 
 
 def _address(source_ip: SourceIp) -> bytes:
@@ -76,13 +88,36 @@ def passkey_options_key(source_ip: SourceIp) -> bytes:
     return hashlib.sha256(_PASSKEY_OPTIONS + _address(source_ip)).digest()
 
 
+def password_check_keys(source_ip: SourceIp, credential: bytes) -> tuple[bytes, bytes]:
+    """The password check throttle's keys: the credential's hash, and the source address."""
+    return (
+        hashlib.sha256(_CHECK_CREDENTIAL + hashlib.sha256(credential).digest()).digest(),
+        hashlib.sha256(_CHECK_ADDRESS + _address(source_ip)).digest(),
+    )
+
+
 class SignInThrottle:
-    def __init__(self, db: Database, *, limit: int, window_seconds: int) -> None:
+    def __init__(
+        self,
+        db: Database,
+        *,
+        limit: int,
+        window_seconds: int,
+        check_limit: int | None = None,
+    ) -> None:
+        """``check_limit`` is the password check budget per credential (by default
+        ``CHECK_CREDENTIAL_FACTOR`` times ``limit``); an address gets five times it."""
         if limit < 1 or window_seconds < 1:
             raise ValueError("sign-in throttle limit and window must be positive")
+        if check_limit is not None and check_limit < 1:
+            raise ValueError("the password check limit must be positive")
         self._db = db
         self._limit = limit
         self._window = window_seconds
+        self._check_limit = check_limit or limit * CHECK_CREDENTIAL_FACTOR
+        self._check_address_limit = self._check_limit * (
+            CHECK_ADDRESS_FACTOR // CHECK_CREDENTIAL_FACTOR
+        )
 
     async def reserve(self, identifier: str, source_ip: SourceIp) -> bool:
         """Take one attempt; False if the pair has used up its window."""
@@ -103,7 +138,18 @@ class SignInThrottle:
         """Take one passkey options request; False if the address has used up its window."""
         return await self._reserve(passkey_options_key(source_ip))
 
-    async def _reserve(self, key: bytes) -> bool:
+    async def reserve_password_check(self, source_ip: SourceIp, credential: bytes) -> bool:
+        """Take one password check or policy read on both keys; False if either is used up.
+
+        Both are always taken, as for a passkey attempt. ``credential`` is the
+        session id or the token the route is bound to; only its hash is kept.
+        """
+        by_credential, by_address = password_check_keys(source_ip, credential)
+        first = await self._reserve(by_credential, self._check_limit)
+        second = await self._reserve(by_address, self._check_address_limit)
+        return first and second
+
+    async def _reserve(self, key: bytes, limit: int | None = None) -> bool:
         async with self._db.transaction() as tx:
             cur = await tx.execute(
                 sql.SQL(
@@ -117,7 +163,7 @@ class SignInThrottle:
                 {"key": key, "window": self._window},
             )
             row = await cur.fetchone()
-        return row is not None and int(row[0]) <= self._limit
+        return row is not None and int(row[0]) <= (self._limit if limit is None else limit)
 
     async def clear(self, conn: AsyncConnection[Any], identifier: str, source_ip: SourceIp) -> None:
         """Forget the pair's attempts; call in the transaction that issues a session."""

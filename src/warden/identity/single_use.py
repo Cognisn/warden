@@ -121,6 +121,26 @@ class SingleUseTokens:
         row = await cur.fetchone()
         return None if row is None else row[0]
 
+    async def peek(
+        self, conn: AsyncConnection[Any], token: object, purpose: Purpose
+    ) -> LiveToken | None:
+        """The live token, without locking or changing it; None if not live.
+
+        For reads that leave the token as it is: the live password feedback
+        routes, and the policy check made before an acceptance or reset.
+        """
+        if not well_formed(token):
+            return None
+        cur = await conn.execute(
+            sql.SQL(
+                "SELECT id, user_id, purpose, expires_at FROM {}"
+                " WHERE token_hash = %s AND purpose = %s AND {}"
+            ).format(_TOKENS, _LIVE),
+            (token_hash(token), purpose.value),
+        )
+        row = await cur.fetchone()
+        return None if row is None else _live_token(row)
+
     async def lock_live(
         self, conn: AsyncConnection[Any], token: object, purpose: Purpose
     ) -> LiveToken | None:

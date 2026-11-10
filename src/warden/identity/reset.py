@@ -11,6 +11,12 @@ user, ``sso_only``, not active) goes to the audit trail.
 decides under row locks on the user and then the token, and uses the token
 up with one guarded write (#127). A link whose user is no longer active,
 or now signs in only through single sign-on, is refused and spent.
+
+The new password is checked against the user's password policy (rules,
+watch lists and history; not the minimum age, so a user who forgot their
+password can always reset it) once the link is known to be live, and
+before anything is written: a refused password leaves the link usable. A
+bad, used or expired link is refused uniformly whatever the password.
 """
 
 from __future__ import annotations
@@ -28,10 +34,11 @@ from warden.db import Database, schema, table
 from warden.identity.errors import AuthenticationRefused
 from warden.identity.http import SourceIp
 from warden.identity.mail import MailDeliveryError, Mailer, MailError, MailKind
-from warden.identity.passwords import MAX_PASSWORD_LENGTH, PasswordHasher
+from warden.identity.password_enforcement import AcceptedPassword, PasswordEnforcement
+from warden.identity.password_policy.rules import UserContext
 from warden.identity.single_use import Purpose, SingleUseTokens, well_formed
 from warden.identity.tokens import Sessions
-from warden.identity.users import SignInMethod, UserError, UserStatus, is_email
+from warden.identity.users import SignInMethod, UserStatus, is_email
 
 __all__ = ["RESET_ACTIONS", "PasswordResets", "register_actions"]
 
@@ -81,6 +88,14 @@ class _Abort(Exception):
     """Ends a transaction without committing it."""
 
 
+@dataclass(frozen=True, slots=True)
+class _Checked:
+    """A new password the link's user's policy accepted, before the link is spent."""
+
+    user_id: uuid.UUID
+    password: AcceptedPassword
+
+
 class PasswordResets:
     def __init__(
         self,
@@ -88,14 +103,14 @@ class PasswordResets:
         db: Database,
         tokens: SingleUseTokens,
         mailer: Mailer,
-        hasher: PasswordHasher,
+        passwords: PasswordEnforcement,
         sessions: Sessions,
     ) -> None:
         self._config = config
         self._db = db
         self._tokens = tokens
         self._mailer = mailer
-        self._hasher = hasher
+        self._passwords = passwords
         self._sessions = sessions
 
     async def request(
@@ -166,20 +181,14 @@ class PasswordResets:
     ) -> uuid.UUID:
         """Set a new password with a reset link and end every session of its user.
 
-        Raises ``UserError`` for an unacceptable password (the link is
-        untouched) and ``AuthenticationRefused`` for any other refusal, with
-        the reason in the audit trail. Returns the user's id.
+        Raises ``PasswordRejected`` (a ``UserError``) for a password the
+        user's policy refuses, naming every failure (the link is untouched),
+        and ``AuthenticationRefused`` for any other refusal, with the reason
+        in the audit trail. Returns the user's id.
         """
         if not well_formed(token):
             await self._refuse("malformed", None, source_ip)
-        minimum = self._config.identity.password_min_length
-        if not isinstance(new_password, str) or not (
-            minimum <= len(new_password) <= MAX_PASSWORD_LENGTH
-        ):
-            raise UserError(
-                f"password must be between {minimum} and {MAX_PASSWORD_LENGTH} characters"
-            )
-        password_hash = await self._hasher.hash(new_password)
+        accepted = await self._check_password(token, new_password, source_ip)
         reason: str | None = None
         account: _Account | None = None
         try:
@@ -196,12 +205,24 @@ class PasswordResets:
                 if reason is not None:
                     # The link is spent; record why in the same transaction.
                     await self._audit_reset(tx, account.id, source_ip, reason)
+                elif accepted is None or accepted.user_id != account.id:
+                    # Only a link whose user was refused skips the check above.
+                    reason = "unknown_token"
+                    raise _Abort
                 else:
                     await tx.execute(
                         sql.SQL(
                             "UPDATE {} SET password_hash = %s, updated_at = now() WHERE id = %s"
                         ).format(_USERS),
-                        (password_hash, account.id),
+                        (accepted.password.password_hash, account.id),
+                    )
+                    await self._passwords.record(
+                        tx,
+                        account.id,
+                        accepted.password,
+                        place="reset",
+                        actor=str(account.id),
+                        source_ip=source_ip,
                     )
                     ended = await self._sessions.revoke_all(
                         account.id, reason="password_reset", conn=tx
@@ -213,6 +234,64 @@ class PasswordResets:
         if reason is not None or account is None:
             raise AuthenticationRefused(reason or "unknown_token")
         return account.id
+
+    async def _check_password(
+        self, token: str, new_password: object, source_ip: SourceIp
+    ) -> _Checked | None:
+        """The new password, checked against the link's user's policy, before any write.
+
+        A link that is not live is refused here, uniformly, so nothing about a
+        policy reaches a caller without one. A live link whose user may no
+        longer reset (not active, or no password) returns None: the locked
+        transaction spends the link and records why, as before.
+        """
+        async with self._db.connection() as conn:
+            owner = await self._tokens.owner(conn, token, Purpose.PASSWORD_RESET)
+            account = None if owner is None else await self._read_account(conn, owner)
+            live = await self._tokens.peek(conn, token, Purpose.PASSWORD_RESET)
+        if account is None:
+            await self._refuse("unknown_token", None, source_ip)
+        if live is None:
+            await self._refuse("token_not_live", account, source_ip)
+        if _refusal(account) is not None:
+            return None
+        accepted = await self._passwords.accept(
+            new_password,
+            policy=await self._passwords.policy_for(account.id),
+            context=UserContext(account.email, account.display_name),
+            user_id=account.id,
+            place="reset",
+            actor=str(account.id),
+            source_ip=source_ip,
+        )
+        return _Checked(account.id, accepted)
+
+    async def subject(self, token: object) -> tuple[uuid.UUID, UserContext] | None:
+        """The user a live reset link may set a password for, without touching it; else None.
+
+        For the live feedback routes (ruling PW10): None for a bad, used or
+        expired link, or a user who could not complete it.
+        """
+        if not well_formed(token):
+            return None
+        async with self._db.connection() as conn:
+            live = await self._tokens.peek(conn, token, Purpose.PASSWORD_RESET)
+            account = None if live is None else await self._read_account(conn, live.user_id)
+        if account is None or _refusal(account) is not None:
+            return None
+        return account.id, UserContext(account.email, account.display_name)
+
+    async def _read_account(
+        self, conn: AsyncConnection[Any], user_id: uuid.UUID
+    ) -> _Account | None:
+        cur = await conn.execute(
+            sql.SQL(
+                "SELECT id, email, display_name, status, sign_in_method FROM {} WHERE id = %s"
+            ).format(_USERS),
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        return None if row is None else _Account(*row)
 
     async def _lock_account(
         self,

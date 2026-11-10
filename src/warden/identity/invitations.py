@@ -52,7 +52,8 @@ from warden.db.schema import INVITATION_GRANTS
 from warden.identity.errors import AuthenticationRefused
 from warden.identity.http import SourceIp
 from warden.identity.mail import MailDeliveryError, Mailer, MailError, MailKind
-from warden.identity.passwords import MAX_PASSWORD_LENGTH, PasswordHasher
+from warden.identity.password_enforcement import AcceptedPassword, PasswordEnforcement
+from warden.identity.password_policy import PasswordPolicy, UserContext
 from warden.identity.roles import RoleError, Roles
 from warden.identity.single_use import Purpose, SingleUseTokens, well_formed
 from warden.identity.users import SignInMethod, User, UserError, Users, UserStatus, check_email
@@ -221,7 +222,7 @@ class Invitations:
         roles: Roles,
         tokens: SingleUseTokens,
         mailer: Mailer,
-        hasher: PasswordHasher,
+        passwords: PasswordEnforcement,
     ) -> None:
         self._config = config
         self._db = db
@@ -229,7 +230,7 @@ class Invitations:
         self._roles = roles
         self._tokens = tokens
         self._mailer = mailer
-        self._hasher = hasher
+        self._passwords = passwords
 
     # Administration
 
@@ -390,21 +391,32 @@ class Invitations:
     ) -> AcceptedInvitation:
         """Accept with a new password.
 
-        Raises ``UserError`` for an unacceptable password (the invitation is
-        untouched), ``InvitationMismatch`` if the user signs in only through
-        single sign-on (untouched, #154), and ``AuthenticationRefused`` for
-        everything else, with the reason in the audit trail.
+        The password is checked against the invitation's password policy
+        (``password_policy``) once the link is known to be live and the
+        invitation one accepted with a password, before anything is
+        written. Raises ``PasswordRejected`` (a ``UserError``) naming every
+        failure (the invitation is untouched), ``InvitationMismatch`` if the
+        user signs in only through single sign-on or with a passkey
+        (untouched, #154), and ``AuthenticationRefused`` for everything
+        else, with the reason in the audit trail.
         """
         if not well_formed(token):
             await self._refuse("malformed", None, "password", source_ip)
-        if not isinstance(password, str) or not (
-            self._config.identity.password_min_length <= len(password) <= MAX_PASSWORD_LENGTH
-        ):
-            raise UserError(
-                f"password must be between {self._config.identity.password_min_length}"
-                f" and {MAX_PASSWORD_LENGTH} characters"
+        accepted: AcceptedPassword | None = None
+        accepted_for: uuid.UUID | None = None
+        subject = await self._password_subject(token)
+        if subject is not None:
+            user_id, context, policy = subject
+            accepted_for = user_id
+            accepted = await self._passwords.accept(
+                password,
+                policy=policy,
+                context=context,
+                user_id=user_id,
+                place="invitation",
+                actor=None,
+                source_ip=source_ip,
             )
-        password_hash = await self._hasher.hash(password)
 
         def check(invitee: _Invitee) -> str | None:
             if invitee.sign_in_method != SignInMethod.PASSWORD_AND_SSO:
@@ -412,12 +424,63 @@ class Invitations:
             return None
 
         async def complete(conn: AsyncConnection[Any], invitee: _Invitee) -> None:
+            if accepted is None or accepted_for != invitee.id:
+                # Unreachable: a link not live at the check is never live again,
+                # and a user no longer invited is refused before completing.
+                # Never accept a password that was not checked.
+                raise RuntimeError("an invitation password was not checked")
             await conn.execute(
                 sql.SQL("UPDATE {} SET password_hash = %s WHERE id = %s").format(_USERS),
-                (password_hash, invitee.id),
+                (accepted.password_hash, invitee.id),
+            )
+            await self._passwords.record(
+                conn, invitee.id, accepted, place="invitation", actor=None, source_ip=source_ip
             )
 
         return await self._accept(token, "password", check, complete, source_ip, {})
+
+    async def _password_subject(
+        self, token: str
+    ) -> tuple[uuid.UUID, UserContext, PasswordPolicy] | None:
+        """Who a live password invitation is for, and the policy their password meets.
+
+        None when the link is not live, or the invitee is no longer invited
+        or accepts some other way: ``_accept`` then refuses as before, and no
+        password is ever checked for a caller without a live link.
+        """
+        async with self._db.connection() as conn:
+            live = await self._tokens.peek(conn, token, Purpose.INVITATION)
+            invitee = None if live is None else await self._read_invitee(conn, live.user_id)
+            user = None if invitee is None else await self._users.get(invitee.id, conn=conn)
+            staged = () if invitee is None else await self._staged(conn, invitee.id)
+        if (
+            invitee is None
+            or user is None
+            or invitee.status != UserStatus.INVITED
+            or invitee.sign_in_method != SignInMethod.PASSWORD_AND_SSO
+        ):
+            return None
+        policy = await self.password_policy(invitee.id, staged)
+        return invitee.id, UserContext(user.email, user.display_name), policy
+
+    async def password_policy(
+        self, user_id: uuid.UUID, staged: Sequence[StagedGrant]
+    ) -> PasswordPolicy:
+        """The password policy an invitation's password meets (Skuld question 34, answer a).
+
+        The policy the staged roles resolve to as if already granted (the
+        highest-priority policy mapped from a staged role the product still
+        declares), else the default.
+        """
+        return await self._passwords.policy_for_roles(grant.role for grant in staged)
+
+    async def password_subject(
+        self, token: object
+    ) -> tuple[uuid.UUID, UserContext, PasswordPolicy] | None:
+        """As ``_password_subject``, for the live feedback routes (ruling PW10)."""
+        if not well_formed(token):
+            return None
+        return await self._password_subject(token)
 
     async def accept_with_sso(
         self,

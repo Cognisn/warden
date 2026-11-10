@@ -95,8 +95,8 @@ async def test_the_minimum_age(history: PasswordHistory, make_user: Any, db: Dat
     assert await history.too_soon(user.id, min_age_hours=24, now=set_at + timedelta(hours=23))
     assert not await history.too_soon(user.id, min_age_hours=24, now=set_at + timedelta(hours=24))
     assert not await history.too_soon(user.id, min_age_hours=0, now=set_at)
-    # No recorded password: nothing to wait for.
-    fresh: User = await make_user()
+    # No recorded password: nothing to wait for. (Setting one would record it.)
+    fresh: User = await make_user(password=None)
     assert not await history.too_soon(fresh.id, min_age_hours=24, now=set_at)
 
 
@@ -105,7 +105,8 @@ async def test_pruning_keeps_the_largest_count_any_policy_needs(
 ) -> None:
     policies = PasswordPolicies(db, permissions, seed_min_length=12, fingerprint_available=False)
     default = await policies.default()
-    user: User = await make_user()
+    # Without a password: setting one would keep it in the history too.
+    user: User = await make_user(password=None)
     passwords = [f"synthetic password number {i}" for i in range(6)]
     await _remember(history, user, passwords)
     # The default keeps none, so everything can go.

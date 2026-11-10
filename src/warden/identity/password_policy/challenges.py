@@ -27,6 +27,7 @@ __all__ = ["ChangeChallenge", "PasswordChangeChallenges"]
 
 _CHALLENGES = table(PASSWORD_CHANGE_CHALLENGES)
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{16,128}")
+_TAG = re.compile(r"[A-Za-z]{0,4}")
 
 
 def _hash(token: str) -> bytes:
@@ -59,9 +60,18 @@ class PasswordChangeChallenges:
         reason: ChangeReason,
         *,
         match: WatchListMatch | None = None,
+        tag: str = "",
     ) -> str:
-        """A fresh token for ``user_id``, in the caller's transaction."""
-        token = secrets.token_urlsafe(32)
+        """A fresh token for ``user_id``, in the caller's transaction.
+
+        ``tag`` (up to four ASCII letters) starts the token, so the caller
+        can carry a fact about the sign-in in it, such as how the second
+        factor was met. Only the whole token's hash is stored, so a token
+        whose tag was altered names no challenge.
+        """
+        if _TAG.fullmatch(tag) is None:
+            raise ValueError("a challenge tag is up to four ASCII letters")
+        token = tag + secrets.token_urlsafe(32)
         await conn.execute(
             sql.SQL(
                 "INSERT INTO {} (token_hash, user_id, reason, watch_list_source, watch_list_id,"

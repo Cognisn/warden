@@ -30,7 +30,8 @@ def states(db: Database) -> PasswordStates:
 async def test_a_set_password_records_tier_and_expiry_only(
     states: PasswordStates, make_user: Any
 ) -> None:
-    user: User = await make_user()
+    # Without a password: setting one records its state too.
+    user: User = await make_user(password=None)
     assert await states.get(user.id) is None
     await states.record_set(
         user.id,
