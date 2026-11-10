@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 import pytest
-from identity_support import audit_rows
+from identity_support import audit_rows, race
 
 from warden.config import PasswordsConfig
 from warden.db import Database
@@ -389,3 +389,34 @@ async def test_an_import_racing_matches_sees_the_old_or_the_new_list_never_a_mix
     assert reads > 5, "the reads did not overlap the import"
     assert missing == 0, "a password on both lists was missing during the swap"
     assert sizes <= {len(old), len(new)}, sizes
+
+
+async def test_an_import_racing_an_attach_leaves_a_consistent_state(
+    lists: WatchLists, policies: PasswordPolicies, db: Database
+) -> None:
+    listed = await lists.create("Breaches", "r", WatchListKind.IMPORTED, actor="a")
+    await lists.import_hibp(listed.id, _lines(["before-1", "before-2"]), actor="a")
+    policy = await policies.create(_settings(name="Strict"), priority=1, actor="a")
+    words = [f"raced-{n}" for n in range(12_000)]
+
+    outcomes = await race(
+        lambda: lists.import_hibp(listed.id, _lines(words), actor="a"),
+        lambda: policies.attach(policy.id, listed.id, actor="a"),
+    )
+
+    assert not [o for o in outcomes if isinstance(o, BaseException)], outcomes
+    attached = await policies.get(policy.id)
+    assert attached.settings.watch_list_ids == (listed.id,)
+    after = await lists.get(listed.id)
+    async with db.connection() as conn:
+        cur = await conn.execute(
+            "SELECT count(*) FROM warden.watch_list_entries WHERE list_id = %s", (listed.id,)
+        )
+        stored = (await cur.fetchone() or (0,))[0]
+        cur = await conn.execute("SELECT count(*) FROM warden.watch_list_staging")
+        staged = (await cur.fetchone() or (0,))[0]
+    assert after.entry_count == stored == len(words)
+    assert staged == 0
+    # The policy now checks the new list, and the old entries are gone.
+    assert (await lists.match("raced-11999", attached)).match is not None
+    assert (await lists.match("before-1", attached)).match is None

@@ -6,6 +6,9 @@
     warden [--config FILE] [--env-prefix PREFIX] audit purge [--retention-days N] [--actor NAME]
     warden [--config FILE] [--env-prefix PREFIX] audit anchor [--actor NAME] [--min-rows N]
     warden audit grants --app-role ROLE [--forwarder-role ROLE] [--purger-role ROLE]
+    warden [...] passwords import --list NAME --file PATH [--threshold N]
+                                  [--create --reason TEXT] [--actor NAME]
+    warden [...] passwords recheck [--policy NAME] [--end-sessions-override off] [--actor NAME]
 
 Configuration is read through konfig exactly as a product reads it: the
 ``warden`` section of the given config file, overridden by environment
@@ -21,17 +24,29 @@ needs no database.
 product's scheduler to run (warden ships none); the application's role is
 enough. ``audit verify --anchors FILE`` also checks the chain against anchors
 exported from a SIEM, as NDJSON or as forwarded syslog messages, one per line.
+
+``passwords import`` replaces an imported watch list's hashes from a file in
+Have I Been Pwned's downloader format (``HASH:count`` per line), streaming
+it into the database and swapping it in one transaction, and prints counts.
+``passwords recheck`` compares the sealed fingerprints of passwords in use
+with the watch lists, flags matches for a forced change, ends sessions where
+the policy says so (unless ``--end-sessions-override off``) and prints counts
+only. warden ships no scheduler: the product runs recheck on its own. A
+product that runs ``main`` itself may pass its ``PermissionRegistry`` so
+that only the roles it declares count; the stock command, which cannot know
+them, counts every role that has a password policy mapping.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import sys
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import psycopg
 import sqlalchemy.exc
@@ -56,6 +71,18 @@ from warden.config import ConfigError, SecretSource, SettingsSource, WardenConfi
 from warden.db import Database, current_revision, migrate
 from warden.keys import KeyStore, KeyStoreError, SecretStore
 
+if TYPE_CHECKING:
+    import uuid
+    from typing import BinaryIO
+
+    from warden.identity.password_policy import (
+        ImportResult,
+        PasswordPolicies,
+        RecheckReport,
+        WatchLists,
+    )
+    from warden.identity.roles import PermissionRegistry
+
 __all__ = ["main"]
 
 EXIT_OK = 0
@@ -66,6 +93,11 @@ EXIT_CONFIG = 2
 MIGRATE_CONNECTION_FAILED = "warden migrate: could not connect to the database"
 AUDIT_CONNECTION_FAILED = "warden audit: could not connect to the database"
 KEYS_CONNECTION_FAILED = "warden keys: could not connect to the database"
+PASSWORDS_CONNECTION_FAILED = "warden passwords: could not connect to the database"
+
+
+class _PasswordsRefused(Exception):
+    """A passwords command refused with a fixed message (no host, path or password)."""
 
 
 class _OneConnection:
@@ -143,6 +175,32 @@ def _parser() -> argparse.ArgumentParser:
     grants_cmd.add_argument("--app-role", required=True)
     grants_cmd.add_argument("--forwarder-role")
     grants_cmd.add_argument("--purger-role")
+
+    passwords_cmd = commands.add_parser("passwords", help="watch list imports and recheck")
+    passwords_sub = passwords_cmd.add_subparsers(dest="passwords_command", required=True)
+    import_cmd = passwords_sub.add_parser(
+        "import", help="replace an imported watch list from a HIBP downloader file"
+    )
+    import_cmd.add_argument("--list", required=True, dest="list_name", help="the list's name")
+    import_cmd.add_argument("--file", required=True, help="HASH:count lines, SHA-1 in hex")
+    import_cmd.add_argument(
+        "--threshold", type=_positive, help="keep only hashes seen at least N times"
+    )
+    import_cmd.add_argument(
+        "--create", action="store_true", help="create the list (kind imported) if it is missing"
+    )
+    import_cmd.add_argument("--reason", help="with --create: the reason a user is shown")
+    import_cmd.add_argument("--actor", type=_anchor_actor, help="who is importing, for the audit")
+    recheck_cmd = passwords_sub.add_parser(
+        "recheck", help="check passwords in use against the watch lists"
+    )
+    recheck_cmd.add_argument("--policy", help="only the users this policy (by name) applies to")
+    recheck_cmd.add_argument(
+        "--end-sessions-override",
+        choices=["off"],
+        help="off: never end a session, whatever the policy says",
+    )
+    recheck_cmd.add_argument("--actor", type=_anchor_actor, help="who is running it, for the audit")
     return parser
 
 
@@ -323,6 +381,202 @@ def _audit_anchor_command(
     return EXIT_OK
 
 
+def _open_import_file(path: str) -> BinaryIO | None:
+    """The operator's import file, opened for streaming; None if it cannot be read.
+
+    Named in the configuration tripwire's exemptions: input data, not configuration.
+    """
+    try:
+        return open(path, "rb")  # closed by the caller
+    except OSError:
+        return None
+
+
+async def _password_stores(
+    db: Database, config: WardenConfig, permissions: PermissionRegistry | None
+) -> tuple[PasswordPolicies, WatchLists]:
+    """The policy store and watch lists, with identity's audit actions recorded through ``db``."""
+    from psycopg import sql
+
+    from warden.db import PASSWORD_POLICY_ROLES, table
+    from warden.identity.password_policy import HibpRangeClient, PasswordPolicies, WatchLists
+    from warden.identity.password_policy.builtin import bundled_list
+    from warden.identity.roles import PermissionRegistry
+
+    if permissions is None:
+        # The stock command cannot know the product's roles: every mapped role counts.
+        permissions = PermissionRegistry()
+        async with db.connection() as conn:
+            cur = await conn.execute(
+                sql.SQL("SELECT DISTINCT role FROM {}").format(table(PASSWORD_POLICY_ROLES))
+            )
+            for (role,) in await cur.fetchall():
+                with contextlib.suppress(ValueError):
+                    permissions.define_role(role, ())
+    policies = PasswordPolicies(
+        db,
+        permissions,
+        seed_min_length=config.identity.password_min_length,
+        fingerprint_available=config.passwords.fingerprint_available,
+    )
+    lists = WatchLists(db, policies, builtin=bundled_list(), hibp=HibpRangeClient(config.passwords))
+    return policies, lists
+
+
+@asynccontextmanager
+async def _recording(dsn: str, config: WardenConfig) -> AsyncIterator[Database]:
+    """A database connection with an audit recorder installed for identity's actions."""
+    from warden.audit import set_recorder
+    from warden.identity.actions import register_actions
+
+    db = await _connect(dsn)
+    registry = ActionRegistry()
+    register_audit_actions(registry)
+    register_actions(registry)
+    previous = set_recorder(
+        AuditRecorder(db, registry, details_max_bytes=config.audit.details_max_bytes)
+    )
+    try:
+        yield db
+    finally:
+        set_recorder(previous)
+        await _close(db)
+
+
+async def _passwords_import(
+    dsn: str,
+    config: WardenConfig,
+    args: argparse.Namespace,
+    source: BinaryIO,
+    permissions: PermissionRegistry | None,
+) -> tuple[uuid.UUID, bool, ImportResult]:
+    from warden.identity.password_policy import WatchListError, WatchListKind
+
+    async with _recording(dsn, config) as db:
+        _, lists = await _password_stores(db, config, permissions)
+        named = [w for w in await lists.list() if w.name == args.list_name]
+        created = False
+        if named:
+            listed = named[0]
+        elif args.create:
+            try:
+                listed = await lists.create(
+                    args.list_name, args.reason, WatchListKind.IMPORTED, actor=args.actor
+                )
+            except WatchListError as exc:
+                raise _PasswordsRefused(str(exc)) from None
+            created = True
+        else:
+            raise _PasswordsRefused(
+                "no watch list has that name; pass --create --reason to create it"
+            )
+        try:
+            result = await lists.import_hibp(
+                listed.id, source, threshold=args.threshold, actor=args.actor
+            )
+        except WatchListError as exc:
+            raise _PasswordsRefused(str(exc)) from None
+        return listed.id, created, result
+
+
+async def _passwords_recheck(
+    dsn: str,
+    config: WardenConfig,
+    secrets: SecretStore,
+    args: argparse.Namespace,
+    permissions: PermissionRegistry | None,
+) -> RecheckReport:
+    from warden.identity.crypto import SecretBox
+    from warden.identity.password_policy import Fingerprints, PasswordRecheck, PasswordStates
+    from warden.identity.policy import PolicyStore, SessionPolicy
+    from warden.identity.tokens import Sessions
+
+    async with _recording(dsn, config) as db:
+        policies, lists = await _password_stores(db, config, permissions)
+        policy_id = None
+        if args.policy is not None:
+            named = [p for p in await policies.list() if p.name == args.policy]
+            if not named:
+                raise _PasswordsRefused("no password policy has that name")
+            policy_id = named[0].id
+        passwords = config.passwords
+        box = None
+        if passwords.fingerprint_key_secret is not None:
+            box = SecretBox.from_secrets(
+                secrets,
+                current_name=passwords.fingerprint_key_secret,
+                previous_name=passwords.fingerprint_previous_key_secret
+                or passwords.fingerprint_key_secret,
+            )
+        sessions = Sessions(
+            db,
+            KeyStore(db, secrets, config.keys),
+            PolicyStore(db, SessionPolicy.from_config(config.identity)),
+            issuer=config.http.public_base_url,
+        )
+        recheck = PasswordRecheck(
+            db, policies, lists, Fingerprints(box), PasswordStates(db), sessions
+        )
+        return await recheck.run(
+            actor=args.actor,
+            policy_id=policy_id,
+            end_sessions=False if args.end_sessions_override == "off" else None,
+        )
+
+
+def _passwords(
+    args: argparse.Namespace,
+    dsn: str,
+    secrets: SecretStore,
+    config: WardenConfig,
+    permissions: PermissionRegistry | None,
+) -> int:
+    command = f"warden passwords {args.passwords_command}"
+    if args.passwords_command == "import":
+        if args.create and not args.reason:
+            print(f"{command}: --create needs --reason", file=sys.stderr)
+            return EXIT_CONFIG
+        source = _open_import_file(args.file)
+        if source is None:
+            # The path is the operator's own, but it is kept out of the output all the same.
+            print(f"{command}: cannot read the import file", file=sys.stderr)
+            return EXIT_CONFIG
+        try:
+            with source:
+                list_id, created, result = _run_async(
+                    _passwords_import(dsn, config, args, source, permissions)
+                )
+        except psycopg.OperationalError:
+            print(PASSWORDS_CONNECTION_FAILED, file=sys.stderr)
+            return EXIT_FAILED
+        except _PasswordsRefused as exc:
+            print(f"{command}: {exc}", file=sys.stderr)
+            return EXIT_FAILED
+        if created:
+            print(f"created watch list {list_id}")
+        print(
+            f"imported {result.imported} hashes into watch list {list_id} from"
+            f" {result.lines} lines ({result.below_threshold} below the threshold)"
+        )
+        return EXIT_OK
+
+    try:
+        report = _run_async(_passwords_recheck(dsn, config, secrets, args, permissions))
+    except psycopg.OperationalError:
+        print(PASSWORDS_CONNECTION_FAILED, file=sys.stderr)
+        return EXIT_FAILED
+    except _PasswordsRefused as exc:
+        print(f"{command}: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    print(
+        f"rechecked {report.checked} passwords: {report.matched} matched,"
+        f" {report.flagged} newly required to change, {report.sessions_ended} sessions ended,"
+        f" {report.resealed} resealed, {report.unopened} did not open,"
+        f" {report.hibp_unavailable} range checks unavailable"
+    )
+    return EXIT_OK
+
+
 def _audit(args: argparse.Namespace, dsn: str, secrets: SecretStore, config: WardenConfig) -> int:
     if args.audit_command == "verify":
         return _audit_verify_command(args, dsn, secrets, config)
@@ -360,8 +614,13 @@ def main(
     *,
     settings: SettingsSource | None = None,
     secrets: SecretStore | None = None,
+    permissions: PermissionRegistry | None = None,
 ) -> int:
-    """Run the CLI. ``settings`` and ``secrets`` replace konfig's, for tests."""
+    """Run the CLI. ``settings`` and ``secrets`` replace konfig's, for tests.
+
+    ``permissions`` is the product's registry, for a product that runs the
+    CLI itself: ``passwords recheck`` then counts only the roles it declares.
+    """
     args = _parser().parse_args(argv)
     if args.command == "audit" and args.audit_command == "grants":
         try:
@@ -404,6 +663,9 @@ def main(
 
     if args.command == "audit":
         return _audit(args, dsn, secrets, config)
+
+    if args.command == "passwords":
+        return _passwords(args, dsn, secrets, config, permissions)
 
     try:
         key_id = _run_async(_rotate(dsn, secrets, config))
