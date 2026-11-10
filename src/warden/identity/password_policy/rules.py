@@ -355,8 +355,8 @@ def _unreached_tiers(rules: PasswordRules) -> list[str]:
     if not all(_well_formed(t) for t in tiers):
         return []
     return [
-        f"tiers[{index}] is never reached: an earlier tier accepts every password it does;"
-        " order tiers strongest first"
+        f"tiers[{index}] is never reached: an earlier tier accepts every password it does,"
+        " so order tiers strongest first"
         for index, later in enumerate(tiers)
         if any(_preempts(earlier, later, rules) for earlier in tiers[:index])
     ]
