@@ -114,14 +114,21 @@ def load_settings(path: Path) -> LoadedSettings:
 def seed_secrets(loaded: LoadedSettings) -> None:
     """Put the secrets warden needs in konfig's store, keeping any already there.
 
-    The TOTP encryption key is generated once; the single sign-on client
-    secret is the stub provider's fixed dev-only value. Signing keys are
-    created with ``warden keys rotate``, as a product would.
+    The TOTP encryption key and the password fingerprint key are generated
+    once; the single sign-on client secret is the stub provider's fixed
+    dev-only value. Signing keys are created with ``warden keys rotate``, as a
+    product would.
     """
     secrets = loaded.secrets
     totp_key = loaded.config.identity.totp_key_secret
     if secrets.get(totp_key) is None:
         secrets.set(totp_key, new_totp_key())
+    # The key that seals password fingerprints (ruling PW8); with it a policy
+    # may enable the fingerprint and the recheck can find passwords that have
+    # since appeared on a watch list.
+    fingerprint_key = loaded.config.passwords.fingerprint_key_secret
+    if fingerprint_key is not None and secrets.get(fingerprint_key) is None:
+        secrets.set(fingerprint_key, new_totp_key())
     client_secret = loaded.config.sso.client_secret
     if secrets.get(client_secret) is None:
         secrets.set(client_secret, SSO_CLIENT_SECRET)

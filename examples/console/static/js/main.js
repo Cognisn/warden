@@ -11,6 +11,8 @@ import { accountScreen, signInScreen, ssoLanding } from "./signin.js";
 import { acceptScreen, outboxScreen, passkeyRegistrationScreen, resetScreen } from "./lifecycle.js";
 import { notesScreen } from "./notes.js";
 import { apiKeysScreen, invitationsScreen, policyScreen, ssoScreen, usersScreen } from "./admin.js";
+import { devScreen } from "./dev.js";
+import { exposureScreen, policiesScreen, watchListsScreen } from "./passwords.js";
 import { anchorsScreen, auditScreen, keysScreen, syslogScreen } from "./audit.js";
 
 // [hash, label, screen, permission needed to show it in the menu]
@@ -28,6 +30,12 @@ const MENU = [
     ["#/policy", "Session policy", policyScreen, "policy.manage"],
     ["#/sso", "Single sign-on", ssoScreen, "sso.manage"],
   ]],
+  ["Passwords", [
+    ["#/password-policies", "Password policies", policiesScreen, "passwords.manage"],
+    ["#/watch-lists", "Watch lists", watchListsScreen, "passwords.manage"],
+    ["#/exposure", "Exposure report", exposureScreen, "passwords.manage"],
+  ]],
+  ["Development", [["#/dev", "Recheck and clock", devScreen, null]]],
   ["Audit", [
     ["#/audit", "Events", auditScreen, "audit.read"],
     ["#/anchors", "Anchors", anchorsScreen, "audit.read"],

@@ -2,6 +2,7 @@
 
 import { call, prefixes } from "./api.js";
 import { action, card, field, form, h, input, outcome, recoveryCodes, status, when } from "./dom.js";
+import { livePassword, refusal } from "./checklist.js";
 import { create, described, supported } from "./webauthn.js";
 
 function linkToken() {
@@ -53,12 +54,17 @@ export async function acceptScreen(main) {
   const byPassword = form(
     "stack",
     [
-      field("Choose a password", input("password", { type: "password", autocomplete: "new-password", required: true })),
+      livePassword({
+        name: "password",
+        label: "Choose a password",
+        load: () => call("POST", `${auth}/invitations/accept/password-policy`, { body: { token }, anonymous: true }),
+        check: (password) => call("POST", `${auth}/invitations/accept/password-check`, { body: { token, password }, anonymous: true }),
+      }),
       h("button", {}, "Accept with a password"),
     ],
     async ({ password }) => {
       const answer = await call("POST", `${auth}/invitations/accept`, { body: { token, password }, anonymous: true });
-      if (!answer.ok) return outcome(answer);
+      if (!answer.ok) return answer.status === 400 && answer.data && answer.data.failures ? refusal(answer) : outcome(answer);
       return h("div", {}, status("ok", `Accepted for ${answer.data.email}.`), h("a", { href: "/#/signin" }, "Sign in"));
     },
   );
@@ -98,12 +104,15 @@ export async function resetScreen(main) {
   const complete = form(
     "stack",
     [
-      field("New password", input("new_password", { type: "password", autocomplete: "new-password", required: true })),
+      livePassword({
+        load: () => call("POST", `${auth}/password-reset/policy`, { body: { token }, anonymous: true }),
+        check: (password) => call("POST", `${auth}/password-reset/check`, { body: { token, password }, anonymous: true }),
+      }),
       h("button", {}, "Set password"),
     ],
     async ({ new_password }) => {
       const answer = await call("POST", `${auth}/password-reset/complete`, { body: { token, new_password }, anonymous: true });
-      if (!answer.ok) return outcome(answer);
+      if (!answer.ok) return answer.status === 400 && answer.data && answer.data.failures ? refusal(answer) : outcome(answer);
       return h("div", {}, status("ok", "Password set. Every session of this account has ended."), h("a", { href: "/#/signin" }, "Sign in"));
     },
   );

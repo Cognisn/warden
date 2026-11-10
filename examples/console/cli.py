@@ -2,12 +2,14 @@
 
     python -m examples.console init --sandbox DIR [--ports-file FILE]
     python -m examples.console create-admin --config FILE --email ADDRESS
-    python -m examples.console serve --config FILE [--without-mail]
+    python -m examples.console serve --config FILE [--without-mail] [--dev-clock]
 
 ``init`` writes ``<sandbox>/console.yaml`` and seeds konfig's secrets store.
 ``create-admin`` creates the first administrator. ``serve`` starts the app on
 127.0.0.1 at the configured console port; with ``--without-mail`` it installs
-no mail sender, to show how the screens follow warden's capabilities. Migrations and the signing key
+no mail sender, to show how the screens follow warden's capabilities; with
+``--dev-clock`` it builds ``Identity`` with a clock the Development screen can
+move forward, to walk password expiry without waiting. Migrations and the signing key
 come from the warden CLI, as in a product: ``warden --config FILE migrate``
 and ``warden --config FILE keys rotate``.
 """
@@ -25,6 +27,7 @@ from typing import Any
 
 from examples.console.app import build_console
 from examples.console.bootstrap import create_administrator
+from examples.console.devclock import DevClock
 from examples.console.settings import (
     LoadedSettings,
     load_settings,
@@ -98,13 +101,21 @@ def _create_admin(loaded: LoadedSettings, email: str, password: str | None) -> i
     return 0
 
 
-def _serve(loaded: LoadedSettings, *, send_mail: bool = True) -> int:
+def _serve(loaded: LoadedSettings, *, send_mail: bool = True, dev_clock: bool = False) -> int:
     import uvicorn
 
     _trust_provider_ca(loaded)
 
     async def work(pool: Any) -> None:
-        console = build_console(loaded.config, pool, loaded.secrets, send_mail=send_mail)
+        console = build_console(
+            loaded.config,
+            pool,
+            loaded.secrets,
+            send_mail=send_mail,
+            dev_clock=DevClock() if dev_clock else None,
+        )
+        if dev_clock:
+            print("DEVELOPMENT CLOCK ON: the Development screen can move time forward")
         server = uvicorn.Server(
             uvicorn.Config(console.app, host=HOST, port=loaded.port, loop="none", lifespan="on")
         )
@@ -138,6 +149,11 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="install no mail sender, to see the screens disable what needs mail",
     )
+    serve.add_argument(
+        "--dev-clock",
+        action="store_true",
+        help="DEVELOPMENT ONLY: let the Development screen move time forward (password expiry)",
+    )
     return parser
 
 
@@ -149,7 +165,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         loaded = load_settings(Path(args.config))
         if args.command == "create-admin":
             return _create_admin(loaded, args.email, args.password)
-        return _serve(loaded, send_mail=not args.without_mail)
+        return _serve(loaded, send_mail=not args.without_mail, dev_clock=args.dev_clock)
     except (ConfigError, ValueError, OSError) as exc:
         print(exc, file=sys.stderr)
         return 2

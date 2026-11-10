@@ -36,6 +36,13 @@ export async function syslogConfigured() {
   return settings.syslog;
 }
 
+// The console's own settings (GET /api/console): prefixes, and which optional
+// features this run has.
+export async function consoleSettings() {
+  await prefixes();
+  return settings;
+}
+
 export function onSessionChange(listener) {
   listeners.add(listener);
 }

@@ -12,7 +12,16 @@ cover what the console needs that warden leaves to the product:
   through ``warden.audit.anchor`` and ``verify_anchors`` (warden has the CLI
   ``warden audit anchor`` and ``warden audit verify --anchors``, but no route);
 - ``GET /syslog/settings``: the forwarder's effective settings (warden's
-  syslog routes give status and a test send only).
+  syslog routes give status and a test send only);
+- ``POST /passwords/recheck``: one run of the password recheck, through
+  ``Identity.password_recheck`` (warden has the CLI ``warden passwords
+  recheck`` and the Python call, but no route: the product schedules it);
+- ``POST /watch-lists/{id}/import-sample``: imports the small synthetic file
+  shipped with the sample into an imported watch list, through
+  ``Identity.watch_lists.import_hibp`` (warden imports with the CLI ``warden
+  passwords import``, not over HTTP);
+- ``GET``/``PUT /dev/clock``: the development clock, present only when the
+  console was started with ``serve --dev-clock``.
 
 The sample mounts them under ``/api``. The outbox is unauthenticated so an
 invitee can follow a link: acceptable only because the sample is for local
@@ -22,13 +31,22 @@ development.
 # No ``from __future__ import annotations``: FastAPI must resolve the route
 # signatures, which use dependency aliases local to ``console_router``.
 
+import uuid
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
+from examples.console.devclock import DevClock
 from examples.console.outbox import Outbox
-from examples.console.product import AUDIT_EXPORT, AUDIT_READ, POLICY_MANAGE, SYSLOG_MANAGE
+from examples.console.product import (
+    AUDIT_EXPORT,
+    AUDIT_READ,
+    PASSWORDS_MANAGE,
+    POLICY_MANAGE,
+    SYSLOG_MANAGE,
+)
 from warden.audit import (
     AnchorError,
     AnchorReport,
@@ -39,12 +57,15 @@ from warden.audit import (
 from warden.audit import anchor as write_anchor
 from warden.audit.syslog import SyslogForwarder
 from warden.identity import Identity, PolicyError, Principal, require_permission, require_user
+from warden.identity.password_policy import WatchListError, WatchListNotFound
 from warden.keys import KeyStore
 
 __all__ = ["console_router"]
 
 # The largest anchor export the verify route reads, in bytes.
 MAX_ANCHOR_EXPORT = 2_000_000
+# A small file of SHA-1 hashes of synthetic passwords, in the downloader's format.
+SAMPLE_IMPORT = Path(__file__).resolve().parent / "data" / "synthetic-pwned.txt"
 
 
 def _policy(policy: Any) -> dict[str, Any]:
@@ -89,6 +110,7 @@ def console_router(
     recorder: AuditRecorder,
     keys: KeyStore,
     forwarder: SyslogForwarder | None,
+    dev_clock: DevClock | None = None,
 ) -> APIRouter:
     router = APIRouter(tags=["sample: console"])
     User = Annotated[Principal, Depends(require_user)]
@@ -96,6 +118,7 @@ def console_router(
     AuditReader = Annotated[Principal, Depends(require_permission(AUDIT_READ))]
     AuditWriter = Annotated[Principal, Depends(require_permission(AUDIT_EXPORT))]
     SyslogAdmin = Annotated[Principal, Depends(require_permission(SYSLOG_MANAGE))]
+    PasswordAdmin = Annotated[Principal, Depends(require_permission(PASSWORDS_MANAGE))]
 
     @router.get("/console")
     async def console_settings() -> dict[str, Any]:
@@ -109,6 +132,9 @@ def console_router(
                 "keys": http.keys_prefix,
             },
             "syslog": forwarder is not None,
+            # Whether a policy may enable the sealed fingerprint (ruling PW8).
+            "fingerprint": identity.config.passwords.fingerprint_available,
+            "dev_clock": dev_clock is not None,
         }
 
     @router.get("/me")
@@ -186,5 +212,54 @@ def console_router(
         return JSONResponse(
             {"configured": True, "settings": forwarder.settings.model_dump(mode="json")}
         )
+
+    @router.post("/passwords/recheck")
+    async def recheck_passwords(principal: PasswordAdmin) -> dict[str, int]:
+        report = await identity.password_recheck.run(actor=str(principal.user_id))
+        return {
+            "checked": report.checked,
+            "matched": report.matched,
+            "flagged": report.flagged,
+            "sessions_ended": report.sessions_ended,
+            "resealed": report.resealed,
+            "unopened": report.unopened,
+            "hibp_unavailable": report.hibp_unavailable,
+        }
+
+    @router.post("/watch-lists/{list_id}/import-sample")
+    async def import_sample(list_id: uuid.UUID, principal: PasswordAdmin) -> JSONResponse:
+        lines = SAMPLE_IMPORT.read_text(encoding="utf-8").splitlines()
+        try:
+            result = await identity.watch_lists.import_hibp(
+                list_id, lines, actor=str(principal.user_id)
+            )
+        except WatchListNotFound:
+            return JSONResponse({"detail": "no such watch list"}, status_code=404)
+        except WatchListError:
+            return JSONResponse(
+                {"detail": "only an imported watch list takes the sample file"}, status_code=409
+            )
+        return JSONResponse(
+            {"imported": result.imported, "below_threshold": result.below_threshold}
+        )
+
+    if dev_clock is not None:
+        # Unauthenticated on purpose: moving the clock forward expires the
+        # administrator's own token, and the way back must not need it.
+        clock = dev_clock
+
+        @router.get("/dev/clock")
+        async def show_clock() -> dict[str, int]:
+            return {"offset_days": clock.offset_days}
+
+        @router.put("/dev/clock")
+        async def move_clock(request: Request) -> JSONResponse:
+            body = await request.json()
+            days = body.get("days") if isinstance(body, dict) else None
+            try:
+                clock.set_days(days)
+            except ValueError:
+                return JSONResponse({"detail": "the offset is not valid"}, status_code=400)
+            return JSONResponse({"offset_days": clock.offset_days})
 
     return router
