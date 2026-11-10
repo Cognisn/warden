@@ -13,6 +13,7 @@ rule codes and counts only, never a password, a hash or a hash prefix.
 """
 
 from warden.identity.password_policy.builtin import BUILTIN_REASON, BuiltinList
+from warden.identity.password_policy.challenges import ChangeChallenge, PasswordChangeChallenges
 from warden.identity.password_policy.errors import (
     HibpUnavailable,
     PasswordPolicyConflict,
@@ -29,6 +30,7 @@ from warden.identity.password_policy.fingerprint import (
     password_digest,
 )
 from warden.identity.password_policy.hibp import HibpRangeClient, RangeCache
+from warden.identity.password_policy.history import PasswordHistory
 from warden.identity.password_policy.rules import (
     DESCRIPTION_VERSION,
     Evaluation,
@@ -40,6 +42,7 @@ from warden.identity.password_policy.rules import (
     UserContext,
     evaluate,
 )
+from warden.identity.password_policy.state import ChangeReason, PasswordState, PasswordStates
 from warden.identity.password_policy.store import (
     EffectivePolicy,
     PasswordPolicies,
@@ -47,11 +50,14 @@ from warden.identity.password_policy.store import (
     PolicySettings,
     PolicySource,
 )
+from warden.identity.password_policy.watchlists import WatchListMatch, WatchListSource
 
 __all__ = [
     "BUILTIN_REASON",
     "DESCRIPTION_VERSION",
     "BuiltinList",
+    "ChangeChallenge",
+    "ChangeReason",
     "EffectivePolicy",
     "Evaluation",
     "Fingerprints",
@@ -59,12 +65,16 @@ __all__ = [
     "HibpUnavailable",
     "OpenedFingerprint",
     "PassphraseRule",
+    "PasswordChangeChallenges",
+    "PasswordHistory",
     "PasswordPolicies",
     "PasswordPolicy",
     "PasswordPolicyConflict",
     "PasswordPolicyError",
     "PasswordPolicyNotFound",
     "PasswordRules",
+    "PasswordState",
+    "PasswordStates",
     "PolicySettings",
     "PolicySource",
     "RangeCache",
@@ -75,7 +85,9 @@ __all__ = [
     "UserContext",
     "WatchListError",
     "WatchListImportError",
+    "WatchListMatch",
     "WatchListNotFound",
+    "WatchListSource",
     "evaluate",
     "password_digest",
 ]
