@@ -950,6 +950,65 @@ class PasswordPolicies:
             )
         return True
 
+    async def attach(
+        self, policy_id: uuid.UUID, list_id: uuid.UUID, *, actor: str | None
+    ) -> PasswordPolicy:
+        """Have a policy check a watch list as well."""
+        return await self._attachment(policy_id, list_id, attach=True, actor=actor)
+
+    async def detach(
+        self, policy_id: uuid.UUID, list_id: uuid.UUID, *, actor: str | None
+    ) -> PasswordPolicy:
+        """Stop a policy checking a watch list."""
+        return await self._attachment(policy_id, list_id, attach=False, actor=actor)
+
+    async def _attachment(
+        self, policy_id: uuid.UUID, list_id: uuid.UUID, *, attach: bool, actor: str | None
+    ) -> PasswordPolicy:
+        try:
+            async with self._db.transaction() as tx:
+                await lock_policies(tx)
+                await self._fetch(tx, policy_id)
+                if attach:
+                    cur = await tx.execute(
+                        sql.SQL(
+                            "INSERT INTO {} (policy_id, list_id) VALUES (%s, %s)"
+                            " ON CONFLICT DO NOTHING"
+                        ).format(_ATTACHED),
+                        (policy_id, list_id),
+                    )
+                else:
+                    cur = await tx.execute(
+                        sql.SQL("DELETE FROM {} WHERE policy_id = %s AND list_id = %s").format(
+                            _ATTACHED
+                        ),
+                        (policy_id, list_id),
+                    )
+                changed = cur.rowcount > 0
+                if changed:
+                    await tx.execute(
+                        sql.SQL(
+                            "UPDATE {} SET version = version + 1, updated_at = now() WHERE id = %s"
+                        ).format(_POLICIES),
+                        (policy_id,),
+                    )
+                after = await self._fetch(tx, policy_id)
+                if changed:
+                    await self._audit(
+                        tx,
+                        "updated",
+                        actor=actor,
+                        resource_type="password_policy",
+                        resource_id=policy_id,
+                        details={"fields": ["watch_list_ids"], "version": after.version},
+                    )
+                    await notify_policies(tx)
+        except psycopg.errors.ForeignKeyViolation:
+            raise WatchListNotFound("no such watch list") from None
+        finally:
+            self.invalidate()
+        return after
+
     async def largest_history(self, conn: AsyncConnection[Any] | None = None) -> int:
         """The largest history count any policy keeps: history beyond it can go."""
         async with self._db.transaction(conn) as tx:

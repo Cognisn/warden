@@ -50,11 +50,21 @@ from warden.identity.password_policy.store import (
     PolicySettings,
     PolicySource,
 )
-from warden.identity.password_policy.watchlists import WatchListMatch, WatchListSource
+from warden.identity.password_policy.watchlists import (
+    HIBP_REASON,
+    ImportResult,
+    WatchList,
+    WatchListCheck,
+    WatchListKind,
+    WatchListMatch,
+    WatchLists,
+    WatchListSource,
+)
 
 __all__ = [
     "BUILTIN_REASON",
     "DESCRIPTION_VERSION",
+    "HIBP_REASON",
     "BuiltinList",
     "ChangeChallenge",
     "ChangeReason",
@@ -63,6 +73,7 @@ __all__ = [
     "Fingerprints",
     "HibpRangeClient",
     "HibpUnavailable",
+    "ImportResult",
     "OpenedFingerprint",
     "PassphraseRule",
     "PasswordChangeChallenges",
@@ -83,11 +94,15 @@ __all__ = [
     "SealedFingerprint",
     "Tier",
     "UserContext",
+    "WatchList",
+    "WatchListCheck",
     "WatchListError",
     "WatchListImportError",
+    "WatchListKind",
     "WatchListMatch",
     "WatchListNotFound",
     "WatchListSource",
+    "WatchLists",
     "evaluate",
     "password_digest",
 ]
