@@ -466,6 +466,30 @@ async def test_a_user_suspended_after_the_challenge_gets_nothing(
     assert reasons[-1]["details"] == {"reason": "user_inactive"}
 
 
+async def test_a_user_suspended_during_the_change_gets_nothing(
+    identity: Identity, db: Database
+) -> None:
+    """The status is checked again, under a row lock, in the transaction that issues
+    the session: a suspension landing after the challenge was opened still wins."""
+    user = await _user(identity)
+    await identity.password_states.require_change(user.id, ChangeReason.ADMINISTRATOR)
+    original = identity.password_enforcement.accept
+
+    async def accept_then_suspend(*args: Any, **kw: Any) -> Any:
+        accepted = await original(*args, **kw)
+        await identity.users.set_status(user.id, UserStatus.SUSPENDED, actor="a")
+        return accepted
+
+    async with http(identity) as c:
+        body = await _sign_in(c, user)
+        identity.password_enforcement.accept = accept_then_suspend  # type: ignore[method-assign]
+        refused = await _complete(c, body["challenge"], OTHER_STRONG)
+    assert refused.status_code == 401 and refused.content == REFUSAL
+    assert await _sessions(db, user) == 0
+    reasons = await audit_rows(db, "warden.identity.password.change_completed")
+    assert reasons[-1]["details"] == {"reason": "user_inactive"}
+
+
 async def test_a_tampered_challenge_tag_names_no_challenge(identity: Identity) -> None:
     """The amr travels in the token; altering it changes the hash, so nothing matches."""
     user = await _user(identity)
