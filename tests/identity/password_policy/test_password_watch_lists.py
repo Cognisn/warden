@@ -420,3 +420,23 @@ async def test_an_import_racing_an_attach_leaves_a_consistent_state(
     # The policy now checks the new list, and the old entries are gone.
     assert (await lists.match("raced-11999", attached)).match is not None
     assert (await lists.match("before-1", attached)).match is None
+
+
+async def test_a_failed_import_through_the_pool_leaves_the_list_as_it_was(
+    lists: WatchLists, db: Database
+) -> None:
+    # Through a pool, so a write committed apart from the import's transaction
+    # would show here (the CLI's single connection would hide it).
+    listed = await lists.create("Breaches", "r", WatchListKind.IMPORTED, actor="a")
+    await lists.import_hibp(listed.id, _lines(["kept"]), actor="a")
+    lines = [*_lines([f"staged-{n}" for n in range(6_000)]), "not a line"]
+    with pytest.raises(WatchListImportError) as caught:
+        await lists.import_hibp(listed.id, lines, actor="a")
+    assert caught.value.line == 6_001
+    async with db.connection() as conn:
+        cur = await conn.execute(
+            "SELECT upper(encode(hash, 'hex')) FROM warden.watch_list_entries WHERE list_id = %s",
+            (listed.id,),
+        )
+        assert [r[0] for r in await cur.fetchall()] == [_sha1("kept")]
+    assert (await lists.get(listed.id)).entry_count == 1

@@ -241,7 +241,13 @@ async def test_a_name_or_priority_in_use_is_a_409(
 async def test_update_round_trip_keeps_omitted_settings(
     client: httpx.AsyncClient, headers: dict[str, str], db: Database
 ) -> None:
-    created = await create_policy(client, headers, history_count=3)
+    made = await client.post(
+        "/admin/watch-lists",
+        json={"name": "Local", "reason": "r", "kind": "manual"},
+        headers=headers,
+    )
+    list_id = made.json()["watch_list"]["id"]
+    created = await create_policy(client, headers, history_count=3, watch_list_ids=[list_id])
     response = await client.put(
         f"/admin/password-policies/{created['id']}",
         json={"version": 1, "min_length": 16, "description": "Longer"},
@@ -253,6 +259,8 @@ async def test_update_round_trip_keeps_omitted_settings(
     assert updated["description"] == "Longer"
     assert updated["history_count"] == 3 and updated["min_classes"] == 2
     assert updated["priority"] == 1
+    # Settings left out are kept: above all, the lists a policy checks.
+    assert updated["watch_list_ids"] == [list_id]
     (row,) = await audit_rows(db, "warden.identity.password_policy.updated")
     assert row["resource_id"] == created["id"]
     assert row["details"] == {"fields": ["rules", "description"], "version": 2}
