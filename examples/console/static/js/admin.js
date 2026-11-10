@@ -1,9 +1,10 @@
 // Administration: users and roles, invitations, API keys, the session policy and
 // single sign-on, all through warden's administration routes except the policy.
 
-import { call, prefixes } from "./api.js";
+import { call, me, prefixes } from "./api.js";
 import { action, card, field, form, h, input, json, outcome, select, status, table, when, zoned } from "./dom.js";
 import { gap } from "./gaps.js";
+import { userPasswordCard } from "./passwords.js";
 
 const STATUSES = ["active", "suspended", "deactivated", "invited"];
 const METHODS = ["password_and_sso", "sso_only", "passkey_only"];
@@ -50,6 +51,8 @@ export async function usersScreen(main) {
   const { admin } = await prefixes();
   const registry = await roleNames(admin);
   const can = await capabilities(admin);
+  const mine = await me();
+  const managesPasswords = Boolean(mine && mine.permissions.includes("passwords.manage"));
   const listArea = h("div", {});
   const detail = h("div", {});
   let filter = "";
@@ -83,6 +86,8 @@ export async function usersScreen(main) {
       return;
     }
     const { user, roles, webauthn_credentials: keys } = answer.data;
+    // The password policy routes have their own permission (passwords.manage).
+    const passwordCard = managesPasswords ? userPasswordCard(admin, id) : null;
     const out = h("div", {});
     const after = async (result, message) => {
       out.replaceChildren(outcome(result, message));
@@ -198,6 +203,7 @@ export async function usersScreen(main) {
         h("p", { class: "muted" }, "Removing the last active administrator's role, or suspending them, is refused with 409. So is moving a user who holds security keys or passkeys to sso_only: reset their second factors first."),
         out,
       ),
+      passwordCard,
     );
   };
 

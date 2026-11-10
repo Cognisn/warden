@@ -85,3 +85,18 @@ def test_attestation_roots_added_to_the_configuration_load(tmp_path: Path) -> No
     config = load_settings(path).config
     assert config.webauthn.attestation_roots is not None
     assert config.webauthn.attestation_roots.strip() == root.strip()
+
+
+def test_init_seeds_the_password_fingerprint_key_once(tmp_path: Path) -> None:
+    from examples.console.settings import load_settings, seed_secrets, write_config
+
+    loaded = load_settings(write_config(tmp_path, PORTS))
+    name = loaded.config.passwords.fingerprint_key_secret
+    assert name is not None
+    assert loaded.config.passwords.fingerprint_available
+    assert loaded.secrets.get(name) is None
+    seed_secrets(loaded)
+    first = loaded.secrets.get(name)
+    assert first
+    seed_secrets(loaded)
+    assert loaded.secrets.get(name) == first

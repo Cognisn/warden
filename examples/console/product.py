@@ -20,6 +20,7 @@ USERS_MANAGE = "users.manage"
 KEYS_MANAGE = "keys.manage"
 SSO_MANAGE = "sso.manage"
 POLICY_MANAGE = "policy.manage"
+PASSWORDS_MANAGE = "passwords.manage"
 AUDIT_READ = "audit.read"
 AUDIT_EXPORT = "audit.export"
 SYSLOG_MANAGE = "syslog.manage"
@@ -32,6 +33,7 @@ PERMISSIONS = {
     KEYS_MANAGE: "Manage API keys",
     SSO_MANAGE: "Manage single sign-on",
     POLICY_MANAGE: "Manage the session policy",
+    PASSWORDS_MANAGE: "Manage password policies, watch lists and the exposure report",
     AUDIT_READ: "Read and verify the audit trail",
     AUDIT_EXPORT: "Export the audit trail",
     SYSLOG_MANAGE: "See syslog forwarding and send a test message",

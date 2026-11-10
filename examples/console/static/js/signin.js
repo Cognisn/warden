@@ -2,6 +2,7 @@
 
 import { adopt, call, me, prefixes, refresh, sessionTimes, signOut, signedIn } from "./api.js";
 import { action, card, field, form, h, input, json, outcome, recoveryCodes, status, table, when } from "./dom.js";
+import { livePassword, refusal } from "./checklist.js";
 import { gap } from "./gaps.js";
 import { conditionalAvailable, create, described, get, supported } from "./webauthn.js";
 
@@ -11,6 +12,68 @@ const SSO_FAILED = "Single sign-on did not complete. Try again, or contact your 
 
 function go(hash) {
   window.location.hash = hash;
+}
+
+// What the sign-in last used, for the password rules that compare a password
+// with the user's email, and where a forced change draws itself.
+let signInEmail = "";
+let signInArea = null;
+// Days left when warden warned at sign-in (``password_expires_in_days``), until
+// the password is changed. Held in memory like the tokens.
+let expiryDays = null;
+
+function adoptSession(body) {
+  adopt(body);
+  expiryDays = typeof body.password_expires_in_days === "number" ? body.password_expires_in_days : null;
+}
+
+// Why warden asks for a change (``reason`` on password_change_required), plainly.
+function changeReason(reason, watchListReason) {
+  switch (reason) {
+    case "expired":
+      return "Your password has reached the end of its change period.";
+    case "watch_list":
+      return `Your password is on a watch list${watchListReason ? `: ${watchListReason}` : ""}.`;
+    case "administrator":
+      return "An administrator has asked you to change your password.";
+    case "policy":
+      return "Your password no longer meets your password policy.";
+    default:
+      return "You must change your password before you can sign in.";
+  }
+}
+
+// password_change_required: no session yet. The challenge is single use and
+// the new password is checked live exactly as at any other set point.
+function forcedChange({ challenge, reason, watch_list_reason: watchListReason }, area = signInArea) {
+  const checklist = livePassword({
+    user: () => ({ email: signInEmail }),
+    load: async () => {
+      const { auth } = await prefixes();
+      return call("POST", `${auth}/password-change/policy`, { body: { challenge }, anonymous: true });
+    },
+    check: async (password) => {
+      const { auth } = await prefixes();
+      return call("POST", `${auth}/password-change/check`, { body: { challenge, password }, anonymous: true });
+    },
+  });
+  const change = form("stack", [checklist, h("button", {}, "Change password and sign in")], async ({ new_password: password }) => {
+    const { auth } = await prefixes();
+    const answer = await call("POST", `${auth}/password-change`, { body: { challenge, new_password: password }, anonymous: true });
+    if (!answer.ok) return answer.status === 400 ? refusal(answer) : outcome(answer);
+    adoptSession(answer.data);
+    go("#/account");
+    return null;
+  });
+  area.replaceChildren(
+    card(
+      "Change your password",
+      status("info", changeReason(reason, watchListReason)),
+      h("p", { class: "muted" }, "Sign-in finishes when the new password is accepted. Your other sessions end."),
+      change,
+    ),
+  );
+  return status("info", `Password accepted, but it must change first (${reason}).`);
 }
 
 // The browser's own prompt, with its errors put plainly.
@@ -25,11 +88,12 @@ async function prompt(run) {
 // After a password: tokens, or a second-factor challenge, or enrolment under a challenge.
 function afterPassword(body, area) {
   if (body.status === "signed_in") {
-    adopt(body);
+    adoptSession(body);
     go("#/account");
     return null;
   }
   if (body.status === "mfa_required") return secondFactorStep(body, area);
+  if (body.status === "password_change_required") return forcedChange(body, area);
   return forcedEnrolment(body.challenge, area);
 }
 
@@ -38,11 +102,10 @@ function afterPassword(body, area) {
 // always accepted.
 function secondFactorStep({ challenge, methods }, area) {
   const held = methods || ["totp"];
+  // After the second factor: a session, or (when a change is due) the change.
   const done = (answer) => {
     if (!answer.ok) return outcome(answer);
-    adopt(answer.data);
-    go("#/account");
-    return null;
+    return afterPassword(answer.data, area);
   };
   const keyArea = h("div", {});
   const byKey = h(
@@ -119,7 +182,8 @@ function enrolStep(under, area) {
         anonymous: Boolean(under.challenge),
       });
       if (!answer.ok) return outcome(answer);
-      if (answer.data.access_token) adopt(answer.data);
+      if (answer.data.status === "password_change_required") return forcedChange(answer.data);
+      if (answer.data.access_token) adoptSession(answer.data);
       return h(
         "div",
         {},
@@ -158,7 +222,8 @@ function keyRegistration(under, after = async () => {}) {
       if (anonymous) body.challenge = under.challenge;
       const answer = await call("POST", `${auth}/webauthn/registration/confirm`, { body, anonymous });
       if (!answer.ok) return outcome(answer);
-      if (answer.data.access_token) adopt(answer.data);
+      if (answer.data.status === "password_change_required") return forcedChange(answer.data);
+      if (answer.data.access_token) adoptSession(answer.data);
       await after();
       return h(
         "div",
@@ -244,6 +309,8 @@ export async function signInScreen(main) {
     async ({ email, password }) => {
       const answer = await call("POST", `${auth}/sign-in`, { body: { email, password }, anonymous: true });
       if (!answer.ok) return outcome(answer);
+      signInEmail = email;
+      signInArea = next;
       stopAutofill();
       return afterPassword(answer.data, next);
     },
@@ -311,7 +378,7 @@ export async function ssoLanding(main) {
     main.replaceChildren(h("h2", {}, "Single sign-on"), status("error", SSO_FAILED), outcome(answer));
     return;
   }
-  adopt(answer.data);
+  adoptSession(answer.data);
   // Same document, so the tokens in memory survive: no navigation, no reload.
   window.history.replaceState(null, "", "/#/account");
   window.dispatchEvent(new HashChangeEvent("hashchange"));
@@ -402,13 +469,28 @@ export async function accountScreen(main) {
     "stack",
     [
       field("Current password", input("current_password", { type: "password", autocomplete: "current-password", required: true })),
-      field("New password", input("new_password", { type: "password", autocomplete: "new-password", required: true })),
+      livePassword({
+        user: () => ({ email: who.email }),
+        load: () => call("GET", `${auth}/password/policy`),
+        check: (password) => call("POST", `${auth}/password/check`, { body: { password } }),
+      }),
       h("button", {}, "Change password"),
     ],
-    async (values) => outcome(await call("POST", `${auth}/password`, { body: values }), "password changed"),
+    async (values) => {
+      const answer = await call("POST", `${auth}/password`, { body: values });
+      if (!answer.ok) return answer.status === 400 && answer.data && answer.data.failures ? refusal(answer) : outcome(answer);
+      expiryDays = null;
+      return outcome(answer, "password changed");
+    },
   );
   main.replaceChildren(
     h("h2", {}, "Account"),
+    expiryDays === null
+      ? null
+      : status(
+          "info",
+          `Your password expires in ${expiryDays === 1 ? "1 day" : `${expiryDays} days`}. Change it under Change password below; after that warden will ask for a change at sign-in.`,
+        ),
     card(
       "Signed in",
       json(who),
@@ -431,6 +513,6 @@ export async function accountScreen(main) {
       enrolArea,
       h("p", { class: "muted" }, "Lost every second factor and your recovery codes? An administrator can reset them (Users, Manage, Reset second factors), and you set one up again at your next sign-in; a passkey-only account gets a registration link instead. Replacing your own recovery codes is planned for warden 0.2.0."),
     ),
-    card("Change password", passwordForm),
+    card("Change password", h("p", { class: "muted" }, "The checklist follows the password policy that applies to you; the administration screens show why."), passwordForm),
   );
 }

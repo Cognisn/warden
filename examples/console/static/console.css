@@ -97,3 +97,19 @@ pre { background: var(--wash); padding: 0.6rem; overflow-x: auto; white-space: p
 .codes { columns: 2; font-family: ui-monospace, Consolas, monospace; }
 .muted { color: var(--muted); font-size: 0.85rem; }
 .hidden { display: none; }
+
+/* Password checklist and policy screens */
+.live-password { display: grid; gap: 0.4rem; }
+.checklist { display: grid; gap: 0.3rem; }
+ul.rules { list-style: none; margin: 0.2rem 0; padding: 0; display: grid; gap: 0.15rem; font-size: 0.88rem; }
+li.rule .mark { font-weight: 600; }
+li.rule.met { color: var(--good); }
+li.rule.unmet { color: var(--bad); }
+li.rule.pending { color: var(--muted); }
+.good { color: var(--good); font-size: 0.85rem; margin: 0; }
+.watch { min-height: 1.4rem; }
+form.wide { max-width: 52rem; }
+fieldset { border: 1px solid var(--line); border-radius: 4px; display: grid; gap: 0.4rem; margin: 0; padding: 0.5rem 0.8rem; }
+legend { font-size: 0.85rem; font-weight: 600; color: var(--muted); }
+.tier-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; padding: 0.3rem 0; border-bottom: 1px dashed var(--line); }
+.actions-row, .inline-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.3rem 0; }

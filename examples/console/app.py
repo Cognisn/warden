@@ -16,6 +16,7 @@ Read top to bottom, ``build_console`` is the integration a product writes:
 from __future__ import annotations
 
 import mimetypes
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 
 from examples.console import product
 from examples.console.console_routes import console_router
+from examples.console.devclock import DevClock
 from examples.console.notes import Notes, NoteScope, notes_router
 from examples.console.outbox import Outbox
 from examples.console.security import SecurityHeaders, content_security_policy
@@ -69,6 +71,7 @@ class Console:
     outbox: Outbox
     notes: Notes
     forwarder: SyslogForwarder | None
+    dev_clock: DevClock | None = None
 
 
 def actor(permission: str) -> Callable[[Request], Awaitable[str]]:
@@ -94,6 +97,7 @@ def build_console(
     *,
     hasher: PasswordHasher | None = None,
     send_mail: bool = True,
+    dev_clock: DevClock | None = None,
 ) -> Console:
     """Build the console over the product's open pool and konfig's secrets store.
 
@@ -101,6 +105,10 @@ def build_console(
     product without mail would (``serve --without-mail``): warden's capability
     routes then say invitations and links cannot be mailed, and the screens
     disable those actions and explain why. The outbox stays, empty.
+
+    ``dev_clock`` is the sample's development clock (``serve --dev-clock``):
+    handed to ``Identity`` as its ``clock``, it lets the console move time
+    forward to walk password expiry without waiting. A product passes none.
     """
     db = Database(pool)
 
@@ -122,6 +130,7 @@ def build_console(
         hasher=hasher,
         resource_scope=NoteScope(notes),
         mail_sender=outbox if send_mail else None,
+        clock=time.time if dev_clock is None else dev_clock,
     )
 
     forwarder: SyslogForwarder | None = None
@@ -148,7 +157,11 @@ def build_console(
     app.include_router(identity.sso_router(), prefix=http.auth_prefix)
     app.include_router(identity.lifecycle_router(), prefix=http.auth_prefix)
     app.include_router(
-        identity.admin_router(permission=product.USERS_MANAGE, api_keys=product.KEYS_MANAGE),
+        identity.admin_router(
+            permission=product.USERS_MANAGE,
+            api_keys=product.KEYS_MANAGE,
+            password_policies=product.PASSWORDS_MANAGE,
+        ),
         prefix=http.admin_prefix,
     )
     app.include_router(
@@ -172,7 +185,9 @@ def build_console(
     app.include_router(keys_router(keys=keys), prefix=http.keys_prefix)
 
     app.include_router(notes_router(notes), prefix="/api")
-    app.include_router(console_router(identity, outbox, recorder, keys, forwarder), prefix="/api")
+    app.include_router(
+        console_router(identity, outbox, recorder, keys, forwarder, dev_clock), prefix="/api"
+    )
     _mount_pages(app)
 
     app.add_middleware(SecurityHeaders, policy=content_security_policy(config.sso.issuer_url))
@@ -185,6 +200,7 @@ def build_console(
         outbox=outbox,
         notes=notes,
         forwarder=forwarder,
+        dev_clock=dev_clock,
     )
 
 
