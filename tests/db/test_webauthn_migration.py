@@ -218,6 +218,7 @@ def test_passkey_only_and_the_passkey_registration_token_are_allowed(migrated_ds
 
 def test_downgrade_removes_the_tables_and_narrows_both_checks(migrated_dsn: str) -> None:
     revision, parent = _revisions()
+    at_head = _tables(migrated_dsn)
     # Later migrations may sit above this one; take them off first.
     downgrade(migrated_dsn, revision)
     tables = _tables(migrated_dsn)
@@ -239,7 +240,7 @@ def test_downgrade_removes_the_tables_and_narrows_both_checks(migrated_dsn: str)
 
     migrate(migrated_dsn)
     assert current_revision(migrated_dsn) == heads()[0]
-    assert _tables(migrated_dsn) == tables
+    assert _tables(migrated_dsn) == at_head
     with psycopg.connect(migrated_dsn) as conn:
         _user(conn, "passkey_only")
 

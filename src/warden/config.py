@@ -53,6 +53,7 @@ __all__ = [
     "IdentityConfig",
     "KeysConfig",
     "MailConfig",
+    "PasswordsConfig",
     "SecretSource",
     "SettingsSource",
     "SsoConfig",
@@ -336,6 +337,9 @@ class IdentityConfig(_Section):
     reset_ttl_seconds: int = Field(default=3600, ge=300, le=86_400)
     require_mfa: bool = True
     password_min_length: int = Field(default=12, ge=8, le=1024)
+    """Seeds the default password policy's minimum length (ruling PW2) when a
+    deployment has none. Once a default policy is stored, the stored value
+    governs and changing this setting no longer changes it."""
 
     totp_issuer: str | None = Field(default=None, min_length=1, max_length=64)
     """Issuer shown in authenticator apps; None uses the host of ``http.public_base_url``."""
@@ -628,6 +632,76 @@ class HttpConfig(_Section):
         return self.url_for(filled) if filled.startswith("/") else filled
 
 
+# The public Pwned Passwords range endpoint (k-anonymity: only five hex
+# characters of a SHA-1 are ever sent).
+DEFAULT_HIBP_RANGE_URL = "https://api.pwnedpasswords.com/range/"
+_USER_AGENT = re.compile(r"[ -~]{1,128}")
+
+
+class PasswordsConfig(_Section):
+    """Password policies: the fingerprint key and the breached-password range API.
+
+    Password policies themselves are stored and managed at run time (rulings
+    PW1 and PW2); ``identity.password_min_length`` seeds the default policy.
+    Nothing here makes a request: the range API is called only for a policy
+    that enables it (ruling PW7).
+    """
+
+    fingerprint_key_secret: str | None = None
+    """Name of the konfig secret holding the key that seals password
+    fingerprints (ruling PW8). Unset, no policy may enable the fingerprint."""
+    fingerprint_previous_key_secret: str | None = None
+    """Name of the konfig secret holding the previous fingerprint key while
+    rotating; fingerprints sealed with it still open and are re-sealed."""
+    hibp_range_url: str = DEFAULT_HIBP_RANGE_URL
+    """Base URL of the Pwned Passwords range API; the five-character prefix is
+    appended. Any https URL, so a self-hosted mirror can be used."""
+    hibp_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
+    """How long one range request may take before it counts as unavailable."""
+    hibp_padding: bool = True
+    """Ask the range API to pad its answers, so their size reveals nothing."""
+    hibp_user_agent: str = "cognisn-warden"
+    """User agent sent with each range request."""
+
+    @field_validator("fingerprint_key_secret", "fingerprint_previous_key_secret")
+    @classmethod
+    def _secret_names(cls, value: str | None) -> str | None:
+        return _check_secret_name(value)
+
+    @field_validator("hibp_range_url")
+    @classmethod
+    def _range_url_shape(cls, value: str) -> str:
+        checked = _check_url(value)
+        if not checked.startswith("https://"):
+            raise ValueError("must use https")
+        return checked
+
+    @field_validator("hibp_user_agent")
+    @classmethod
+    def _user_agent_shape(cls, value: str) -> str:
+        if _USER_AGENT.fullmatch(value) is None:
+            raise ValueError("must be 1 to 128 printable characters")
+        return value
+
+    @model_validator(mode="after")
+    def _keys_consistent(self) -> Self:
+        previous = self.fingerprint_previous_key_secret
+        if previous is not None and self.fingerprint_key_secret is None:
+            raise _FieldProblems(
+                [(("fingerprint_previous_key_secret",), "requires fingerprint_key_secret")]
+            )
+        if previous is not None and previous == self.fingerprint_key_secret:
+            raise _FieldProblems(
+                [(("fingerprint_previous_key_secret",), "must differ from fingerprint_key_secret")]
+            )
+        return self
+
+    @property
+    def fingerprint_available(self) -> bool:
+        """Whether a policy may enable the sealed fingerprint (ruling PW8)."""
+        return self.fingerprint_key_secret is not None
+
+
 def _is_domain(host: str) -> bool:
     """A lower-case DNS name, or ``localhost``; never an IP address."""
     return host == "localhost" or (len(host) <= 253 and _DOMAIN.fullmatch(host) is not None)
@@ -792,6 +866,7 @@ class WardenConfig(_Section):
     sso: SsoConfig = SsoConfig()
     mail: MailConfig = MailConfig()
     webauthn: WebAuthnConfig = WebAuthnConfig()
+    passwords: PasswordsConfig = PasswordsConfig()
 
     @model_validator(mode="after")
     def _cross_section(self) -> Self:
@@ -814,6 +889,10 @@ class WardenConfig(_Section):
             for name in ("host", "port"):
                 if getattr(self.syslog, name) is None:
                     problems.append((("syslog", name), "is required while syslog is enabled"))
+        identity_keys = {self.identity.totp_key_secret, self.identity.totp_previous_key_secret}
+        for name in ("fingerprint_key_secret", "fingerprint_previous_key_secret"):
+            if getattr(self.passwords, name) in identity_keys:
+                problems.append((("passwords", name), "must differ from the TOTP key names"))
         for path, reason in self.webauthn._relying_party_problems(self.http):
             problems.append((("webauthn", *path), reason))
         if problems:

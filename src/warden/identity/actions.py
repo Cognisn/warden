@@ -5,7 +5,99 @@ from __future__ import annotations
 from warden.audit import ActionRegistry, Severity
 from warden.audit.registry import register_warden_action
 
-__all__ = ["IDENTITY_ACTIONS", "register_actions"]
+__all__ = ["IDENTITY_ACTIONS", "PASSWORD_ACTIONS", "register_actions"]
+
+# Password policies and watch lists (rulings PW0 to PW14 of 10 November 2026),
+# registered in full by wave 16 so later workstreams never edit this module.
+# Details carry identifiers, rule codes and counts only: never a password, a
+# hash, a hash prefix or a fingerprint.
+PASSWORD_ACTIONS: tuple[tuple[str, Severity, str], ...] = (
+    (
+        "warden.identity.password_policy.created",
+        Severity.NOTICE,
+        "{actor} created password policy {resource_id}",
+    ),
+    (
+        "warden.identity.password_policy.updated",
+        Severity.NOTICE,
+        "{actor} changed password policy {resource_id}",
+    ),
+    (
+        "warden.identity.password_policy.deleted",
+        Severity.NOTICE,
+        "{actor} deleted password policy {resource_id}",
+    ),
+    (
+        "warden.identity.password_policy.assigned",
+        Severity.NOTICE,
+        "{actor} changed the password policy of role {resource_id}",
+    ),
+    (
+        "warden.identity.password_policy.pinned",
+        Severity.NOTICE,
+        "{actor} pinned a password policy on user {resource_id}",
+    ),
+    (
+        "warden.identity.password_policy.unpinned",
+        Severity.NOTICE,
+        "{actor} removed the pinned password policy of user {resource_id}",
+    ),
+    (
+        "warden.identity.watch_list.created",
+        Severity.NOTICE,
+        "{actor} created watch list {resource_id}",
+    ),
+    (
+        "warden.identity.watch_list.updated",
+        Severity.NOTICE,
+        "{actor} changed watch list {resource_id}",
+    ),
+    (
+        "warden.identity.watch_list.deleted",
+        Severity.NOTICE,
+        "{actor} deleted watch list {resource_id}",
+    ),
+    (
+        "warden.identity.watch_list.imported",
+        Severity.NOTICE,
+        "{actor} imported watch list {resource_id}: {outcome}",
+    ),
+    (
+        "warden.identity.watch_list.entries_changed",
+        Severity.NOTICE,
+        "{actor} changed the entries of watch list {resource_id}",
+    ),
+    (
+        "warden.identity.password.change_required",
+        Severity.WARNING,
+        "user {resource_id} must change their password",
+    ),
+    (
+        "warden.identity.password.change_completed",
+        Severity.NOTICE,
+        "user {resource_id} completed a required password change: {outcome}",
+    ),
+    (
+        "warden.identity.password.rejected",
+        Severity.INFO,
+        "a new password for user {resource_id} was refused",
+    ),
+    (
+        "warden.identity.password.expired",
+        Severity.NOTICE,
+        "the password of user {resource_id} expired",
+    ),
+    (
+        "warden.identity.password.recheck_completed",
+        Severity.NOTICE,
+        "{actor} rechecked passwords in use: {outcome}",
+    ),
+    (
+        "warden.identity.password.watch_list_unavailable",
+        Severity.WARNING,
+        "the breached-password range service was unavailable: {outcome}",
+    ),
+)
 
 IDENTITY_ACTIONS: tuple[tuple[str, Severity, str], ...] = (
     ("warden.identity.sign_in", Severity.NOTICE, "sign-in by {actor}: {outcome}"),
@@ -75,6 +167,7 @@ IDENTITY_ACTIONS: tuple[tuple[str, Severity, str], ...] = (
         "{actor} revoked a role from user {resource_id}: {outcome}",
     ),
     ("warden.identity.policy.changed", Severity.NOTICE, "{actor} changed the session policy"),
+    *PASSWORD_ACTIONS,
 )
 
 
