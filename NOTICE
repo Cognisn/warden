@@ -4,3 +4,9 @@ Copyright 2026 Cognisn Pty Ltd (ACN 701 483 785)
 This product includes software developed by Cognisn Pty Ltd.
 
 Licensed under the Apache License, Version 2.0. See the LICENSE file.
+
+This product includes data derived from SecLists by Daniel Miessler and
+contributors (https://github.com/danielmiessler/SecLists), used under the MIT
+licence: the SHA-1 digests of the 100,000 most common passwords in
+src/warden/identity/password_policy/data/common-passwords.sha1.gz. Its source,
+commit and licence text are in the README beside that file.

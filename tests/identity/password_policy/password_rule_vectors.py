@@ -77,6 +77,9 @@ POLICIES: dict[str, PasswordRules] = {
 
 JANE = {"email": "jane.citizen@example.com", "display_name": "Jane Q Citizen"}
 RENEE = {"email": "zoe@example.org", "display_name": "Ren\u00e9e Okafor"}
+# A digit inside a piece: a client whose pieces are letters only drops these.
+SAM = {"email": "sam.x7k2@example.com", "display_name": "Sam Citizen"}
+ROBO = {"email": "unit@example.net", "display_name": "Robo r2d2x Unit"}
 
 # (name, policy, password, user)
 CASES: list[tuple[str, str, str, dict[str, str] | None]] = [
@@ -120,6 +123,10 @@ CASES: list[tuple[str, str, str, dict[str, str] | None]] = [
     ("details: the domain is not checked", "details", "example.com rocks", JANE),
     ("details: accent normalised", "details", "hi rene\u0301e okay", RENEE),
     ("details: no user details given", "details", "jane.citizen", None),
+    ("details: a digit inside an email piece, refused", "details", "my x7k2 secret", SAM),
+    ("details: a digit inside an email piece, allowed", "details", "my x7 k2 secret", SAM),
+    ("details: a digit inside a name word, refused", "details", "plan r2d2x now", ROBO),
+    ("details: a digit inside a name word, allowed", "details", "plan r2 d2x now", ROBO),
     ("passphrase: four words, long enough", "passphrase", "correct horse battery staple", None),
     ("passphrase: separators mix", "passphrase", "correct-horse.battery_staple", None),
     ("passphrase: three words", "passphrase", "correct horse batterystaple", None),
