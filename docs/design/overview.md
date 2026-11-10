@@ -1,7 +1,7 @@
 # warden: Design Overview
 
 **Status:** Design agreed; implementation in progress (0.1.0 pre-releases).
-**Last updated:** 7 November 2026
+**Last updated:** 10 November 2026
 
 This is the design document the code is built against. Decisions recorded here are standing; see `CLAUDE.md` for how they are changed.
 
@@ -33,6 +33,7 @@ It is written from scratch. The design draws on the identity and audit implement
 | D16 | Database | warden's tables live in a dedicated `warden` Postgres schema with its own Alembic chain and version table (`warden.alembic_version`), applied by `warden migrate` or a single call from the product's migration step. At runtime the product passes in its existing psycopg 3 async pool, so a product write and its audit event can share a transaction. |
 | D17 | Python | Python 3.12 or later. Python 3.10 reached end of life in October 2026, and 3.12 is what VOR targets and what Termograph's CI already tests against. |
 | D18 | WebAuthn | Passkeys and security keys (WebAuthn) are added to 0.1.0 as additive scope. They serve as a second factor beside TOTP and, for discoverable credentials registered with user verification, as a sign-in on their own, with a `passkey_only` sign-in method. The relying party defaults to the host of the public base URL and every allowed origin is compared exactly. Registration accepts any authenticator unless trusted attestation roots are configured, in which case only chains to a root register (synced passkeys then do not); warden never fetches attestation metadata. User verification is preferred for a second factor and required for a passkey. Each challenge is single-use and consumed by one guarded write, a signature counter that does not increase is refused as a suspected clone, and every refusal is the uniform refusal with its reason in the audit trail only. An administrator's reset of every second factor, and an emailed single-use link, recover a user who has lost their passkeys. Built on `fido2`'s data types and attestation verifiers, with every ceremony check written in warden; no device code is loaded. |
+| D19 | Password policies | Password policies, watch lists and live feedback join 0.1.0 as additive scope (rulings PW0 to PW14 of 10 November 2026). **Model.** Policies live in the `warden` schema and are managed at run time through administration routes behind a permission. A user's policy is, in order, a pin on the user, the highest-priority policy mapped from a role the product still declares, or the one default policy, which is seeded to reproduce 0.1.0b18 (the minimum length from `identity.password_min_length`, no class rule, no expiry, no history) and adds the built-in common-password list. Rules are fixed and deterministic: length in Unicode code points after NFC, a required count of character classes, the longest run of one character, whether the email local part or display name may appear, and a passphrase (length and word count) that may waive the class rule. Ordered tiers, strongest first, give each password a maximum age or none. The rules are published as a versioned JSON description that a browser evaluates, `docs/contract/password-rule-vectors.json` holds 59 test cases a client uses to prove it agrees, and the server stays the authority. One path, `PasswordEnforcement`, applies the policy at every place a password is set and at password sign-in. **Storage.** History keeps Argon2id hashes only, never a faster hash, checked by a real Argon2id verification off the event loop and only when a password is submitted, never by the live check route. No column holds a password, its length or makeup, an unsealed digest or a hash prefix. A policy may enable a sealed fingerprint: the SHA-1 of the password, sealed with AES-256-GCM under a konfig key (current and previous, rotating like the TOTP keys) and bound to the user's id, so that `warden passwords recheck` can compare passwords in use with lists that changed later. The trade-off is accepted and stated: anyone holding both the database and the key can recover a fast hash of each fingerprinted password. It is off in the seeded default. **Watch lists.** The built-in list (about 100,000 SHA-1 digests from SecLists, MIT) is on in the default; local lists hold exact passwords (SHA-1), imports in Have I Been Pwned's downloader format with a threshold, and contained terms, each with the reason a user is shown. The Pwned Passwords range API (k-anonymity: five hex characters are sent, answers are padded, the base URL is configurable for a self-hosted mirror) is the only third-party request warden makes on a user's behalf, is made only for a policy that enables it, and is off in the default. When it cannot answer, the policy chooses to allow (audited) or refuse, and it never stops a sign-in. **Forced change.** After a correct password and the second factor, a required change (reason `expired`, `watch_list`, `administrator` or `policy`) answers `password_change_required` with a short-lived, single-use challenge in place of a session, and the new password is accepted only against that challenge. Passkey and single sign-on sign-ins are never blocked by a password's state. **NIST SP 800-63B-4.** The default follows section 3.1.1.2: length over composition, a blocklist with the reason given, and change on evidence of compromise. Scheduled change (tiers with a maximum age), class rules and the substring-based rules (terms, user details, repeat) depart from it; each is a setting that is off in the default, so an operator departs knowingly. |
 
 ## 3. Scope
 
@@ -51,6 +52,12 @@ It is written from scratch. The design draws on the identity and audit implement
   - optional trusted attestation roots, a per-user credential limit, a signature-counter clone check, and a configured relying party and allowed origins
 - Invitations: single-use, expiring, hashed tokens carrying staged role grants, with resend and revoke, and password and SSO acceptance variants.
 - Password reset by emailed link, change password, and refusal paths for SSO-only accounts.
+- Password policies, watch lists and live feedback (D19):
+  - policies chosen by pin, role priority or the default, with rules, passphrases, change-period tiers, history and a minimum age, managed at run time
+  - the built-in common-password list, local watch lists (exact passwords, imports in HIBP's downloader format with a threshold, contained terms) and an optional Pwned Passwords range lookup
+  - one enforcement path at every place a password is set and at password sign-in, with the forced change (`password_change_required`) after the second factor and an expiry warning on `signed_in`
+  - live feedback for a signed-in change, an invitation, a reset link and the forced change: a policy description a browser evaluates, a check route, and a file of rule test cases
+  - an optional sealed fingerprint, `warden passwords recheck` and `warden passwords import`, and an exposure report
 - OIDC single sign-on:
   - one identity provider per deployment
   - authorisation code with PKCE (S256)
@@ -126,6 +133,11 @@ src/warden/
     service.py         Identity: the object a product constructs and mounts
     users.py           user model, statuses, sign-in methods, listing
     passwords.py       Argon2id, legacy PBKDF2 verify, rehash on sign-in
+    password_enforcement.py  one path for every place a password is set, the
+                       sign-in assessment, the forced change and live feedback
+    password_policy/   policies and their store, rule engine, watch lists, history,
+                       state, forced-change challenges, sealed fingerprints, range
+                       client, recheck, and data/ (the built-in list and its README)
     totp.py, mfa.py    TOTP with step replay guard, recovery codes, challenges
     webauthn/          passkeys and security keys: registration and sign-in
                        ceremonies, single-use challenges, credential store,
@@ -143,7 +155,8 @@ src/warden/
     dependencies.py    require_user, require_permission, resource hook
     sso/               discovery, JWKS, PKCE client, id_token validation,
                        matching and pinning, settings, label-only presets
-    routers/           sign-in, WebAuthn, lifecycle, administration and SSO routes
+    routers/           sign-in, WebAuthn, lifecycle, administration, password
+                       policy administration and SSO routes
 ```
 
 ## 5. Acceptance tests
@@ -179,6 +192,12 @@ Each behaviour below is written as a failing test before the code that satisfies
 | WebAuthn: sign-in methods | A `passkey_only` user's password sign-in is byte-identical to a wrong password's, and a user holding keys cannot be switched to `sso_only`. |
 | WebAuthn: no credential material | No public key, signature, client data, attestation or challenge reaches a log or an exception. |
 | WebAuthn: no device access | Importing warden loads no `fido2` device code. |
+| Password policies: no password material | No password, hash, digest, digest prefix, fingerprint or challenge reaches a log, an audit record or an exception; no column holds a password, its length or makeup; history holds Argon2id hashes only; the only other stored form is the optional sealed fingerprint. |
+| Password policies: second factor first | A caller holding only the password gets `mfa_required` and learns nothing of the password's state; `password_change_required` comes only after the second factor, and the second factor's challenge cannot change the password. |
+| Password policies: single use | A forced-change challenge is consumed by one guarded write, even under concurrent requests; a refused password costs it an attempt; a user suspended meanwhile gets nothing. |
+| Password policies: history | History is checked only when a password is submitted, by a real Argon2id verification; the live check route never checks it. |
+| Password policies: uniform refusal | A wrong password, a flagged user's wrong password and a dead reset or invitation link get the uniform refusal, with timing unchanged by the password's state. |
+| Password policies: client agreement | Every case in `docs/contract/password-rule-vectors.json` agrees with the rule engine and with the check route, and the file is exactly what the engine generates. |
 | Syslog review | No audit value can inject a second syslog frame under LF framing. |
 | Single writer | No module other than the audit recorder inserts into the audit table. |
 | Independence | `warden.audit` imports nothing from `warden.identity`. |
@@ -194,6 +213,7 @@ Each behaviour below is written as a failing test before the code that satisfies
 | M4 Lifecycle | Invitations, password reset, mail protocol and templates, administration routes, API keys, pruning. | #127, #128, #129, #134 and #154 green. |
 | M5 Single sign-on | OIDC client, discovery and JWKS caching, account matching, settings and test-configuration routes. | Live round trip against a stub identity provider, including break-glass sign-in with the provider stopped. |
 | M6a WebAuthn | Passkeys and security keys (D18): core ceremonies and store, a second factor and the administrator's reset, passkey sign-in, `passkey_only`, the registration link and passkey invitations, then the guide, the sample console's screens and live checks against real authenticator behaviour. | The WebAuthn acceptance tests in section 5 green; the guide's routes tied to the contract. |
+| M6b Password policies | Policy core and schema (D19), enforcement at every set point and at sign-in with the forced change and live feedback, administration routes, the exposure report and the `warden passwords` commands, then this design record, the client guide's section 18 and the sample console's screens. | The password policy acceptance tests in section 5 green; the guide's routes tied to the contract; a live check of the range API against the real service. |
 | M6 Contract and release | OpenAPI contract ([`docs/contract/openapi.json`](../contract/openapi.json), exported by `scripts/export_openapi.py`), client-behaviour guide ([`docs/guide/clients.md`](../guide/clients.md)), examples, `0.1.0` release candidate. | A consuming product integrates on a feature branch; contract reviewed. |
 
 ## 7. Adoption
@@ -225,6 +245,7 @@ Each behaviour below is written as a failing test before the code that satisfies
 | Refused sign-in identifier | A refused sign-in records the typed identifier only when it is shaped like an email address, so a password typed into the wrong field is never recorded. |
 | Licence policy for dependencies | No strong copyleft (GPL, AGPL, SSPL, EUPL, OSL) in runtime dependencies. Weak copyleft (LGPL, MPL) only as a named, reviewed exception for an unmodified, separately installed package: psycopg (LGPL-3.0), certifi (MPL-2.0) and fido2 (its own licence is BSD-2-Clause, but it bundles the Mozilla public suffix list, MPL-2.0, which the relying-party checks read). Enforced by `scripts/licence_audit.py`. |
 | WebAuthn dependency | `fido2` (Yubico), for WebAuthn data types, COSE keys, public suffix rules and attestation verifiers only; a tripwire checks that importing warden loads no `fido2` device code. Agreed 6 November 2026. |
+| Built-in common-password list licence (D19) | A named data exception in `scripts/licence_audit.py`, not a dependency: `src/warden/identity/password_policy/data/common-passwords.sha1.gz` holds SHA-1 digests of SecLists' `xato-net-10-million-passwords-100000.txt` (MIT licence), with a README beside it recording the source commit, checksums, how to rebuild it and the licence text. The audit fails if the file or its README is missing or the licence is not permissive. Agreed 10 November 2026 (Skuld question 33). |
 | WebAuthn attestation metadata | Not fetched. Attestation is verified only against roots the product configures (D18). |
 
 ## References
@@ -238,3 +259,8 @@ Each behaviour below is written as a failing test before the code that satisfies
 - RFC 8176, Authentication Method Reference Values: <https://www.rfc-editor.org/rfc/rfc8176>
 - IANA Private Enterprise Numbers: <https://pen.iana.org>
 - OWASP Password Storage Cheat Sheet: <https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html>
+- NIST SP 800-63B-4, Digital Identity Guidelines: Authentication and Authenticator Management, section 3.1.1.2, Password Verifiers: <https://pages.nist.gov/800-63-4/sp800-63b/authenticators/>
+- Pwned Passwords API, range searches (k-anonymity): <https://haveibeenpwned.com/API/v3#PwnedPasswords>
+- Pwned Passwords downloader: <https://github.com/HaveIBeenPwned/PwnedPasswordsDownloader>
+- SecLists, Daniel Miessler and contributors (MIT licence): <https://github.com/danielmiessler/SecLists>
+- Unicode Standard Annex 15, Unicode Normalization Forms (NFC): <https://unicode.org/reports/tr15/>

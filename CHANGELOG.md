@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Documentation for password policies, watch lists and live feedback (rulings PW0 to PW14), checked against the code and tests. The client guide's section 18 replaces its interim route list with the full guide: how a user's policy is chosen (pin, role priority, default); the rules, passphrases and tiers; the policy description's JSON shape, evaluating it in the browser and the rule test-case file that proves a client agrees; live feedback for the four places, with debouncing, the throttle budgets and history checked only on submit; the failure codes and messages; `password_change_required` (reasons, the challenge, second factor first, completing the change, the expiry warning, passkey and single sign-on sign-ins not blocked); watch lists (the built-in list, local lists and terms, importing the Have I Been Pwned downloader format with a threshold and the sizes to expect, the range API with padding, a self-hosted mirror and the on-unavailable setting); the sealed fingerprint, its key and rotation, the trade-off stated plainly, `warden passwords recheck` and scheduling it, and the exposure report; and NIST SP 800-63B-4 section 3.1.1.2, what the default follows and where scheduled change and class rules depart from it. It links every administration route. Sections 2, 3 and 7 of the guide now describe the policy refusal and the `password_change_required` answer in place of the old minimum-length refusal.
+- The design overview gains decision D19 (the policy model, Argon2id-only history, the optional sealed fingerprint and its trade-off, the range API as the only third-party request and only when enabled, and the 800-63B-4 departures as settings that are off in the default), the scope in section 3.1, the package layout, acceptance tests for the password guarantees, a delivery-plan row, the built-in list's licence as a named data exception, and references.
+- The README's feature list names password policies, watch lists and live feedback.
+
+### Changed
+
+- `tests/test_client_guide.py` no longer excludes any route: the guide links all of them, so the set of routes awaiting the guide, and its companion test, are removed.
+
 ## [0.1.0b21] - 2026-11-10
 
 Twenty-first beta: password policy and watch list administration routes, the exposure report, and the `warden passwords import` and `warden passwords recheck` commands. Nothing changes for a deployment until an administrator uses them.
