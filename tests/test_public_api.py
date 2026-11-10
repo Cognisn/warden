@@ -89,6 +89,7 @@ SNAPSHOT: dict[str, list[str]] = {
         "KeysConfig",
         "MIN_RETENTION_DAYS",
         "MailConfig",
+        "PasswordsConfig",
         "SecretSource",
         "SettingsSource",
         "SsoConfig",
