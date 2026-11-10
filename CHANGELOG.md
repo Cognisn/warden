@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b25] - 2026-11-11
+
+Twenty-fifth beta: the sample console explains password policies and watch lists, says the range API needs no key and that warden bundles its common-password list, and splits the manual watch list into Exact passwords and Terms panels. No library change.
+
 ### Added
 
 - Sample console (`examples/console`): guidance on the password screens, in ordinary page text. A how-to above the policy list covers creating a policy, mapping it to roles or pinning it to users, the affected-user count, priorities and the default. Each group of settings on the policy form is explained: length and kinds of character, passphrases, tiers and change periods, history and minimum age, user details, watch lists, the range API and its allow or refuse mode, the fingerprint, recheck and ending sessions, and enforcing at sign-in.
