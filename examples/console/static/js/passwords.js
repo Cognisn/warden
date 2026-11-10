@@ -19,6 +19,24 @@ function chosen(el, value) {
   return el;
 }
 
+// Help is ordinary page text, never a tooltip, so a keyboard or screen reader user
+// reads it as they would anything else. Each statement below was checked against
+// warden's code and the client guide (docs/guide/clients.md, section 18).
+function help(...parts) {
+  return h("p", { class: "help" }, ...parts);
+}
+
+function count(n) {
+  return Number.isFinite(n) ? n.toLocaleString("en-AU") : "";
+}
+
+// "about 100,000 common passwords" when the console could not read the list's size
+// (an older or unreadable settings answer); otherwise the size warden reports.
+function builtinSize(passwords) {
+  const n = passwords && passwords.builtin_count;
+  return n > 0 ? `${count(n)} common passwords` : "about 100,000 common passwords";
+}
+
 function whole(text) {
   const value = String(text ?? "").trim();
   return /^-?\d+$/.test(value) ? Number(value) : undefined;
@@ -111,7 +129,7 @@ function checkbox(name, label, checked, attrs = {}) {
 }
 
 // The create or edit form for one policy. ``policy`` is null for a new one.
-function policyForm({ admin, policy, lists, fingerprint, onSaved }) {
+function policyForm({ admin, policy, lists, fingerprint, passwords, onSaved }) {
   const fresh = policy === null;
   const base = policy ?? {
     name: "",
@@ -189,25 +207,29 @@ function policyForm({ admin, policy, lists, fingerprint, onSaved }) {
         "fieldset",
         {},
         h("legend", {}, "Rules"),
+        help("The basic shape of a password. Length is counted in characters after Unicode normalisation (NFC), between 8 and 1,024. Kinds of character are lowercase letters, uppercase letters, digits, other letters (such as Han or Arabic) and symbols (punctuation, symbols and the space); set 0 to ask for none. The repeat limit is the longest run of one character, so 3 refuses \"aaaa\"; leave it blank for no limit."),
         field("Minimum length (characters)", input("min_length", { type: "number", min: 8, max: 1024, value: base.min_length, required: true })),
         field("Maximum length", input("max_length", { type: "number", min: 8, max: 1024, value: base.max_length })),
         field("Minimum kinds of character (0 to 5)", input("min_classes", { type: "number", min: 0, max: 5, value: base.min_classes })),
         field("No character repeated more than (blank for no limit)", input("max_repeat", { type: "number", min: 1, value: base.max_repeat ?? "" })),
         checkbox("forbid_user_details", "Refuse a password containing part of the user's email or name", base.forbid_user_details),
+        help("User details: the password may not contain the part of the user's email before the @ (the whole of it, and each run of letters and digits in it) or a word of their display name. Pieces shorter than three characters are ignored, and case does not matter."),
       ),
       h(
         "fieldset",
         {},
         h("legend", {}, "Passphrase"),
+        help("A passphrase is a long password made of words. With this ticked, a password at least as long as the passphrase minimum and with at least that many words (split on a space, hyphen, full stop or underscore) counts as a passphrase. Ticking the last box below lets a passphrase skip the kinds-of-character rule; every other rule, the watch lists and history still apply. A passphrase can also meet a tier on its own (see the tiers below). Leave this unticked and the other passphrase boxes are ignored."),
         checkbox("passphrase_on", "Recognise a passphrase", base.passphrase !== null),
         field("Passphrase minimum length", input("passphrase_min_length", { type: "number", min: 1, value: phrase.min_length })),
-        field("Passphrase minimum words", input("passphrase_min_words", { type: "number", min: 1, value: phrase.min_words })),
+        field("Passphrase minimum words (2 to 64)", input("passphrase_min_words", { type: "number", min: 2, max: 64, value: phrase.min_words })),
         checkbox("passphrase_relaxes_classes", "A passphrase is excused the kinds-of-character rule", phrase.relaxes_classes),
       ),
       h(
         "fieldset",
         {},
         h("legend", {}, "Tiers and change periods (strongest first; the last must be met by every password the rules accept)"),
+        help("Tiers set how long a password may be kept. Each tier has a name, what a password must be to reach it (a passphrase, or a minimum length and number of kinds) and how many days it lasts; leave the days blank for never. When a password is set, the first tier it meets, strongest first, decides its expiry. The last tier must be met by every password the rules accept. A policy with no tiers never expires a password. A password's tier is recorded by name only, never its length or makeup. Users are warned this many days before the change is due, from 0 to 365. An edited policy takes effect at each user's next password sign-in."),
         tiersArea,
         h("button", { type: "button", class: "quiet", onclick: () => addTier({ name: "", passphrase: false, min_length: 0, min_classes: 0, max_age_days: null }) }, "Add a tier"),
         field("Warn this many days before a change is due", input("warning_days", { type: "number", min: 0, max: 365, value: base.warning_days })),
@@ -216,28 +238,46 @@ function policyForm({ admin, policy, lists, fingerprint, onSaved }) {
         "fieldset",
         {},
         h("legend", {}, "History and age"),
-        field("Remember this many past passwords (0 for none)", input("history_count", { type: "number", min: 0, value: base.history_count })),
-        field("Minimum hours before the user may change again (0 for none)", input("min_age_hours", { type: "number", min: 0, value: base.min_age_hours })),
+        help("History stops a user going back to a recent password: it remembers up to 24, and the current password counts as the newest. Only Argon2id hashes are kept. The minimum age stops a user changing their password again at once to cycle back; it applies only when the user changes their own password. An administrator's set, a reset, an invitation and a forced change skip it."),
+        field("Remember this many past passwords (0 to 24, 0 for none)", input("history_count", { type: "number", min: 0, max: 24, value: base.history_count })),
+        field("Minimum hours before the user may change again (0 to 8,760, 0 for none)", input("min_age_hours", { type: "number", min: 0, max: 8760, value: base.min_age_hours })),
       ),
       h(
         "fieldset",
         {},
-        h("legend", {}, "Watch lists"),
+        h("legend", {}, "Watch lists, the built-in list and the range API"),
+        help("A watch list is a set of passwords that must not be used, each with the reason shown to a user whose password matches. A policy checks, in this order, and stops at the first match: warden's built-in list, then the lists ticked below, then the range API. Terms in a manual list are matched against the password at the points where it is set and at sign-in, but not by a recheck."),
+        h("h4", {}, "The built-in list"),
+        help(`warden bundles a list of ${builtinSize(passwords)} (stored only as SHA-1 digests, taken from SecLists under the MIT licence). It needs no loading or importing: warden reads it itself, once, the first time a policy needs it. A policy uses it when the box below is ticked, which it is on the seeded default. It is read-only, changes only with a warden release, and a match shows the reason "This password is too common".`),
         checkbox("include_builtin", "Check warden's built-in list of common passwords", base.include_builtin),
+        h("h4", {}, "Your own watch lists"),
+        help("Tick a list to attach it to this policy. A list has no effect until it is attached to a policy. Create and fill lists under Watch lists."),
         lists.length
           ? lists.map((l) => checkbox(`list:${l.id}`, `${l.name} (${l.kind}): ${l.reason}`, base.watch_list_ids.includes(l.id)))
           : h("p", { class: "muted" }, "No watch lists yet. Create one under Watch lists, then attach it here."),
+        h("h4", {}, "The Pwned Passwords range API"),
+        help(
+          "The range API needs no API key and no account. It is the free Pwned Passwords service (k-anonymity), not the paid breached-account API, which warden does not use. When this is ticked and a password is checked, warden sends only the first five characters of the password's SHA-1 hash; the service answers with every hash ending it knows under that prefix, padded with decoys so the size of the answer reveals nothing, and warden compares them here. The password, its full hash and the user are never sent. It is the only request warden ever makes to a third party on a user's behalf, and only for a policy that ticks this box; the seeded default makes none.",
+        ),
+        help(
+          `This console uses ${passwords ? passwords.hibp_range_url : "the configured range URL"} with a timeout of ${passwords ? `${passwords.hibp_timeout_seconds} seconds` : "the configured timeout"}${passwords ? (passwords.hibp_padding ? ", asking for padded answers" : ", with padding turned off") : ""}. These come from warden's configuration (passwords.hibp_range_url, passwords.hibp_timeout_seconds and passwords.hibp_padding), not from this form.`,
+        ),
         checkbox("hibp_enabled", "Also ask the Pwned Passwords range API (sends a five-character hash prefix, never the password)", base.hibp_enabled),
+        help("If the service cannot answer (a network error, a timeout, a status other than 200, an unreadable reply), allow lets the password through and records that in the audit trail, and refuse rejects it where a password is set. At sign-in an unreachable service never stops anyone from signing in, whichever you choose."),
         field("When the range API cannot be reached", chosen(select("hibp_on_unavailable", [["allow", "allow the password"], ["refuse", "refuse the password"]]), base.hibp_on_unavailable)),
       ),
       h(
         "fieldset",
         {},
-        h("legend", {}, "After a match"),
+        h("legend", {}, "After a match, and at sign-in"),
+        help("Every password sign-in already checks the password the user just typed against the policy's lists. A user who does not sign in is not checked, so a list that gains a password later cannot reach them. To cover that, a policy can keep a fingerprint of each password and a recheck (run from the command line, or from the Development screen in this console) compares those fingerprints with the lists again."),
         notice,
         fingerprintBox,
+        help("The fingerprint is the SHA-1 of the password, sealed under a key kept in the secrets store, and written when the password is set or at the user's next sign-in. It is off by default for a reason: anyone who holds both the database and the key could recover that fast hash. Turn it on only where finding exposed passwords between sign-ins matters more."),
         checkbox("end_sessions_on_match", "A recheck match also ends the user's sessions", base.end_sessions_on_match),
+        help("On a recheck match the user is always required to change their password at next sign-in. This box also ends their live sessions at once."),
         checkbox("enforce_on_sign_in", "Re-evaluate the password against the rules at each sign-in", base.enforce_on_sign_in),
+        help("Without this, a password that fails an edited policy carries on until it expires. With it, a user whose password fails the policy's current rules must change it at their next password sign-in."),
       ),
       h(
         "div",
@@ -427,7 +467,7 @@ export async function policiesScreen(main) {
       card(
         policy ? `Edit ${policy.name}` : "New policy",
         policy && policy.is_default ? h("p", { class: "muted" }, "The default policy has no priority and cannot be deleted. It applies to anyone no other policy covers.") : null,
-        policyForm({ admin, policy, lists, fingerprint: settings.fingerprint, onSaved: async () => { await draw(); } }),
+        policyForm({ admin, policy, lists, fingerprint: settings.fingerprint, passwords: settings.passwords, onSaved: async () => { await draw(); } }),
       ),
     );
     editArea.scrollIntoView?.();
@@ -436,6 +476,19 @@ export async function policiesScreen(main) {
   main.replaceChildren(
     h("h2", {}, "Password policies"),
     h("p", { class: "muted" }, "Rules, tiers and checks that decide what a password must be. The checklist at every place a password is set follows the policy that applies to that user."),
+    card(
+      "How to set up a password policy",
+      h(
+        "ol",
+        { class: "help-steps" },
+        h("li", {}, "Choose New policy, give it a name and a priority (1 is the highest), then set its rules, tiers, history and checks. Each group of settings is explained on the form."),
+        h("li", {}, "If you want a policy to check your own passwords or terms, create a watch list under Watch lists and fill it, then attach it to the policy. A list does nothing until it is attached."),
+        h("li", {}, "Decide who is under the policy. Map it from a role in Role mapping below, or pin it to one person on the Users screen. A pin always wins over a role."),
+        h("li", {}, "Check the Users column and the Preview affected users button first: they show how many people are under the policy now and how many would be after the change."),
+        h("li", {}, "When a person holds several roles that map to different policies, the one with the highest priority (the lowest number) applies. Anyone no policy covers is under the default policy, which has no priority and cannot be deleted."),
+      ),
+      help("A policy applies only to people who sign in with a password. Accounts that use single sign-on or a passkey alone, and API keys, are not under one. Saving a policy changes no one until their next password sign-in, when the password is checked again against the new rules."),
+    ),
     card("Policies", listArea, h("p", {}, h("button", { type: "button", onclick: () => edit(null) }, "New policy")), out),
     editArea,
     mappingArea,
@@ -509,31 +562,74 @@ export function userPasswordCard(admin, userId) {
 
 // Watch lists
 
-function termsAndEntries(admin, list, out, reload) {
-  const makeForm = (label, send, key, verb, placeholder, done) =>
-    form(
-      "stack",
-      [
-        field(label, h("textarea", { name: "lines", placeholder, rows: 4 })),
-        h("button", { class: "quiet" }, verb),
-      ],
-      async ({ lines }) => {
-        const values = lines.split(/\r?\n/).filter((line) => line.length > 0);
-        if (values.length === 0) return status("info", "Nothing entered.");
-        const answer = await send(values);
-        if (answer.ok) await reload();
-        const count = answer.ok ? (answer.data.added ?? answer.data.removed ?? 0) : 0;
-        return result(answer, `${count} ${key} ${done}`);
-      },
-    );
+// One panel of the manual list screen: a single text area with Add and Remove
+// buttons for one kind of entry. Both buttons read the same text area and call the
+// same warden routes the four separate forms used to.
+function entryPanel({ id, title, explanation, label, placeholder, key, send, sendRemoval, refresh }) {
+  const area = h("textarea", { name: "lines", placeholder, rows: 5 });
+  const out = h("div", { class: "result" });
+  const run = (call_, done) => async () => {
+    const values = area.value.split(/\r?\n/).filter((line) => line.length > 0);
+    if (values.length === 0) return status("info", "Nothing entered.");
+    const answer = await call_(values);
+    if (answer.ok) {
+      area.value = "";
+      await refresh();
+    }
+    const changed = answer.ok ? (answer.data.added ?? answer.data.removed ?? 0) : 0;
+    return result(answer, `${changed} of ${values.length} ${key} ${done}`);
+  };
+  return h(
+    "section",
+    { class: "panel", "aria-labelledby": id },
+    h("h4", { id }, title),
+    ...explanation.map((text) => help(text)),
+    field(label, area),
+    h("div", { class: "inline-actions" }, action("Add", run(send, "added"), out), action("Remove", run(sendRemoval, "removed"), out, "quiet")),
+    out,
+  );
+}
+
+function countsLine(list) {
+  const base = list.kind === "manual" ? `${list.kind} list: ${list.entry_count} exact passwords, ${list.term_count} terms` : `${list.kind} list: ${list.entry_count} hashes`;
+  return `${base}${list.import_threshold ? `, threshold ${list.import_threshold}` : ""}${list.last_imported_at ? `, last imported ${when(list.last_imported_at)}` : ""}.`;
+}
+
+function termsAndEntries(admin, list, refresh) {
   return h(
     "div",
     {},
-    h("p", { class: "muted" }, "An exact password is hashed at once and never kept in the clear. A term refuses any password that contains it (3 to 64 characters). Neither is ever shown again: warden returns counts only."),
-    makeForm("Exact passwords to add (one per line, up to 100)", (passwords) => call("POST", `${admin}/watch-lists/${list.id}/entries`, { body: { passwords } }), "passwords", "Add exact passwords", "synthetic-password-1", "added"),
-    makeForm("Exact passwords to remove", (passwords) => call("POST", `${admin}/watch-lists/${list.id}/entries/removal`, { body: { passwords } }), "passwords", "Remove exact passwords", "", "removed"),
-    makeForm("Terms to add (one per line)", (terms) => call("POST", `${admin}/watch-lists/${list.id}/terms`, { body: { terms } }), "terms", "Add terms", "examplecorp", "added"),
-    makeForm("Terms to remove", (terms) => call("POST", `${admin}/watch-lists/${list.id}/terms/removal`, { body: { terms } }), "terms", "Remove terms", "", "removed"),
+    help("A manual list is the one you fill in yourself, in two separate ways. Each panel below has one box: type or paste values, one per line, then choose Add or Remove. Each action takes at most 100 lines. Entries are hashed or folded the moment they arrive and are never shown again, because warden returns counts only. To remove one, type it again exactly as you would to add it. The counts above update after each action."),
+    h(
+      "div",
+      { class: "panels" },
+      entryPanel({
+        id: "panel-exact",
+        title: "Exact passwords",
+        explanation: [
+          "An exact password refuses only that password, nothing like it. It is stored only as a SHA-1 hash, hashed at once over TLS, and never logged or audited.",
+        ],
+        label: "Exact passwords (one per line, up to 100)",
+        placeholder: "synthetic-password-1",
+        key: "passwords",
+        send: (passwords) => call("POST", `${admin}/watch-lists/${list.id}/entries`, { body: { passwords } }),
+        sendRemoval: (passwords) => call("POST", `${admin}/watch-lists/${list.id}/entries/removal`, { body: { passwords } }),
+        refresh,
+      }),
+      entryPanel({
+        id: "panel-terms",
+        title: "Terms",
+        explanation: [
+          "A term refuses any password that contains it, whatever the case, so a term such as examplecorp also refuses ExampleCorp2026!. A term is 3 to 64 characters. Terms are matched when a password is set and at sign-in, not in a recheck.",
+        ],
+        label: "Terms (one per line, up to 100)",
+        placeholder: "examplecorp",
+        key: "terms",
+        send: (terms) => call("POST", `${admin}/watch-lists/${list.id}/terms`, { body: { terms } }),
+        sendRemoval: (terms) => call("POST", `${admin}/watch-lists/${list.id}/terms/removal`, { body: { terms } }),
+        refresh,
+      }),
+    ),
   );
 }
 
@@ -550,10 +646,24 @@ async function manageList(admin, id, area, reload) {
     await reload();
     await manageList(admin, id, area, reload);
   };
+  const counts = h("p", { class: "muted", "aria-live": "polite" }, countsLine(list));
+  // After an exact password or term is added or removed: update the counts in place
+  // (so the panel, its text area and its result stay as they are) and refresh the
+  // lists table above.
+  const refreshCounts = async () => {
+    const latest = await call("GET", `${admin}/watch-lists/${id}`);
+    if (latest.ok) counts.textContent = countsLine(latest.data.watch_list);
+    await reload();
+  };
   area.replaceChildren(
     card(
       `Manage ${list.name}`,
-      h("p", { class: "muted" }, `${list.kind} list: ${list.entry_count} exact passwords, ${list.term_count} terms${list.import_threshold ? `, threshold ${list.import_threshold}` : ""}${list.last_imported_at ? `, last imported ${when(list.last_imported_at)}` : ""}.`),
+      counts,
+      help(
+        list.kind === "manual"
+          ? "This is a manual list: you type in its exact passwords and terms. It has no effect until it is attached to a policy (see the end of this card, or tick it on the policy form)."
+          : "This is an imported list: its hashes come from a file, not from typing. It has no effect until it is attached to a policy (see the end of this card, or tick it on the policy form).",
+      ),
       form(
         "inline",
         [
@@ -568,11 +678,13 @@ async function manageList(admin, id, area, reload) {
         },
       ),
       list.kind === "manual"
-        ? termsAndEntries(admin, list, out, again)
+        ? termsAndEntries(admin, list, refreshCounts)
         : h(
             "div",
             {},
-            h("p", { class: "muted" }, "An imported list is replaced from a file in the Pwned Passwords downloader format (HASH:count per line). warden imports with its command line: warden --config <console.yaml> passwords import --list NAME --file FILE [--threshold N]. For the walk, this button imports the small synthetic file that ships with the sample (examples/console/data/synthetic-pwned.txt)."),
+            help("An imported list is filled from a file in the Pwned Passwords downloader format: one SHA-1 hash and a count on each line, written HASH:count. Importing replaces the list's contents in one step, so a bad line leaves the list as it was."),
+            help("A threshold keeps only the hashes seen at least that many times, which shrinks a large file sharply (it needs the count on every line). The full Pwned Passwords set is very large, so real imports are an operator task run from the command line, where the counts printed let you adjust the threshold: warden --config <console.yaml> passwords import --list NAME --file FILE [--threshold N]."),
+            help("For the walk, the button below imports the small synthetic file that ships with the sample (examples/console/data/synthetic-pwned.txt) through a route of the sample's own, so no command line is needed."),
             action("Import the sample file", async () => {
               const imported = await call("POST", `/api/watch-lists/${id}/import-sample`);
               if (imported.ok) await again();
@@ -609,6 +721,7 @@ async function manageList(admin, id, area, reload) {
 
 export async function watchListsScreen(main) {
   const { admin } = await prefixes();
+  const { passwords } = await consoleSettings();
   const listArea = h("div", {});
   const detail = h("div", {});
   const out = h("div", {});
@@ -651,9 +764,15 @@ export async function watchListsScreen(main) {
   main.replaceChildren(
     h("h2", {}, "Watch lists"),
     h("p", { class: "muted" }, "Passwords that are refused with a reason. A manual list holds exact passwords and terms you type in; an imported list is filled from a Pwned Passwords downloader file."),
+    card(
+      "The built-in list needs no setup",
+      help(`warden bundles a list of ${builtinSize(passwords)} (SHA-1 digests only), so there is nothing to import or load, and it does not appear in the table below. A policy uses it when "Check warden's built-in list" is ticked on its form, which it is on the seeded default. The lists on this screen are your own, checked in addition to it.`),
+    ),
     card("Lists", listArea, out),
     card(
       "New watch list",
+      help("Choose a kind when you create a list, because it cannot be changed. A manual list holds exact passwords and terms that you type in, one panel for each, after you choose Manage. An imported list holds SHA-1 hashes loaded from a file in the Pwned Passwords downloader format (HASH:count per line); real imports run from the command line, and Manage offers a small synthetic sample for the walk."),
+      help("The reason is what a user is shown when their password matches the list. A new list does nothing yet: attach it to a policy, either under Manage here or by ticking it on the policy form."),
       form(
         "inline",
         [

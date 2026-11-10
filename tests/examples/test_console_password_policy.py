@@ -72,6 +72,42 @@ async def test_the_console_settings_say_whether_the_fingerprint_key_is_configure
         assert settings["dev_clock"] is False
 
 
+async def test_the_console_settings_carry_the_range_api_and_built_in_list_facts(
+    make_console: Any,
+) -> None:
+    built = await make_console(
+        passwords={
+            "hibp_range_url": "https://mirror.example.net/range/",
+            "hibp_timeout_seconds": 3.5,
+            "hibp_padding": False,
+        }
+    )
+    transport = httpx.ASGITransport(app=built.app, client=("192.0.2.10", 50000))
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost:8040") as c:
+        shown = (await c.get("/api/console")).json()["passwords"]
+    assert shown["hibp_range_url"] == "https://mirror.example.net/range/"
+    assert shown["hibp_timeout_seconds"] == 3.5
+    assert shown["hibp_padding"] is False
+    # The bundled list ships with warden; its size is read on the server, never sent
+    # to the browser as entries.
+    assert 90_000 <= shown["builtin_count"] <= 110_000
+    assert set(shown) == {
+        "hibp_range_url",
+        "hibp_timeout_seconds",
+        "hibp_padding",
+        "builtin_count",
+    }
+
+
+async def test_the_console_settings_default_to_the_public_range_api(
+    client: httpx.AsyncClient,
+) -> None:
+    shown = (await client.get("/api/console")).json()["passwords"]
+    assert shown["hibp_range_url"] == "https://api.pwnedpasswords.com/range/"
+    assert shown["hibp_timeout_seconds"] == 5.0
+    assert shown["hibp_padding"] is True
+
+
 # Pages
 
 
@@ -495,3 +531,151 @@ async def test_forbid_user_details_can_be_set_over_http(
     token = await admin_token(console, client)
     made = await new_policy(client, token, name="No details", forbid_user_details=True)
     assert made["forbid_user_details"] is True
+
+
+# The guidance screens
+
+
+def _passwords_source() -> str:
+    return (SCRIPTS / "passwords.js").read_text(encoding="utf-8")
+
+
+def test_the_policy_screen_has_a_how_to_above_the_list() -> None:
+    source = _passwords_source()
+    how_to = source.index("How to set up a password policy")
+    assert how_to < source.index('card("Policies"')
+    for word in ("priority", "Role mapping", "pin", "Preview affected users", "default policy"):
+        assert word in source[how_to : source.index('card("Policies"')], word
+
+
+def test_the_policy_form_explains_each_group_of_settings_in_page_text() -> None:
+    source = _passwords_source()
+    for fragment in (
+        "Kinds of character are",  # length and character kinds
+        "A passphrase is a long password",  # passphrases
+        "skip the kinds-of-character rule",
+        "Tiers set how long a password may be kept",  # tiers and change periods
+        "History stops a user going back",  # history and minimum age
+        "User details:",  # user details
+        "The built-in list",  # watch lists and the built-in list
+        "A list has no effect until it is attached to a policy",
+        "needs no API key and no account",  # the range API
+        "first five characters of the password's SHA-1 hash",
+        "allow lets the password through and records that in the audit trail",
+        "The fingerprint is the SHA-1 of the password",  # fingerprint, recheck, sessions
+        "ends their live sessions",
+        "Without this, a password that fails an edited policy carries on",  # enforce
+    ):
+        assert fragment in source, fragment
+    # Help is ordinary text: no title or tooltip attribute carries it.
+    assert '"title"' not in source
+    assert 'setAttribute("title"' not in source
+
+
+def test_the_built_in_list_is_said_to_need_no_loading_on_both_screens() -> None:
+    source = _passwords_source()
+    assert source.count("needs no loading or importing") == 1  # the policy form
+    assert "The built-in list needs no setup" in source  # the Watch lists screen
+    assert source.count("${builtinSize(passwords)}") == 2
+    assert "about 100,000 common passwords" in source  # when the size is not known
+    assert "builtin_count" in source
+
+
+def test_the_range_url_and_timeout_come_from_the_console_settings() -> None:
+    source = _passwords_source()
+    assert "passwords.hibp_range_url" in source
+    assert "passwords.hibp_timeout_seconds" in source
+    assert "settings.passwords" in source
+
+
+def test_the_manual_list_has_two_panels_and_no_four_forms() -> None:
+    source = _passwords_source()
+    assert source.count("\n      entryPanel({") == 2
+    assert 'title: "Exact passwords"' in source
+    assert 'title: "Terms"' in source
+    assert 'action("Add"' in source
+    assert 'action("Remove"' in source
+    for gone in ("Add exact passwords", "Remove exact passwords", "Add terms", "Remove terms"):
+        assert gone not in source, gone
+    for explanation in (
+        "An exact password refuses only that password",
+        "A term refuses any password that contains it",
+        "3 to 64 characters",
+        "never shown again",
+        "type it again",
+        "update after each action",
+    ):
+        assert explanation in source, explanation
+
+
+def test_an_imported_list_explains_the_file_the_threshold_and_the_command_line() -> None:
+    source = _passwords_source()
+    for fragment in ("HASH:count", "A threshold keeps only the hashes", "passwords import --list"):
+        assert fragment in source, fragment
+    assert "Import the sample file" in source
+
+
+def test_the_screens_set_no_inline_script_or_style() -> None:
+    for script in SCRIPTS.glob("*.js"):
+        text = script.read_text(encoding="utf-8")
+        if script.name != "dom.js":  # dom.js names innerHTML only to say it is not used
+            assert "innerHTML" not in text, script.name
+        assert "<script" not in text, script.name
+    assert "style:" not in _passwords_source()
+    assert ".style" not in _passwords_source()
+
+
+def test_the_readme_answers_the_api_key_and_built_in_list_questions() -> None:
+    readme = (SCRIPTS.parents[1] / "README.md").read_text(encoding="utf-8")
+    section = readme.split("### The API key and the built-in list", 1)[1].split("## Gaps", 1)[0]
+    assert "No. warden uses only the free Pwned Passwords range API" in section
+    assert "hibp_range_url" in section
+    assert "common-passwords.sha1.gz" in section
+    assert "never sends the entries to the browser" in section
+
+
+async def test_exact_passwords_and_terms_are_added_and_removed_with_counts(
+    console: Any, client: httpx.AsyncClient
+) -> None:
+    token = await admin_token(console, client)
+    made = await client.post(
+        "/admin/watch-lists",
+        json={"name": "Typed", "reason": "Typed in", "kind": "manual"},
+        headers=bearer(token),
+    )
+    list_id = made.json()["watch_list"]["id"]
+    base = f"/admin/watch-lists/{list_id}"
+
+    async def counts() -> tuple[int, int]:
+        shown = (await client.get(base, headers=bearer(token))).json()["watch_list"]
+        return int(shown["entry_count"]), int(shown["term_count"])
+
+    added = await client.post(
+        f"{base}/entries",
+        json={"passwords": ["synthetic-one", "synthetic-two"]},
+        headers=bearer(token),
+    )
+    assert added.json()["added"] == 2
+    added = await client.post(
+        f"{base}/terms", json={"terms": ["examplecorp"]}, headers=bearer(token)
+    )
+    assert added.json()["added"] == 1
+    assert await counts() == (2, 1)
+    removed = await client.post(
+        f"{base}/entries/removal", json={"passwords": ["synthetic-one"]}, headers=bearer(token)
+    )
+    assert removed.json()["removed"] == 1
+    removed = await client.post(
+        f"{base}/terms/removal", json={"terms": ["examplecorp"]}, headers=bearer(token)
+    )
+    assert removed.json()["removed"] == 1
+    assert await counts() == (1, 0)
+
+
+async def test_the_stylesheet_and_script_keep_the_strict_content_security_policy(
+    client: httpx.AsyncClient,
+) -> None:
+    for path in ("/static/console.css", "/static/js/passwords.js", "/api/console"):
+        answer = await client.get(path)
+        assert answer.status_code == 200, path
+        assert_strict_csp(answer)

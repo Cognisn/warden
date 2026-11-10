@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Sample console (`examples/console`): guidance on the password screens, in ordinary page text. A how-to above the policy list covers creating a policy, mapping it to roles or pinning it to users, the affected-user count, priorities and the default. Each group of settings on the policy form is explained: length and kinds of character, passphrases, tiers and change periods, history and minimum age, user details, watch lists, the range API and its allow or refuse mode, the fingerprint, recheck and ending sessions, and enforcing at sign-in.
+- The sample console says that warden bundles a common-password list that needs no loading or importing and that a policy uses it when "Check warden's built-in list" is ticked, with its size, on the policy form and the Watch lists screen. The sample's `GET /api/console` gains a `passwords` object (`hibp_range_url`, `hibp_timeout_seconds`, `hibp_padding` and `builtin_count`, read through warden's configuration and `bundled_list`) so the policy form can show the range URL and timeout the console uses and say that the Pwned Passwords range API needs no API key or account.
+- `examples/console/README.md` answers whether the console needs a Have I Been Pwned API key (no), how to point `hibp_range_url` at a self-hosted mirror, and whether it loads the bundled list (no, warden does).
+
+### Changed
+
+- Sample console: the manual watch list's four add and remove forms are two panels, Exact passwords and Terms, each with one text area and Add and Remove buttons and an explanation, and the counts update in place after each action. Where a list is created, the two kinds (manual, imported) are explained, and an imported list explains the downloader format, the threshold and that real imports run from the command line. The routes called are unchanged.
+- The rc1 gate's console walk in the sample's README follows the new layout. No library change.
+
 ## [0.1.0b24] - 2026-11-10
 
 Twenty-fourth beta: password policy follow-ups before the rc1 gate. `forbid_user_details` can be set over HTTP, the rule test cases cover digits in user-detail pieces, and `NOTICE` credits SecLists.

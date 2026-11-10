@@ -3,6 +3,9 @@
 Where warden ships an HTTP route the console calls it directly. These routes
 cover what the console needs that warden leaves to the product:
 
+- ``GET /console``: where warden's routers are mounted and the facts the policy
+  screen explains (the range API's URL, timeout and padding, and the size of
+  warden's bundled common-password list);
 - ``GET /me``: who the bearer is (warden's routes have no such route; a
   product answers it from ``require_user``);
 - ``GET /outbox``: the in-memory mail outbox (the sample's own mail sender);
@@ -58,6 +61,7 @@ from warden.audit import anchor as write_anchor
 from warden.audit.syslog import SyslogForwarder
 from warden.identity import Identity, PolicyError, Principal, require_permission, require_user
 from warden.identity.password_policy import WatchListError, WatchListNotFound
+from warden.identity.password_policy.builtin import bundled_list
 from warden.keys import KeyStore
 
 __all__ = ["console_router"]
@@ -124,6 +128,7 @@ def console_router(
     async def console_settings() -> dict[str, Any]:
         """Where warden's routers are mounted, so the pages need no copy of the configuration."""
         http = identity.config.http
+        passwords = identity.config.passwords
         return {
             "prefixes": {
                 "auth": http.auth_prefix,
@@ -133,7 +138,16 @@ def console_router(
             },
             "syslog": forwarder is not None,
             # Whether a policy may enable the sealed fingerprint (ruling PW8).
-            "fingerprint": identity.config.passwords.fingerprint_available,
+            "fingerprint": passwords.fingerprint_available,
+            # What the policy screen tells an administrator about the range API and
+            # the bundled list. Read through warden's configuration object and its
+            # public ``bundled_list``; the list itself stays on the server.
+            "passwords": {
+                "hibp_range_url": passwords.hibp_range_url,
+                "hibp_timeout_seconds": passwords.hibp_timeout_seconds,
+                "hibp_padding": passwords.hibp_padding,
+                "builtin_count": len(bundled_list()),
+            },
             "dev_clock": dev_clock is not None,
         }
 
