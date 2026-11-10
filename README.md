@@ -12,6 +12,8 @@ warden is built by [Cognisn](https://github.com/Cognisn) as the shared identity 
 
 - User lifecycle: invite, activate, suspend and deactivate.
 - Password sign-in with TOTP and recovery codes, with Argon2id hashing.
+- Password policies chosen by role or pinned per user: length, character class and passphrase rules, change-period tiers, history and a minimum age; watch lists of passwords that must not be used (a built-in common-password list, local lists, Have I Been Pwned imports and an optional range lookup), an optional recheck of passwords in use, and a forced change after sign-in when a password is expired or listed.
+- Live password feedback: a policy description a browser can evaluate, a check route for each place a password is set, and a file of rule test cases that proves a client agrees with the server.
 - Passkeys and security keys (WebAuthn): as a second factor beside TOTP, or a passkey on its own, with a `passkey_only` sign-in method, an emailed registration link and passkey invitations.
 - Invitations and password reset by single-use, expiring emailed links.
 - OpenID Connect single sign-on: authorisation code with PKCE, pre-provisioned accounts only, and local password sign-in kept as the break-glass path.

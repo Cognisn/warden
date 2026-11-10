@@ -30,19 +30,20 @@ app.include_router(keys_router(keys=keys), prefix=http.keys_prefix)
 
 ## 2. Sign-in
 
-[`POST /auth/sign-in`](../contract/openapi.json) takes `{"email", "password"}` and answers 200 with one of three `status` values:
+[`POST /auth/sign-in`](../contract/openapi.json) takes `{"email", "password"}` and answers 200 with one of four `status` values:
 
 | `status` | Meaning | Next step |
 |---|---|---|
-| `signed_in` | A session: `access_token`, `token_type` (`Bearer`), `expires_in`, `refresh_token`, `refresh_expires_in`. | Use the access token (section 3). |
+| `signed_in` | A session: `access_token`, `token_type` (`Bearer`), `expires_in`, `refresh_token`, `refresh_expires_in`. | Use the access token (section 3). Within the password's expiry warning window it also carries `password_expires_in_days`. |
 | `mfa_required` | The password was right and the user has a second factor. The body carries a `challenge`, its `expires_in` and `methods`, the kinds the user holds (`"totp"`, `"webauthn"`). | For `totp`, ask for a code and send it to [`POST /auth/totp/verify`](../contract/openapi.json) as `{"challenge", "code"}`, or a recovery code to [`POST /auth/recovery-code`](../contract/openapi.json). For `webauthn`, complete it with a key (section 16.2). |
+| `password_change_required` | The password (and any second factor) was right, but the password must change before a session is issued. The body carries a `challenge`, its `expires_in` and a `reason`. | Complete the change at [`POST /auth/password-change`](../contract/openapi.json) (section 18.6). Wherever a session would be issued, this answer can take its place. |
 | `mfa_enrolment_required` | The password was right, the deployment requires a second factor (`identity.require_mfa`, on by default) and the user has none confirmed. The body carries a `challenge`. | Enrol under the challenge (section 5); confirming the enrolment signs the user in. |
 
 Every other outcome (an unknown address, a wrong password, an `sso_only` user, a user who is not `active`, a throttled attempt) is the uniform refusal (section 4). Do not tell the user which; you cannot know.
 
 A challenge is single-purpose and short-lived: it expires after `identity.mfa_challenge_ttl_seconds` (300 seconds by default) and is used up by the step it was issued for. After `identity.mfa_max_failures` wrong codes (5 by default) it stops working, so the user must sign in again. A TOTP code is six ASCII digits; any other text (including other scripts' digits) is refused like a wrong code. A code is accepted at most once per 30-second step, so a user who submits the same code twice gets the refusal the second time.
 
-Every route that issues a session answers with the same `signed_in` body: password sign-in, TOTP verification, a recovery code, a security key (section 16.2), a passkey (section 16.3), refresh, confirming an enrolment under a challenge, and the single sign-on handoff. A client can handle them with one function.
+Every route that issues a session answers with the same `signed_in` body: password sign-in, TOTP verification, a recovery code, a security key (section 16.2), a passkey (section 16.3), refresh, confirming an enrolment under a challenge, and the single sign-on handoff. A client can handle them with one function. A password sign-in, TOTP verification, a recovery code, a security key as a second factor and confirming an enrolment can answer `password_change_required` instead of `signed_in` (section 18.6), and a password sign-in's `signed_in` can carry `password_expires_in_days` (section 18.6).
 
 ## 3. Access and refresh tokens
 
@@ -62,7 +63,7 @@ A session has an absolute lifespan (`identity.session_lifespan_seconds`, 12 hour
 
 **Signing out.** [`POST /auth/sign-out`](../contract/openapi.json) with the access token as the bearer ends the session (204); discard both tokens. It needs an access token, not an API key.
 
-**Changing the password.** [`POST /auth/password`](../contract/openapi.json), with the access token as the bearer, takes `{"current_password", "new_password"}`. It answers 204 and ends the user's other sessions; the current one stays. A wrong current password, or a user with no password (`sso_only`), gets 400 `password change refused`; a new password shorter than `identity.password_min_length` (12 by default) gets a 400 naming the minimum.
+**Changing the password.** [`POST /auth/password`](../contract/openapi.json), with the access token as the bearer, takes `{"current_password", "new_password"}`. It answers 204 and ends the user's other sessions; the current one stays. A wrong current password, or a user with no password (`sso_only`), gets 400 `password change refused`; a new password the user's password policy refuses gets a 400 naming every failure (section 18.5).
 
 ## 4. The uniform refusal
 
@@ -119,11 +120,11 @@ warden mails links built from the product's templates, `http.accept_invitation_l
 
 **Inviting.** An administrator invites with [`POST /admin/invitations`](../contract/openapi.json) (`email`, optional `display_name`, `sign_in_method` and staged `roles`), lists with [`GET /admin/invitations`](../contract/openapi.json), resends with [`POST /admin/invitations/{user_id}/resend`](../contract/openapi.json) (a new link; the old one stops working) and revokes with [`DELETE /admin/invitations/{user_id}`](../contract/openapi.json). An invitation link lasts `identity.invitation_ttl_seconds` (7 days by default).
 
-**Accepting with a password.** [`POST /auth/invitations/accept`](../contract/openapi.json) takes `{"token", "password"}`. Success (200 `{"status": "accepted", "email"}`) activates the user and applies the staged roles, but does not sign them in: send them to sign-in next. A password that is too short (400) leaves the link usable, so let the user try again. An invitation whose method is `sso_only` answers 409 and leaves the link usable: accept it through single sign-on instead. A used, expired or revoked link is the uniform refusal.
+**Accepting with a password.** [`POST /auth/invitations/accept`](../contract/openapi.json) takes `{"token", "password"}`. Success (200 `{"status": "accepted", "email"}`) activates the user and applies the staged roles, but does not sign them in: send them to sign-in next. A password the user's policy refuses (400, with every failure named, section 18.5) leaves the link usable, so let the user try again. An invitation whose method is `sso_only` answers 409 and leaves the link usable: accept it through single sign-on instead. A used, expired or revoked link is the uniform refusal.
 
 **Accepting through single sign-on.** The accept-invitation screen submits the token to [`POST /auth/sso/start`](../contract/openapi.json) in the field `invitation`, as a top-level form submission (`application/x-www-form-urlencoded`) or a JSON body, so the token stays out of every URL. warden answers 303 to the provider; from there the flow is section 6. The provider's verified email must be the invited address (ignoring case); the callback then accepts the invitation and the completion screen's handoff signs the new user in. A mismatched identity leaves the invitation usable and lands on `?error=sso_failed`.
 
-**Password reset.** [`POST /auth/password-reset`](../contract/openapi.json) (`{"email"}`) always answers 202 `{"status": "requested"}` before doing any work, whether or not the address has an account, so neither the answer nor its timing says. Show the same message whatever the address ("if an account exists, a link is on its way"). A link is mailed only to an `active` user whose method is `password_and_sso`, and earlier links stop working. It lasts `identity.reset_ttl_seconds` (1 hour by default). [`POST /auth/password-reset/complete`](../contract/openapi.json) takes `{"token", "new_password"}`, answers 204 and ends every session of the user. A password that is too short (400) leaves the link usable; a bad, used or expired link is the uniform refusal. An administrator can also send a link with [`POST /admin/users/{user_id}/password-reset`](../contract/openapi.json), which reports whether it was sent.
+**Password reset.** [`POST /auth/password-reset`](../contract/openapi.json) (`{"email"}`) always answers 202 `{"status": "requested"}` before doing any work, whether or not the address has an account, so neither the answer nor its timing says. Show the same message whatever the address ("if an account exists, a link is on its way"). A link is mailed only to an `active` user whose method is `password_and_sso`, and earlier links stop working. It lasts `identity.reset_ttl_seconds` (1 hour by default). [`POST /auth/password-reset/complete`](../contract/openapi.json) takes `{"token", "new_password"}`, answers 204 and ends every session of the user. A password the user's policy refuses (400, section 18.5) leaves the link usable; a bad, used or expired link is the uniform refusal, and it is refused before the password is looked at. An administrator can also send a link with [`POST /admin/users/{user_id}/password-reset`](../contract/openapi.json), which reports whether it was sent.
 
 Each link works once, even under concurrent submits.
 
@@ -340,12 +341,274 @@ To explain a disabled passkey registration link: with `mail_sender` false, mail 
 
 **The routes stay the authority.** Each field is the condition the route behind it checks, but the capabilities are advice for the screen: a route still refuses as before (its 503, 409 or the uniform refusal), and a client handles that refusal even when the capability said yes.
 
-## 18. Password policies (interim route list)
+## 18. Password policies, watch lists and live feedback
 
-This section lists the password policy routes so each links to the contract; the full guide to password policies, the forced change and live feedback follows in a later beta and replaces it.
+A password policy says what a new password must be, how long it may be kept, and which lists of passwords it must not be on. Every place a password is set (a user created with a password, an administrator's set, a signed-in change, a reset link, an invitation accepted with a password, and the forced change below) goes through the one policy that applies to the user, so a client sees the same refusals everywhere. This section is for two readers: the product's front end, which shows the policy while a user types and handles the forced change, and the operator, who chooses the settings and runs the watch lists and the recheck.
 
-- [`POST /auth/password-change`](../contract/openapi.json): completes a `password_change_required` answer with the challenge and a new password, and answers with the session.
-- [`GET /auth/password/policy`](../contract/openapi.json) and [`POST /auth/password/check`](../contract/openapi.json): the signed-in user's policy, and a check of a candidate.
-- [`POST /auth/invitations/accept/password-policy`](../contract/openapi.json) and [`POST /auth/invitations/accept/password-check`](../contract/openapi.json): the same for an invitation link's token.
-- [`POST /auth/password-reset/policy`](../contract/openapi.json) and [`POST /auth/password-reset/check`](../contract/openapi.json): the same for a reset link's token.
-- [`POST /auth/password-change/policy`](../contract/openapi.json) and [`POST /auth/password-change/check`](../contract/openapi.json): the same for a forced-change challenge.
+Policies apply only to users who hold a password (`password_and_sso`). Users who sign in with single sign-on or a passkey only (`sso_only`, `passkey_only`) and API keys are not under a policy, and a passkey or single sign-on sign-in is never blocked by the state of a password (section 18.6).
+
+### 18.1 Which policy applies to a user
+
+An effective policy is chosen in this order:
+
+1. **A pin.** An administrator can pin one policy on one user with [`PUT /admin/users/{user_id}/password-policy`](../contract/openapi.json) and remove it with [`DELETE /admin/users/{user_id}/password-policy`](../contract/openapi.json). A pin overrides the role mapping.
+2. **Role priority.** Each policy other than the default has a priority (1 is the highest) and can be mapped from roles with [`PUT /admin/password-policy-roles/{role}`](../contract/openapi.json) and [`DELETE /admin/password-policy-roles/{role}`](../contract/openapi.json). When a user holds several roles that map to policies, the highest-priority policy wins. Only a role the product declares can be mapped, and a role the product no longer declares grants nothing, so its mapping has no effect. A role cannot be mapped to the default.
+3. **The default.** Exactly one policy is the default. It covers every user whose roles map to no policy, has no priority, and cannot be deleted.
+
+[`GET /admin/users/{user_id}/password-policy`](../contract/openapi.json) answers why a policy applies: `source` is `pin`, `role` (with the `role` that chose it) or `default`, with the policy's name, the user's current `tier`, when the password was set and when it expires, and whether a change is required and why. [`GET /admin/users/{user_id}`](../contract/openapi.json) carries the same status as `password`. To tell a user which rules they are under, show the policy description (section 18.3) rather than the policy's name: the description is what the user must meet, and it is per user.
+
+A deployment with no policy gets a default on first use, seeded to behave as 0.1.0b18 did: the minimum length is `identity.password_min_length` (12 by default), with no class rule, no expiry, no history, no minimum age, the built-in common-password list checked, and nothing else enabled. Once a default is stored, the stored value governs and changing `identity.password_min_length` no longer changes it.
+
+### 18.2 What a policy contains
+
+Policies are created and changed at run time (section 18.9), not in configuration. Each holds:
+
+| Setting | Meaning |
+|---|---|
+| `min_length`, `max_length` | Length in Unicode code points after NFC normalisation. The minimum is at least 8 and the maximum at most 1,024. |
+| `min_classes` | How many character classes are needed, from 0 to 5: lowercase, uppercase, digit, other letters (such as Han or Arabic letters) and symbol (punctuation, symbols and the space separator). Classes follow Unicode general categories. |
+| `max_repeat` | The longest run of one repeated character, or null for any. |
+| `forbid_user_details` | Refuse a password that contains the user's email local part (the whole of it, and each run of letters and digits in it) or a word of their display name. Pieces shorter than three code points are ignored, and comparison ignores case. |
+| `passphrase` | A password at least `min_length` code points long with at least `min_words` words (words are split on space, hyphen-minus, full stop and underscore) is a passphrase. With `relaxes_classes` true a passphrase may skip the class rule; every other rule still applies, as do the watch lists and history. |
+| `tiers` | Change-period tiers, ordered strongest first (section 18.2.1). |
+| `warning_days` | How many days before expiry sign-in warns, 0 to 365. |
+| `history_count` | How many previous passwords may not be reused, 0 to 24. The current password counts as the newest. |
+| `min_age_hours` | How long a password must be held before the user may change it again. |
+| `include_builtin`, `watch_list_ids`, `hibp_enabled`, `hibp_on_unavailable` | The watch lists checked (section 18.7). |
+| `fingerprint_enabled`, `end_sessions_on_match` | The sealed fingerprint and recheck (section 18.8). |
+| `enforce_on_sign_in` | Require a change at sign-in when the password fails the policy's current rules (section 18.6). |
+
+**18.2.1 Tiers and expiry.** A tier has a name, either "passphrase" or a minimum length and class count, and a maximum age in days (null means never). When a password is set, the first tier it meets, checked strongest first, is recorded with the resulting expiry. Only the tier's name and the expiry are stored, never the password's length or makeup. The last tier must be met by every password the rules accept, and a tier that an earlier tier always pre-empts is refused when the policy is saved, so every tier can be reached. A policy with no tiers never expires a password, and the seeded default has none. Expiry is counted from when the password was set, and a policy change takes effect at the user's next password sign-in, when the tier and expiry are recalculated from the same set time.
+
+**18.2.2 The minimum age** applies only to a user's own change at [`POST /auth/password`](../contract/openapi.json). An administrator's set, a reset, an invitation and the forced change skip it: applied to a forced change it could never be completed, and applied to a reset it would lock out a user who forgot their password.
+
+### 18.3 The policy description and checking in the browser
+
+Four routes (section 18.4) answer with the policy the user's new password must meet:
+
+```json
+{
+  "rules": {
+    "version": 1,
+    "normalisation": "NFC",
+    "length_unit": "code_point",
+    "min_length": 12,
+    "max_length": 1024,
+    "min_classes": 0,
+    "classes": {
+      "lowercase": ["Ll"],
+      "uppercase": ["Lu", "Lt"],
+      "digit": ["Nd"],
+      "other_letter": ["Lo", "Lm"],
+      "symbol": ["Pc", "Pd", "Ps", "Pe", "Pi", "Pf", "Po", "Sm", "Sc", "Sk", "So", "Zs"]
+    },
+    "max_repeat": null,
+    "forbid_user_details": false,
+    "user_detail_min_length": 3,
+    "passphrase": {"min_length": 20, "min_words": 4, "separators": [" ", "-", ".", "_"], "relaxes_classes": true},
+    "tiers": [
+      {"name": "passphrase", "passphrase": true, "min_length": 0, "min_classes": 0, "max_age_days": null},
+      {"name": "standard", "passphrase": false, "min_length": 12, "min_classes": 0, "max_age_days": 90}
+    ],
+    "warning_days": 14
+  },
+  "history_count": 0
+}
+```
+
+`passphrase` is null when the policy has none. The description is versioned (`version` is 1); a client that meets a version it does not know should fall back to the check route rather than guess.
+
+A client evaluates it like this, so that it agrees with the server:
+
+- Normalise the password to NFC (`text.normalize("NFC")`) and count code points, not UTF-16 units: `[...text].length` after normalising. An emoji counts once, though `String.length` counts it twice.
+- A character's class is the `classes` entry whose Unicode general categories include its own category (a regular expression with `\p{Ll}` and the like gives the same answer). Marks, controls and other categories count towards length but belong to no class.
+- `max_repeat` is the longest run of one identical code point.
+- With `forbid_user_details`, lower-case the NFC text and test it for containing each token from the email local part and the display name (runs of letters and digits, and for the email the whole local part), keeping only tokens of at least `user_detail_min_length` code points.
+- A passphrase has at least `passphrase.min_length` code points and `passphrase.min_words` words, splitting on `separators`.
+- The tier is the first entry of `tiers` the password meets, or none.
+
+**Proving a client agrees.** [`docs/contract/password-rule-vectors.json`](../contract/password-rule-vectors.json) holds 59 test cases generated from the server's rule engine: named policies in the description's own shape, and cases of a password, a policy name, an optional `user` (`email`, `display_name`) and the `expected` answer (`code_points`, `ok`, `passphrase`, `tier` and each rule's `code`, `passed` and `waived`). They cover every rule both ways, passphrase boundaries, tiers, combining marks and characters outside the Basic Multilingual Plane. A product runs every case through its browser code in its own tests; warden's tests fail if the file and the engine ever disagree, and run every case through the check route too. The server is always the authority: the browser's evaluation is for showing a checklist, never for deciding.
+
+### 18.4 Live feedback: the four places
+
+A password is set in four places that a screen can serve, and each has a pair of routes that use that place's own credential, so a screen can fetch the policy and check a candidate as the user types, before submitting:
+
+| Place | Policy | Check | Credential sent |
+|---|---|---|---|
+| Signed-in change | [`GET /auth/password/policy`](../contract/openapi.json) | [`POST /auth/password/check`](../contract/openapi.json) `{"password"}` | The access token as the bearer, from a user who holds a password. |
+| Invitation | [`POST /auth/invitations/accept/password-policy`](../contract/openapi.json) `{"token"}` | [`POST /auth/invitations/accept/password-check`](../contract/openapi.json) `{"token", "password"}` | The invitation link's token. |
+| Reset link | [`POST /auth/password-reset/policy`](../contract/openapi.json) `{"token"}` | [`POST /auth/password-reset/check`](../contract/openapi.json) `{"token", "password"}` | The reset link's token. |
+| Forced change | [`POST /auth/password-change/policy`](../contract/openapi.json) `{"challenge"}` | [`POST /auth/password-change/check`](../contract/openapi.json) `{"challenge", "password"}` | The `password_change_required` challenge (section 18.6). |
+
+An invitation's policy is the one its staged roles resolve to, as if already granted, else the default. The submit routes are the ones the places already had: [`POST /auth/password`](../contract/openapi.json), [`POST /auth/password-reset/complete`](../contract/openapi.json), [`POST /auth/invitations/accept`](../contract/openapi.json) and [`POST /auth/password-change`](../contract/openapi.json).
+
+**The answers.** The policy route answers the description above. The check route answers:
+
+```json
+{
+  "ok": false,
+  "results": [
+    {"code": "min_length", "passed": false, "waived": false, "message": "Use at least 12 characters"},
+    {"code": "max_length", "passed": true, "waived": false, "message": "Use at most 1024 characters"}
+  ],
+  "passphrase": false,
+  "tier": null,
+  "watch_list": {"reason": "This password is too common"},
+  "watch_list_unavailable": false
+}
+```
+
+`results` lists each rule the policy configures, in a fixed order, so a checklist can be drawn from it. `waived` is true when the class rule passed only because the password is a passphrase. `watch_list` is null or carries the list's own reason, never its id. `ok` is true only when every rule passed and no watch list refuses the password (a match, or, when the policy refuses while the range API is down, an unavailable answer). A request without a candidate string gets 400 only with a valid credential, and any bad credential gets the uniform refusal and reveals nothing, including whether a reset link was already used.
+
+**Four properties a client can rely on.**
+
+- **History is checked only on submit.** The check route never looks at history, so `ok` can be true for a password the submit route then refuses with `history` (or `min_age`). Always handle the submit refusal.
+- **Nothing is stored, audited or used up.** A check does not consume the token or challenge, writes nothing and records no audit event, and answers `Cache-Control: no-store`.
+- **They are throttled.** Each credential (the session, or the token or challenge) may make `10 x identity.sign_in_attempt_limit` calls per `identity.sign_in_window_seconds` (100 per 15 minutes by default), and each source address five times that (500). The policy routes share the same budget. A spent budget is the uniform refusal, the same answer as a bad credential. A product can tune the per-credential figure with `Identity(password_check_limit=...)`.
+- **The server's range lookup is part of the check** when the policy enables it (section 18.7), so a check can be slower than a purely local rule.
+
+**Debouncing (advice).** Evaluate the rules in the browser on every keystroke, since that needs no request, and call the check route only for what the browser cannot know (the watch lists). Wait for a pause in typing of about 400 milliseconds, send at most one request at a time, drop the answer to a request that a newer one has replaced, and do not check an empty password. Do not retry a refused or throttled check in a loop. Treat a failed check request as "unknown", not as failure: the submit route decides.
+
+### 18.5 Refusals at submit
+
+A password the policy refuses is a 400 with every failure named at once, and the link or challenge it was sent under stays usable:
+
+```json
+{
+  "detail": "password not accepted",
+  "failures": [
+    {"code": "min_length", "message": "Use at least 12 characters"},
+    {"code": "watch_list", "message": "This password is too common"}
+  ]
+}
+```
+
+The codes are:
+
+| Code | Meaning | Message |
+|---|---|---|
+| `min_length`, `max_length` | Too short or too long. | "Use at least N characters", "Use at most N characters". |
+| `min_classes` | Too few kinds of character. | "Use at least N kinds of character: lower case, upper case, digits, symbols and other letters". |
+| `max_repeat` | A character repeats too often in a row. | "Repeat a character at most N times in a row". |
+| `no_email`, `no_display_name` | Contains the user's email or name. | "Do not use your email address", "Do not use your name". |
+| `watch_list` | On a watch list. | The list's own reason, for example "This password is too common" (built-in list) or "This password has appeared in a data breach" (range API). |
+| `watch_list_unavailable` | The range API could not be asked and the policy refuses then. | "The password could not be checked against breached passwords; try again later". |
+| `history` | One of the user's last N passwords. | "Choose a password you have not used recently". It never says which one matched. |
+| `min_age` | Changed too recently (the user's own change only). | "Your password was changed too recently to change it again yet". |
+
+A rule's message names the policy's own limit, so show it as the server gives it, or build your own from the code and the description. A wrong current password at [`POST /auth/password`](../contract/openapi.json) is the separate fixed 400 `password change refused`, which is not a policy refusal. A reset or invitation link that is not live is the uniform 401 (section 7) before the password is looked at, so a dead link with an unacceptable password is a 401, not a 400. Refusals are audited as `warden.identity.password.rejected` with the codes and the list's id only, never the password.
+
+### 18.6 `password_change_required`: the forced change
+
+A password sign-in can answer that the password must change before a session is issued. This happens when:
+
+| `reason` | When |
+|---|---|
+| `expired` | The password reached its tier's maximum age. |
+| `watch_list` | The password is on a watch list that applies. The answer also carries `watch_list_reason`, the list's reason, to show the user. |
+| `administrator` | An administrator asked for a change at next sign-in ([`PUT /admin/users/{user_id}/password-change-required`](../contract/openapi.json)). An earlier reason stands. |
+| `policy` | The password fails the current rules of a policy with `enforce_on_sign_in` on. Without it, a password that fails an edited policy simply carries on until it expires. |
+
+The answer is 200 with
+
+```json
+{"status": "password_change_required", "challenge": "…", "expires_in": 300, "reason": "expired"}
+```
+
+in place of `signed_in`. It replaces a session wherever one would have been issued: after the password alone, after TOTP ([`POST /auth/totp/verify`](../contract/openapi.json)), a recovery code ([`POST /auth/recovery-code`](../contract/openapi.json)), a security key as a second factor, or a forced enrolment (then it also carries the recovery codes and key, which the user must still be shown). Add this status to the handling in section 2.
+
+**The order: second factor first.** The password is checked and the flags are set at the password step, but they are revealed only where a session would be issued. A caller who has only the password sees `mfa_required` exactly as before and learns nothing about the password's state, and the second factor's challenge cannot be used to change the password. A wrong password, or a user who is not `active`, still gets the uniform refusal.
+
+**Completing the change.** Send the challenge and the new password to [`POST /auth/password-change`](../contract/openapi.json) as `{"challenge", "new_password"}`. A success answers 200 with the session the sign-in would have issued, as `signed_in` with the same `amr` (so a password and TOTP sign-in keeps `["pwd", "otp"]`), and ends the user's other sessions. Meanwhile:
+
+- The challenge is single use, even under concurrent submits, and lasts `identity.mfa_challenge_ttl_seconds` (300 seconds by default).
+- A refused new password (the 400 of section 18.5) costs the challenge an attempt, and after `identity.mfa_max_failures` (5 by default) it stops working: the user signs in again. Use the live checks (section 18.4) so the submitted password is likely to pass.
+- A user who is suspended after the challenge was issued gets nothing: the status is checked again at completion.
+- The new password goes through the policy like any other, including history. The minimum age does not apply.
+- The sign-in throttle for the user is not cleared until the change is complete.
+
+**The expiry warning.** Within `warning_days` of expiry, the `signed_in` body of a password sign-in (including after TOTP, a recovery code or a security key) carries `password_expires_in_days`, a whole number of at least 1 (rounded up). Absent otherwise. Show a notice with a link to the change screen. A refresh does not carry it, so show the notice from the sign-in answer.
+
+**Not blocked.** A passkey sign-in or a single sign-on sign-in is not affected by the password's state: those users are never sent to a password change.
+
+**Policy changes.** A policy edit does not touch anyone until their next password sign-in, when the password is re-checked against the current rules (and watch lists) and its tier and expiry are recalculated from when it was set. A password set before 0.1.0b20 starts its expiry clock at its next sign-in. The administration routes report how many users a policy applies to ([`GET /admin/password-policies/{policy_id}/affected-users`](../contract/openapi.json)) and, for a proposed priority and role mapping, how many it would apply to ([`POST /admin/password-policies/affected-users`](../contract/openapi.json), which changes nothing).
+
+### 18.7 Watch lists
+
+A watch list is a set of passwords that must not be used, with the reason a user is shown. A policy checks, in this order and stopping at the first match:
+
+1. **The built-in list**, when `include_builtin` is on (it is in the seeded default). It holds the SHA-1 digests of the 100,000 most frequent passwords of Mark Burnett's ten million password dataset, as published in SecLists (MIT licence), about 100,000 entries (99,999 distinct) and no plain text, with the reason "This password is too common". It is read-only and changes only with a warden release. It is the one behaviour change from 0.1.0b18: very common passwords are refused on the seeded default, and a user whose current password is on it must change it at their next password sign-in.
+2. **Local lists** attached to the policy ([`PUT /admin/password-policies/{policy_id}/watch-lists/{list_id}`](../contract/openapi.json), [`DELETE /admin/password-policies/{policy_id}/watch-lists/{list_id}`](../contract/openapi.json)). A list is `manual` or `imported`, and has a `reason`:
+   - A `manual` list takes **exact passwords** an administrator adds ([`POST /admin/watch-lists/{list_id}/entries`](../contract/openapi.json), removed with [`POST /admin/watch-lists/{list_id}/entries/removal`](../contract/openapi.json)), stored only as the SHA-1 of the NFC form. The password arrives over TLS and is hashed at once; it is never stored, logged, echoed or audited. It also takes **terms** (3 to 64 characters, stored after NFC and case folding), which match when a password contains one without regard to case ([`POST /admin/watch-lists/{list_id}/terms`](../contract/openapi.json) and [`POST /admin/watch-lists/{list_id}/terms/removal`](../contract/openapi.json)). Each call takes at most 100 and answers counts only.
+   - An `imported` list holds SHA-1 hashes loaded from a file with the command line (below).
+   - Lists are managed with [`GET /admin/watch-lists`](../contract/openapi.json), [`POST /admin/watch-lists`](../contract/openapi.json), [`GET /admin/watch-lists/{list_id}`](../contract/openapi.json), [`PUT /admin/watch-lists/{list_id}`](../contract/openapi.json) (rename or change the reason) and [`DELETE /admin/watch-lists/{list_id}`](../contract/openapi.json). A list that is attached to a policy cannot be deleted (409). A view shows counts, the last import and threshold and the attached policies, never entries, terms or hashes.
+3. **The range API**, only when the policy sets `hibp_enabled`.
+
+A password is looked up as typed and in NFC form. Terms are matched only against the password itself, so they work at set points and at sign-in but not in recheck (section 18.8).
+
+**Importing a Have I Been Pwned list.** `warden passwords import --list NAME --file PATH [--threshold N] [--create --reason TEXT] [--actor NAME]` reads the downloader's format, one `HASH:count` per line (SHA-1, either line ending), streams it into the database and swaps it in within one transaction, so a failing line (reported by its number, never its content) leaves the list as it was and a sign-in running meanwhile sees the old list or the new one. `--create` makes the list (kind `imported`) when it is missing, with `--reason`. The command prints counts only and is audited as `warden.identity.watch_list.imported`. NTLM downloads are not supported.
+
+**Sizes to expect.** Each hash is a 20-byte row keyed with its list, and Postgres adds row and index overhead on top, so budget several times the raw 20 bytes a hash. The full Pwned Passwords SHA-1 set is very large, on the order of a billion lines and tens of gigabytes of text as downloaded (these figures come from the service, not from warden, and grow; check the current ones at the source), so a full import needs a matching amount of database space and a long import. `--threshold N` keeps only hashes seen at least N times, which cuts a list sharply. The command prints the lines read and the hashes kept (and how many fell below the threshold), so import with a threshold, look at the figures, and raise or lower it until the size suits the database. A threshold needs the count on every line. Importing is a deliberate operator task; the range API (below) is the alternative that needs no storage.
+
+**The range API.** With `hibp_enabled`, the policy asks a Pwned Passwords range endpoint (`passwords.hibp_range_url`, default `https://api.pwnedpasswords.com/range/`). It is the only request warden ever makes on a user's behalf to a third party, and it is made only for a policy that enables it; the seeded default makes none.
+
+- **What is sent.** Only the first five hex characters of the password's SHA-1 (k-anonymity). The service answers with every suffix it knows under that prefix, and the comparison is made locally over the whole answer. The password, its full hash and the user are never sent, and nothing is cached between calls.
+- **Padding.** warden asks for padded answers (`passwords.hibp_padding`, on by default), so the size of an answer reveals nothing, and ignores the zero-count padding entries.
+- **A self-hosted mirror.** `passwords.hibp_range_url` may be any https URL (http is refused), so a deployment that does not want to reach the public service can point it at its own mirror. `passwords.hibp_timeout_seconds` (5 by default) bounds one request and `passwords.hibp_user_agent` sets the user agent.
+- **When it cannot answer.** Any failure (a transport error, a status other than 200, an unreadable answer) is treated as unavailable, with a fixed error that names no URL or prefix. The policy's `hibp_on_unavailable` decides: `allow` (the default) lets the password through and audits `warden.identity.password.watch_list_unavailable`, `refuse` fails it with `watch_list_unavailable` (section 18.5). At sign-in a range API that cannot answer never stops anyone from signing in whatever the setting, and is audited; the refuse setting applies where a password is set.
+
+### 18.8 The fingerprint and recheck
+
+A watch list can gain a password after a user last signed in. Every password sign-in checks the password just proved against the policy's lists, but a user who does not sign in is not checked. To cover them, a policy may enable the **fingerprint** (`fingerprint_enabled`) and the product may run a **recheck**.
+
+**What is stored.** With the fingerprint on, warden keeps the SHA-1 of the user's password (the Pwned Passwords form), sealed with AES-256-GCM under a key from konfig's secrets store, bound to the user's id so a value copied onto another user's row does not open. It is written when the password is set, or at the user's next sign-in for a password set before the policy enabled it, and removed when the policy no longer keeps one. History stores only Argon2id hashes, and nothing else about a password is kept: no column holds a password, its length or makeup, an unsealed digest or a hash prefix. Nothing logs or audits a password, hash, digest, prefix or fingerprint.
+
+**The trade-off, plainly.** A fingerprint is a fast hash under a key. Anyone who holds both the database and the key can recover a fast SHA-1 of each fingerprinted password, which is much easier to crack than an Argon2id hash. That is why it is off in the seeded default, why a policy enables it only by choice, and why it is worth enabling only where finding exposed passwords between sign-ins matters more than that risk. Keep the key out of the database's backups and out of the database's administrators' reach.
+
+**The key and its rotation.** `passwords.fingerprint_key_secret` names the konfig secret that holds the key, and `passwords.fingerprint_previous_key_secret` the previous key while rotating. Unset (the default), no policy may enable the fingerprint, and the policy routes refuse it. To rotate: put the new key in the current secret and the old one in the previous secret, then run recheck; values sealed with the previous key still open and are re-sealed with the current one as they are read (the recheck report counts them as `resealed`). Once nothing is sealed with the old key, the previous secret can be dropped. A configured secret that is not in the secrets store fails construction.
+
+**Recheck.** `warden passwords recheck [--policy NAME] [--end-sessions-override off] [--actor NAME]` opens, in memory only, the sealed fingerprint of every user whose effective policy enables it and checks it against the policy's built-in list, attached lists and (when enabled) the range API, asking once per prefix in the run. On a match it requires a change (reason `watch_list`), ends the user's live sessions if the policy's `end_sessions_on_match` says so (`--end-sessions-override off` never ends one), and audits it. It prints counts only: passwords checked, matched, newly required to change, sessions ended, resealed, fingerprints that would not open, and range checks unavailable. Terms are not checked, because they need the password itself.
+
+**Scheduling.** warden ships no scheduler. The product runs the command from its own scheduler (cron, a job runner, a deployment task), at an interval that suits how fast its lists change. The stock command cannot know which roles the product declares, so it counts every role that has a policy mapping; a product that wants exact declared-role semantics calls `warden.cli.main` from its own entry point with its `PermissionRegistry` (the `permissions` argument), or calls `Identity.password_recheck.run(actor=...)` from its own scheduler. Both commands print one fixed message and exit 1 when the database cannot be reached.
+
+**The exposure report.** [`GET /admin/password-exposures`](../contract/openapi.json) lists the users required to change their password because of a watch-list match, by user id, with where it was found (`builtin`, `list`, `term` or `hibp`), the list's id and the policy that applies, with counts by list and by policy. It is paged as `GET /admin/users` is. A user drops out of it when they change their password, or when an administrator clears the requirement with [`DELETE /admin/users/{user_id}/password-change-required`](../contract/openapi.json), which is audited as `warden.identity.password.change_cleared`.
+
+### 18.9 Administering policies
+
+Every administration route is behind the permission the product gave `admin_router(password_policies=...)`, falling back to the user administration permission when that is not given. The routes are:
+
+- policies: [`GET /admin/password-policies`](../contract/openapi.json), [`POST /admin/password-policies`](../contract/openapi.json), [`GET /admin/password-policies/{policy_id}`](../contract/openapi.json), [`PUT /admin/password-policies/{policy_id}`](../contract/openapi.json) and [`DELETE /admin/password-policies/{policy_id}`](../contract/openapi.json). A change sends the `version` it read and changes only the settings sent, answering 409 if the policy has changed since. A policy is shown as `WardenPasswordPolicyRecord` in the contract (the stored record), distinct from `WardenPasswordPolicy`, which is the live-feedback answer. Inconsistent settings are refused (400) with `errors` naming each field at fault and a fixed message. A delete is refused (409) for the default and for a policy pinned on any user, saying why;
+- order: [`PUT /admin/password-policies/{policy_id}/priority`](../contract/openapi.json) moves a policy to a free priority (409 when taken, even under concurrent requests), and [`PUT /admin/password-policy-order`](../contract/openapi.json) reorders every policy but the default at once;
+- the built-in list: [`PUT /admin/password-policies/{policy_id}/builtin-list`](../contract/openapi.json) includes or excludes it;
+- impact: [`GET /admin/password-policies/{policy_id}/affected-users`](../contract/openapi.json) and [`POST /admin/password-policies/affected-users`](../contract/openapi.json), as in section 18.6.
+
+Every change is audited under the `warden.identity.password_policy.*` and `warden.identity.watch_list.*` actions, with identifiers, rule codes and counts only.
+
+### 18.10 What the NIST guidance says, and where warden's settings depart
+
+NIST Special Publication 800-63B-4, *Digital Identity Guidelines: Authentication and Authenticator Management*, section 3.1.1.2 (Password Verifiers), is the current guidance on passwords: <https://pages.nist.gov/800-63-4/sp800-63b/authenticators/>. An operator should know where the defaults sit against it, and which settings leave it.
+
+**What the default follows.**
+
+- **Length over composition.** The guidance asks for a minimum length (15 characters when a password is the only factor, and at least 8 when it is part of multi-factor authentication), a permitted maximum of at least 64, Unicode accepted, each code point counted as one character, and nothing truncated. warden counts NFC-normalised code points, allows up to 1,024, accepts any Unicode text and never truncates. The seeded default's minimum of 12 meets the multi-factor figure, which suits the default `identity.require_mfa`; a deployment that allows a password alone should raise `min_length` to 15.
+- **A blocklist, with the reason given.** The guidance requires comparing a new password against a list of commonly used, expected or compromised passwords, requiring a different one when it matches, and telling the user why. The built-in list, local lists and the range API do this, and a refusal carries the list's own reason.
+- **Change on evidence of compromise.** The guidance says verifiers shall not require periodic change but shall force a change on evidence of compromise. A watch-list match (at a set point, at sign-in, or in recheck) forces a change with reason `watch_list`, and an administrator can force one.
+
+**Where settings depart from it.** Each of these is off in the seeded default and is an operator's choice, so choose knowingly:
+
+- **Scheduled change.** Tiers with a `max_age_days` expire passwords on a timetable, which the guidance says shall not be required. Leave `tiers` empty (or every `max_age_days` null) to follow it. Where a regulation or a customer demands expiry, tiers let a stronger password, or a passphrase, last longer.
+- **Class rules.** `min_classes` is a composition rule, which the guidance says shall not be imposed. Leave it at 0 to follow it; a passphrase can waive it where it is used.
+- **Other composition-like rules.** `max_repeat` and `forbid_user_details` are also off by default. The guidance asks that the blocklist comparison cover the entire password, not substrings; local list terms and the user-detail rule match substrings, so they too go beyond it.
+- **History and minimum age.** Neither is among the guidance's requirements; they are operator choices and are off by default.
+- **Enforcing a rule change at sign-in** (`enforce_on_sign_in`) forces a change when a password no longer meets edited rules. It is off by default; with it off, the old password carries on.
+
+The settings exist because some deployments must meet other requirements. warden makes none of these departures unless an administrator turns them on.
+
+### 18.11 A checklist for the product
+
+- Fetch the policy and show a live checklist at all four places; evaluate locally, check the watch lists with a debounced call, and prove the evaluation with the vectors file.
+- Handle `password_change_required` everywhere a session may be issued, and show the list's reason for `watch_list`.
+- Show the expiry warning from `password_expires_in_days`.
+- Handle the 400 `failures` list at submit, including `history` and `min_age`, which the check cannot see.
+- Treat a throttled or failed check as unknown, not as a refusal of the password.
+- Run `warden passwords recheck` on a schedule if any policy keeps fingerprints, and surface the exposure report to administrators.
