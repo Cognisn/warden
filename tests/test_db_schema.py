@@ -58,6 +58,8 @@ def test_the_scan_finds_every_known_lock_key() -> None:
         "CHAIN_LOCK_KEY",
         "ADMINISTRATOR_LOCK_KEY",
         "SSO_SETTINGS_LOCK_KEY",
+        "PASSWORD_POLICY_LOCK_KEY",
+        "WATCH_LIST_LOCK_KEY",
     }
 
 
@@ -87,6 +89,8 @@ def test_the_known_keys_keep_their_values() -> None:
     assert schema.CHAIN_LOCK_KEY == 0x7761_7264_656E_0003
     assert schema.ADMINISTRATOR_LOCK_KEY == 0x7761_7264_656E_0101
     assert schema.SSO_SETTINGS_LOCK_KEY == 0x7761_7264_656E_0201
+    assert schema.PASSWORD_POLICY_LOCK_KEY == 0x7761_7264_656E_0102
+    assert schema.WATCH_LIST_LOCK_KEY == 0x7761_7264_656E_0103
 
 
 def test_moved_names_are_importable_from_warden_db() -> None:
@@ -204,3 +208,22 @@ def test_the_allocation_table_is_published_in_the_schema_docstring() -> None:
 
 def test_syslog_cursor_setting_key() -> None:
     assert db.SYSLOG_CURSOR_SETTING == "syslog.cursor"
+
+
+def test_password_policy_names_are_importable_from_warden_db() -> None:
+    assert {
+        "password_policies",
+        "password_policy_roles",
+        "password_policy_pins",
+        "password_policy_watch_lists",
+        "password_states",
+        "password_history",
+        "watch_lists",
+        "watch_list_entries",
+        "watch_list_terms",
+        "watch_list_staging",
+        "password_change_challenges",
+    } == db.PASSWORD_POLICY_TABLES
+    # Ruling PW2: replicas invalidate over the existing identity policy channel.
+    assert db.PASSWORD_POLICY_NOTIFY == "password_policy"
+    assert db.POLICY_CHANNEL == "warden_identity_policy"
