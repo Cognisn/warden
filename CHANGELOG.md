@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b19] - 2026-11-10
+
+Nineteenth beta: the password policy groundwork (configuration, schema, rule engine, policy store, history, watch lists, the built-in common-password list and recheck), with no change yet to any sign-in, set-password or refusal behaviour.
+
 ### Added
 
 - Password policies, groundwork (rulings PW0 to PW14 of 10 November 2026): a new `passwords` configuration section, `PasswordsConfig`, validated at start-up. `fingerprint_key_secret` and `fingerprint_previous_key_secret` name the konfig secrets holding the key that seals password fingerprints and the previous key while rotating; unset (the default), no policy may enable the fingerprint. `hibp_range_url` (default `https://api.pwnedpasswords.com/range/`, any https URL so a self-hosted mirror works), `hibp_timeout_seconds` (default 5), `hibp_padding` (default on) and `hibp_user_agent` (default `cognisn-warden`) configure the Pwned Passwords range API, which is called only for a policy that enables it. `identity.password_min_length` stays, and seeds the default password policy when a deployment has none; once a default policy is stored, the stored value governs. Nothing uses these settings yet: wave 17 turns enforcement on, and until then no sign-in, set-password or refusal behaviour changes.
