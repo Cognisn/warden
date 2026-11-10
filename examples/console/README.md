@@ -143,7 +143,7 @@ What is in the sample, and what is only for seeing it without waiting:
 |---|---|---|
 | Browser rules | `static/js/passwordrules.js` | Evaluates the policy description (`rules` from the policy routes) as the user types. `tests/examples/test_console_password_rules.py` runs every case of `docs/contract/password-rule-vectors.json` through this very file under Node. |
 | Live checklist | `static/js/checklist.js` | Shows each rule, the passphrase path (`Passphrase: 3 of 4 words`), and the tier with its change period; after the typing pauses (500 ms) it calls the check route to show a watch-list match and its reason. It is feedback: warden decides when you save. |
-| Administration | `static/js/passwords.js` | Under **Passwords**: **Password policies**, **Watch lists** and **Exposure report**; a user's effective policy, pin and "change at next sign-in" are on **Users and roles** (Manage). |
+| Administration | `static/js/passwords.js` | Under **Passwords**: **Password policies**, **Watch lists** and **Exposure report**; a user's effective policy, pin and "change at next sign-in" are on **Users and roles** (Manage). Both policy and watch list screens explain themselves: a how-to above the policy list, and plain help text beside each group of settings on the policy form. |
 | Recheck and clock | `static/js/dev.js`, `devclock.py` | Under **Development**. Sample only: warden schedules nothing, and a product does not move its clock. |
 | Synthetic import file | `data/synthetic-pwned.txt` | Four SHA-1 hashes of invented passwords, with counts, in the Pwned Passwords downloader format (`HASH:count`). |
 
@@ -165,7 +165,7 @@ Sign in as the administrator. The people for the walk are invented: `alice@examp
 
 ### Create policies
 
-Open **Password policies** and choose **New policy**.
+Open **Password policies**. The how-to at the top walks through the process (create a policy, set its rules, map it to roles or pin it to users, check the affected-user count, priorities, the default). Choose **New policy**; each group of settings on the form has a short explanation beside it, including what the built-in list and the range API are and what the console is configured to use for the latter.
 
 - **Staff**, priority 10: minimum length 12, at least 3 kinds of character, no character repeated more than 3 times, refuse part of the email or name, recognise a passphrase (minimum length 20, 4 words, excused the kinds rule), remember 3 past passwords, tiers `passphrase` (met by a passphrase, never changes), `strong` (16 characters, 3 kinds, 365 days) and `standard` (12 characters, 0 kinds, 90 days), warning 14 days, and tick the fingerprint. Choose **Preview affected users** first: it shows the users under the policy now and with this priority, and saving does not change anyone else.
 - **Short expiry**, priority 20: minimum length 12, one tier `standard` (12 characters, 0 kinds, 30 days), warning 10 days, fingerprint on.
@@ -191,11 +191,11 @@ The rules that compare the password with the user's email or name show `Checked 
 
 ### A watch list refusal
 
-Open **Watch lists** and create a **manual** list `Known weak` with the reason `Chosen too often here`. Choose **Manage**, add the exact password `Walkthrough-Pass-1!` and the term `examplecorp` (warden hashes the password at once and shows counts only), then **Attach** it to **Staff**. As alice, on **Account** type `Walkthrough-Pass-1!`, or any password containing `examplecorp`: after the pause the checklist shows `On a watch list: Chosen too often here`, and **Change password** is refused with 400 and the same reason. A list attached to a policy cannot be deleted until it is detached (409).
+Open **Watch lists** and create a **manual** list `Known weak` with the reason `Chosen too often here`. Choose **Manage**. The card has two panels, **Exact passwords** and **Terms**, each with one text area and **Add** and **Remove** buttons. Type `Walkthrough-Pass-1!` in the first and choose **Add**, then `examplecorp` in the second and choose **Add** (warden hashes the password at once and returns counts only, so the counts above the panels update and the entry is never shown; to remove one, type it again and choose **Remove**). Then **Attach** the list to **Staff**; until then it has no effect. As alice, on **Account** type `Walkthrough-Pass-1!`, or any password containing `examplecorp`: after the pause the checklist shows `On a watch list: Chosen too often here`, and **Change password** is refused with 400 and the same reason. A list attached to a policy cannot be deleted until it is detached (409).
 
 ### Import a Pwned Passwords file
 
-Create an **imported** list `Pwned sample` with the reason `This password appeared in a breach`. Choose **Manage** and **Import the sample file**: it loads `data/synthetic-pwned.txt` (four invented passwords: `Sample-Breached-Pass1`, `sample breached passphrase one`, `Winter2099!sample` and `letmein-sample-9`), replacing the list, and shows the count. **Attach** it to **Staff** and type `Sample-Breached-Pass1`: refused with the reason. warden itself imports from the command line, which also takes a real downloader file and a `--threshold`:
+Create an **imported** list `Pwned sample` with the reason `This password appeared in a breach`. Choose **Manage**: the card explains the downloader format (`HASH:count` per line) and the threshold, and says that real imports run from the command line. Choose **Import the sample file**: it loads `data/synthetic-pwned.txt` (four invented passwords: `Sample-Breached-Pass1`, `sample breached passphrase one`, `Winter2099!sample` and `letmein-sample-9`), replacing the list, and shows the count. **Attach** it to **Staff** and type `Sample-Breached-Pass1`: refused with the reason. warden itself imports from the command line, which also takes a real downloader file and a `--threshold`:
 
 ```
 warden --config $sb/console.yaml passwords import --list "Pwned sample" --file examples/console/data/synthetic-pwned.txt --threshold 10
@@ -211,7 +211,24 @@ bob is under **Short expiry** (30 days, warning from 10 days). Sign in as bob on
 
 ### The real range API
 
-A policy can also ask the Pwned Passwords range API (ruling PW7). In **Edit** for a policy, tick the range API and choose what happens when it cannot be reached (`allow` or `refuse`). Nothing else is needed: the default `warden.passwords.hibp_range_url` is `https://api.pwnedpasswords.com/range/`, the console's host needs outbound HTTPS to it, and only the first five characters of the password's SHA-1 are sent, never the password, and only for a policy that enables it. Type a password well known from breaches that the built-in list does not hold; after the pause the checklist shows `This password has appeared in a data breach`. To see the unavailable mode, block outbound HTTPS to that host and choose `refuse`: the checklist says the online check could not be reached and warden refuses on save. A self-hosted mirror is a different `hibp_range_url` in the `passwords` section of `console.yaml`.
+A policy can also ask the Pwned Passwords range API (ruling PW7). In **Edit** for a policy, tick the range API and choose what happens when it cannot be reached (`allow` or `refuse`). The form states that the range API needs no API key or account, what is sent, and the URL, timeout and padding this console is configured with. Nothing else is needed: the default `warden.passwords.hibp_range_url` is `https://api.pwnedpasswords.com/range/`, the console's host needs outbound HTTPS to it, and only the first five characters of the password's SHA-1 are sent, never the password, and only for a policy that enables it. Type a password well known from breaches that the built-in list does not hold; after the pause the checklist shows `This password has appeared in a data breach`. To see the unavailable mode, block outbound HTTPS to that host and choose `refuse`: the checklist says the online check could not be reached and warden refuses on save. A self-hosted mirror is a different `hibp_range_url` in the `passwords` section of `console.yaml`.
+
+### The API key and the built-in list
+
+**Does the console need a Have I Been Pwned API key?** No. warden uses only the free Pwned Passwords range API, which needs no key or account (the keyed API belongs to HIBP's breached-account search, which warden does not use), so there is nothing to give the console. warden sends the range API a User-Agent (`passwords.hibp_user_agent`) and nothing else that identifies you.
+
+**Can the console use a self-hosted mirror?** Yes. Set `hibp_range_url` in the `passwords` section of `console.yaml` (under `warden:`) to your mirror's range endpoint, which must be https:
+
+```yaml
+warden:
+  passwords:
+    hibp_range_url: https://pwned-mirror.example.org/range/
+    hibp_timeout_seconds: 5
+```
+
+Restart the console and the policy form shows the new URL. The five-character prefix is appended to it.
+
+**Does the console load warden's bundled `common-passwords.sha1.gz`?** No, and it does not need to. The file ships inside warden's wheel (about 100,000 SHA-1 digests from SecLists, MIT licence) and warden loads it itself, once, the first time a policy with "Check warden's built-in list" ticked needs it. The seeded default has it ticked. Nothing is imported into a watch list, so it never appears under **Watch lists**; the screens say so. The console only asks warden how many entries it holds, to show the figure, and never sends the entries to the browser.
 
 ## Gaps
 

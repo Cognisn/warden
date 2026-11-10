@@ -113,3 +113,12 @@ fieldset { border: 1px solid var(--line); border-radius: 4px; display: grid; gap
 legend { font-size: 0.85rem; font-weight: 600; color: var(--muted); }
 .tier-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; padding: 0.3rem 0; border-bottom: 1px dashed var(--line); }
 .actions-row, .inline-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.3rem 0; }
+
+/* Guidance on the password screens: ordinary page text, never a tooltip. */
+.help { color: var(--ink); font-size: 0.85rem; line-height: 1.45; margin: 0.2rem 0; max-width: 52rem; }
+.help-steps { margin: 0.3rem 0; padding-left: 1.3rem; display: grid; gap: 0.3rem; font-size: 0.88rem; max-width: 52rem; }
+fieldset h4 { margin: 0.4rem 0 0; font-size: 0.85rem; }
+.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); gap: 1rem; margin: 0.5rem 0; }
+.panel { border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.8rem; display: grid; gap: 0.4rem; align-content: start; }
+.panel h4 { margin: 0; font-size: 0.95rem; }
+.panel textarea { width: 100%; box-sizing: border-box; }
