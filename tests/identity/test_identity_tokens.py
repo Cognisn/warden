@@ -349,6 +349,7 @@ async def test_change_password(
         "/auth/password", headers=auth, json={"current_password": PASSWORD, "new_password": "x"}
     )
     assert weak.status_code == 400
+    assert [f["code"] for f in weak.json()["failures"]] == ["min_length"]
     ok = await client.post(
         "/auth/password", headers=auth, json={"current_password": PASSWORD, "new_password": new}
     )
@@ -360,5 +361,13 @@ async def test_change_password(
     with pytest.raises(AuthenticationRefused):
         await identity.refresh(other.tokens.refresh_token)
     await identity.authenticate(tokens.access_token)
-    outcomes = [r["outcome"] for r in await audit_rows(db, "warden.identity.password.changed")]
-    assert outcomes == ["failure", "failure", "success"]
+    changed = await audit_rows(db, "warden.identity.password.changed")
+    # Set at creation, the wrong current password, then the change. The policy's
+    # refusal is recorded as warden.identity.password.rejected (wave 17).
+    assert [(r["outcome"], r["details"].get("via")) for r in changed] == [
+        ("success", "created"),
+        ("failure", None),
+        ("success", "change"),
+    ]
+    rejected = await audit_rows(db, "warden.identity.password.rejected")
+    assert [r["details"]["codes"] for r in rejected] == [["min_length"]]

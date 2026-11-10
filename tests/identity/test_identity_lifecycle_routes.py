@@ -82,7 +82,14 @@ async def test_a_weak_password_is_a_400_and_the_invitation_stays(
         "/auth/invitations/accept", json={"token": mail.token(), "password": "short"}
     )
     assert weak.status_code == 400
-    assert weak.json() == {"detail": "the password must be at least 12 characters"}
+    # The policy's refusal names every failure: too short, and a common password.
+    assert weak.json() == {
+        "detail": "password not accepted",
+        "failures": [
+            {"code": "min_length", "message": "Use at least 12 characters"},
+            {"code": "watch_list", "message": "This password is too common"},
+        ],
+    }
     ok = await client.post(
         "/auth/invitations/accept", json={"token": mail.token(), "password": NEW_PASSWORD}
     )

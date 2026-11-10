@@ -339,3 +339,13 @@ To explain a disabled passkey registration link: with `mail_sender` false, mail 
 **When it changes.** Mail, the link templates and the relying party are start-up configuration: those fields are fixed while the process runs, so read them once per page load. `single_sign_on` follows the run-time setting an administrator changes with [`PUT /admin/sso/settings`](../contract/openapi.json), through the same cache sign-in uses, so it can lag a change by up to `identity.policy_cache_seconds` on another process.
 
 **The routes stay the authority.** Each field is the condition the route behind it checks, but the capabilities are advice for the screen: a route still refuses as before (its 503, 409 or the uniform refusal), and a client handles that refusal even when the capability said yes.
+
+## 18. Password policies (interim route list)
+
+This section lists the password policy routes so each links to the contract; the full guide to password policies, the forced change and live feedback follows in a later beta and replaces it.
+
+- [`POST /auth/password-change`](../contract/openapi.json): completes a `password_change_required` answer with the challenge and a new password, and answers with the session.
+- [`GET /auth/password/policy`](../contract/openapi.json) and [`POST /auth/password/check`](../contract/openapi.json): the signed-in user's policy, and a check of a candidate.
+- [`POST /auth/invitations/accept/password-policy`](../contract/openapi.json) and [`POST /auth/invitations/accept/password-check`](../contract/openapi.json): the same for an invitation link's token.
+- [`POST /auth/password-reset/policy`](../contract/openapi.json) and [`POST /auth/password-reset/check`](../contract/openapi.json): the same for a reset link's token.
+- [`POST /auth/password-change/policy`](../contract/openapi.json) and [`POST /auth/password-change/check`](../contract/openapi.json): the same for a forced-change challenge.

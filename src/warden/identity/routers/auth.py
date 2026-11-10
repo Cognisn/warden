@@ -13,15 +13,26 @@
 | ``POST /passkey/options`` | | options |
 | ``POST /passkey/sign-in`` | ``credential`` | tokens |
 | ``GET /capabilities`` | | ``password_reset``, ``single_sign_on``, ``passkey_sign_in`` |
+| ``GET /password/policy`` | bearer token | the policy (+) |
+| ``POST /password/check`` | bearer token; ``password`` | the check (+) |
+| ``POST /password-change`` | ``challenge``, ``new_password`` | tokens |
+| ``POST /password-change/policy`` | ``challenge`` | the policy (+) |
+| ``POST /password-change/check`` | ``challenge``, ``password`` | the check (+) |
 
-(*) Under a challenge, the tokens as well.
+(*) Under a challenge, the tokens as well. (+) Live password feedback.
 
 Tokens are ``{"status": "signed_in", "access_token", "token_type": "Bearer",
-"expires_in", "refresh_token", "refresh_expires_in"}``. A challenge is
-``{"status": "mfa_required" | "mfa_enrolment_required", "challenge",
-"expires_in"}``; ``mfa_required`` also carries ``methods``, the kinds of
-second factor the user holds. Every authentication failure is the same 401
-response. Passkey options are ``{"public_key", "expires_at"}``; a passkey
+"expires_in", "refresh_token", "refresh_expires_in"}``, and after a
+password sign-in within the policy's warning window
+``password_expires_in_days``. A challenge is ``{"status": "mfa_required" |
+"mfa_enrolment_required", "challenge", "expires_in"}``; ``mfa_required``
+also carries ``methods``, the kinds of second factor the user holds. Where
+a password sign-in would issue a session but the password must change, the
+answer is ``{"status": "password_change_required", "challenge",
+"expires_in", "reason"}`` (and ``watch_list_reason``), completed at
+``/password-change``. Every authentication failure is the same 401
+response. A new password the user's policy refuses is a 400 naming every
+failure. Passkey options are ``{"public_key", "expires_at"}``; a passkey
 sign-in answers with the tokens alone, its ``amr`` ``["hwk", "mfa"]``. The
 security key and passkey routes (``/webauthn/...``) are in
 ``warden.identity.routers.webauthn`` and included here.
@@ -37,6 +48,7 @@ from fastapi.responses import Response
 from warden.identity.dependencies import Principal, bearer_token
 from warden.identity.errors import AuthenticationRefused, MfaError
 from warden.identity.http import SourceIp, client_ip, json_response, read_object, refusal
+from warden.identity.password_enforcement import PasswordRejected
 from warden.identity.routers.contract import (
     REFUSED,
     ChallengeBody,
@@ -45,9 +57,16 @@ from warden.identity.routers.contract import (
     EnrolmentBody,
     EnrolmentConfirmBody,
     PasskeySignInBody,
+    PasswordChangeBody,
+    PasswordChangeChallengeBody,
+    PasswordChangeCheckBody,
+    PasswordCheckBody,
     RefreshBody,
     SignInBody,
     WardenEnrolmentConfirmed,
+    WardenPasswordCheck,
+    WardenPasswordPolicy,
+    WardenSecondFactorAnswer,
     WardenSignedIn,
     WardenSignInAnswer,
     WardenSignInCapabilities,
@@ -56,8 +75,9 @@ from warden.identity.routers.contract import (
     detail,
     json_body,
     no_store,
+    password_rejected,
 )
-from warden.identity.routers.tokens import token_body
+from warden.identity.routers.tokens import change_body, session_body, token_body
 from warden.identity.routers.webauthn import build_webauthn_router
 
 if TYPE_CHECKING:
@@ -93,9 +113,14 @@ def build_auth_router(identity: Identity) -> APIRouter:
             "security key's answer to `/webauthn/verify`, or a recovery code to "
             "`/recovery-code`; `methods` lists the kinds the user holds) or "
             "`mfa_enrolment_required` (enrol through `/totp/enrolment` or "
-            "`/webauthn/registration` under the challenge). An unknown address, a wrong "
-            "password, an `sso_only` user, a user who is not active and a throttled attempt all "
-            "get the uniform refusal, in the same time."
+            "`/webauthn/registration` under the challenge). Where a session would be issued, "
+            "here or after the second factor, a password that must change first (expired, on "
+            "a watch list, asked for by an administrator, or failing a policy enforced at "
+            "sign-in) answers `password_change_required` instead; complete it at "
+            "`/password-change`. A session within the password's expiry warning window carries "
+            "`password_expires_in_days`. An unknown address, a wrong password, an `sso_only` "
+            "user, a user who is not active and a throttled attempt all get the uniform "
+            "refusal, in the same time."
         ),
         responses={
             200: {"model": WardenSignInAnswer, "description": "Signed in, or challenged."},
@@ -120,49 +145,62 @@ def build_auth_router(identity: Identity) -> APIRouter:
             if result.challenge.purpose == "verify":
                 answer["methods"] = list(result.challenge.methods)
             return json_response(answer)
+        if result.password_change is not None:
+            return json_response(change_body(result.password_change))
         if result.tokens is None:
             raise RuntimeError("sign-in produced neither tokens nor a challenge")
         return json_response(token_body(result.tokens))
+
+    _second_factor = {
+        200: {
+            "model": WardenSecondFactorAnswer,
+            "description": "Signed in, or the password must change first.",
+        },
+        **REFUSED,
+    }
 
     @router.post(
         "/totp/verify",
         summary="Complete sign-in with a TOTP code",
         description=(
             "Sends the `mfa_required` challenge with a six-digit code. A code is accepted at "
-            "most once per time step; too many wrong codes end the challenge."
+            "most once per time step; too many wrong codes end the challenge. When the "
+            "password must change first, the answer is `password_change_required` instead of "
+            "a session."
         ),
-        responses={200: {"model": WardenSignedIn, "description": "Signed in."}, **REFUSED},
+        responses=_second_factor,
         openapi_extra=json_body(ChallengeBody),
     )
     async def totp_verify(request: Request) -> Response:
         body = await read_object(request) or {}
         try:
-            pair = await identity.verify_totp(
+            answer = await identity.verify_totp(
                 body.get("challenge"), body.get("code"), source_ip=source(request)
             )
         except AuthenticationRefused:
             return refusal()
-        return json_response(token_body(pair))
+        return json_response(session_body(answer))
 
     @router.post(
         "/recovery-code",
         summary="Complete sign-in with a recovery code",
         description=(
             "Sends the `mfa_required` challenge with one unused recovery code, which is used "
-            "up, even under concurrent requests."
+            "up, even under concurrent requests. When the password must change first, the "
+            "answer is `password_change_required` instead of a session."
         ),
-        responses={200: {"model": WardenSignedIn, "description": "Signed in."}, **REFUSED},
+        responses=_second_factor,
         openapi_extra=json_body(CodeBody),
     )
     async def recovery_code(request: Request) -> Response:
         body = await read_object(request) or {}
         try:
-            pair = await identity.use_recovery_code(
+            answer = await identity.use_recovery_code(
                 body.get("challenge"), body.get("code"), source_ip=source(request)
             )
         except AuthenticationRefused:
             return refusal()
-        return json_response(token_body(pair))
+        return json_response(session_body(answer))
 
     @router.post(
         "/refresh",
@@ -209,14 +247,16 @@ def build_auth_router(identity: Identity) -> APIRouter:
         description=(
             "Needs an access token as the bearer token. Ends the user's other sessions; the "
             "current one stays. A wrong current password, or a user without a password "
-            "(`sso_only`), gets the fixed 400 message `password change refused`."
+            "(`sso_only`), gets the fixed 400 message `password change refused`. A new "
+            "password the user's password policy refuses (its rules, watch lists, history or "
+            "minimum age) is a 400 naming every failure."
         ),
         responses={
             204: {"description": "Changed.", "headers": no_store()},
-            400: detail(
-                "Refused, or the new password is too short.",
-                "password change refused",
-                "the new password must be at least 12 characters",
+            400: password_rejected(
+                "Refused: the fixed message `password change refused`, or the policy's "
+                "refusal naming every failure.",
+                also="password change refused",
             ),
             **REFUSED,
         },
@@ -230,17 +270,15 @@ def build_auth_router(identity: Identity) -> APIRouter:
         if principal is None:
             return refusal()
         body = await read_object(request) or {}
-        reason = await identity.change_password(
-            principal,
-            body.get("current_password"),
-            body.get("new_password"),
-            source_ip=source(request),
-        )
-        if reason == "weak_password":
-            minimum = identity.config.identity.password_min_length
-            return json_response(
-                {"detail": f"the new password must be at least {minimum} characters"}, 400
+        try:
+            reason = await identity.change_password(
+                principal,
+                body.get("current_password"),
+                body.get("new_password"),
+                source_ip=source(request),
             )
+        except PasswordRejected as exc:
+            return json_response(exc.body(), 400)
         if reason is not None:
             return json_response({"detail": "password change refused"}, 400)
         return Response(status_code=204, headers={"cache-control": "no-store"})
@@ -280,8 +318,9 @@ def build_auth_router(identity: Identity) -> APIRouter:
         summary="Confirm TOTP enrolment with a first code",
         description=(
             "Answers with the recovery codes, shown once. Under a challenge (a forced "
-            "enrolment) the answer is also the new session. A wrong code from a signed-in user "
-            "is a 400, so a client does not take it for a sign-out."
+            "enrolment) the answer is also the new session, or `password_change_required` when "
+            "the password must change first. A wrong code from a signed-in user is a 400, so a "
+            "client does not take it for a sign-out."
         ),
         responses={
             200: {
@@ -297,7 +336,7 @@ def build_auth_router(identity: Identity) -> APIRouter:
         body = await read_object(request) or {}
         try:
             principal = await principal_or_none(request)
-            codes, pair = await identity.confirm_enrolment(
+            codes, answer = await identity.confirm_enrolment(
                 body.get("code"),
                 challenge=body.get("challenge"),
                 principal=principal,
@@ -307,9 +346,9 @@ def build_auth_router(identity: Identity) -> APIRouter:
             return refusal()
         except MfaError:
             return json_response({"detail": "code not accepted"}, 400)
-        if pair is None:
+        if answer is None:
             return json_response({"recovery_codes": codes})
-        return json_response(token_body(pair, recovery_codes=codes))
+        return json_response(session_body(answer, recovery_codes=codes))
 
     # Passkey-only sign-in (rulings P5, P6 and P7).
 
@@ -397,5 +436,169 @@ def build_auth_router(identity: Identity) -> APIRouter:
             }
         )
 
+    # The forced change and live password feedback (rulings PW9 and PW10).
+
+    _feedback_note = (
+        " Throttled per credential and per source address; once either budget is spent, the "
+        "uniform refusal. Stores nothing and records nothing in the audit trail."
+    )
+
+    @router.post(
+        "/password-change",
+        summary="Set a new password under a forced-change challenge",
+        description=(
+            "Sends the `password_change_required` challenge with the new password. The new "
+            "password must meet the user's password policy (its rules, watch lists and history; "
+            "not the minimum age). Answers with the session the sign-in would have issued, with "
+            "the same `amr`, and ends the user's other sessions. A refused password is a 400 "
+            "naming every failure and costs the challenge an attempt; too many end it. The "
+            "challenge is accepted once, even under concurrent requests. A bad, used or expired "
+            "challenge, or a user who is no longer active, gets the uniform refusal."
+        ),
+        responses={
+            200: {"model": WardenSignedIn, "description": "Changed and signed in."},
+            400: password_rejected("The user's password policy refused the new password."),
+            **REFUSED,
+        },
+        openapi_extra=json_body(PasswordChangeBody),
+    )
+    async def complete_password_change(request: Request) -> Response:
+        body = await read_object(request) or {}
+        try:
+            pair = await identity.complete_password_change(
+                body.get("challenge"), body.get("new_password"), source_ip=source(request)
+            )
+        except AuthenticationRefused:
+            return refusal()
+        except PasswordRejected as exc:
+            return json_response(exc.body(), 400)
+        return json_response(token_body(pair))
+
+    @router.post(
+        "/password-change/policy",
+        summary="The password policy a forced change must meet",
+        description=(
+            "Sends the `password_change_required` challenge; answers with the user's password "
+            "policy, to check a new password as it is typed. The challenge is not used up."
+            + _feedback_note
+        ),
+        responses={
+            200: {"model": WardenPasswordPolicy, "description": "The policy."},
+            **REFUSED,
+        },
+        openapi_extra=json_body(PasswordChangeChallengeBody),
+    )
+    async def password_change_policy(request: Request) -> Response:
+        body = await read_object(request) or {}
+        try:
+            advice = await identity.password_policy(
+                change_challenge=_present(body.get("challenge")), source_ip=source(request)
+            )
+        except AuthenticationRefused:
+            return refusal()
+        return json_response(advice.describe())
+
+    @router.post(
+        "/password-change/check",
+        summary="Check a candidate for a forced change",
+        description=(
+            "Sends the `password_change_required` challenge and a candidate; answers with each "
+            "rule's result, the passphrase and tier, and any watch-list match with its reason. "
+            "History is checked only when the password is submitted. The challenge is not used "
+            "up and no attempt is counted." + _feedback_note
+        ),
+        responses={
+            200: {"model": WardenPasswordCheck, "description": "The candidate's result."},
+            400: detail("No candidate was sent.", _NO_CANDIDATE),
+            **REFUSED,
+        },
+        openapi_extra=json_body(PasswordChangeCheckBody),
+    )
+    async def password_change_check(request: Request) -> Response:
+        body = await read_object(request) or {}
+        candidate = body.get("password")
+        try:
+            if not isinstance(candidate, str):
+                await identity.password_policy(
+                    change_challenge=_present(body.get("challenge")), source_ip=source(request)
+                )
+                return json_response({"detail": _NO_CANDIDATE}, 400)
+            feedback = await identity.check_password(
+                candidate,
+                change_challenge=_present(body.get("challenge")),
+                source_ip=source(request),
+            )
+        except AuthenticationRefused:
+            return refusal()
+        return json_response(feedback.body())
+
+    @router.get(
+        "/password/policy",
+        summary="The password policy the signed-in user's new password must meet",
+        description=(
+            "Needs an access token as the bearer token, from a user who holds a password; "
+            "answers with their password policy, to check a new password as it is typed."
+            + _feedback_note
+        ),
+        responses={
+            200: {
+                "model": WardenPasswordPolicy,
+                "description": "The policy.",
+                "headers": no_store(),
+            },
+            **REFUSED,
+        },
+    )
+    async def signed_in_password_policy(request: Request) -> Response:
+        try:
+            principal = await principal_or_none(request)
+            if principal is None:
+                return refusal()
+            advice = await identity.password_policy(principal=principal, source_ip=source(request))
+        except AuthenticationRefused:
+            return refusal()
+        return json_response(advice.describe())
+
+    @router.post(
+        "/password/check",
+        summary="Check a candidate for the signed-in user's new password",
+        description=(
+            "Needs an access token as the bearer token, from a user who holds a password. "
+            "Answers with each rule's result, the passphrase and tier, and any watch-list "
+            "match with its reason. History and the minimum age are checked only when the "
+            "password is submitted (`POST /password`)." + _feedback_note
+        ),
+        responses={
+            200: {"model": WardenPasswordCheck, "description": "The candidate's result."},
+            400: detail("No candidate was sent.", _NO_CANDIDATE),
+            **REFUSED,
+        },
+        openapi_extra=json_body(PasswordCheckBody),
+    )
+    async def signed_in_password_check(request: Request) -> Response:
+        body = await read_object(request) or {}
+        candidate = body.get("password")
+        try:
+            principal = await principal_or_none(request)
+            if principal is None:
+                return refusal()
+            if not isinstance(candidate, str):
+                await identity.password_policy(principal=principal, source_ip=source(request))
+                return json_response({"detail": _NO_CANDIDATE}, 400)
+            feedback = await identity.check_password(
+                candidate, principal=principal, source_ip=source(request)
+            )
+        except AuthenticationRefused:
+            return refusal()
+        return json_response(feedback.body())
+
     router.include_router(build_webauthn_router(identity))
     return router
+
+
+_NO_CANDIDATE = "send the candidate password as a string"
+
+
+def _present(value: object) -> object:
+    """A credential as sent, never None, so an absent one is refused rather than ignored."""
+    return "" if value is None else value

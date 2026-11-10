@@ -14,15 +14,18 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import psycopg
 from psycopg import AsyncConnection, sql
 
 from warden.audit import AuditEvent, record_audit
 from warden.db import Database, schema, table
-from warden.identity.passwords import MAX_PASSWORD_LENGTH, PasswordHasher
+from warden.identity.password_policy.rules import UserContext
 from warden.identity.roles import LastAdministratorError, Roles, lock_administrators
+
+if TYPE_CHECKING:
+    from warden.identity.password_enforcement import PasswordEnforcement
 
 __all__ = [
     "SignInMethod",
@@ -110,20 +113,11 @@ def check_email(email: str) -> str:
 class Users:
     """User records in ``warden.users``."""
 
-    def __init__(
-        self, db: Database, hasher: PasswordHasher, roles: Roles, *, password_min_length: int
-    ) -> None:
+    def __init__(self, db: Database, roles: Roles, *, passwords: PasswordEnforcement) -> None:
+        """``passwords`` checks every password set here against the user's policy."""
         self._db = db
-        self._hasher = hasher
         self._roles = roles
-        self._min_length = password_min_length
-
-    async def _hash_password(self, password: str) -> str:
-        if not self._min_length <= len(password) <= MAX_PASSWORD_LENGTH:
-            raise UserError(
-                f"password must be between {self._min_length} and {MAX_PASSWORD_LENGTH} characters"
-            )
-        return await self._hasher.hash(password)
+        self._passwords = passwords
 
     async def create(
         self,
@@ -136,9 +130,24 @@ class Users:
         password: str | None = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> User:
-        """Create a user. The email address must be unique, ignoring case."""
+        """Create a user. The email address must be unique, ignoring case.
+
+        A password is checked against the default password policy (a new
+        user holds no role and no pin yet); ``PasswordRejected``, a
+        ``UserError``, names every failure.
+        """
         check_email(email)
-        password_hash = None if password is None else await self._hash_password(password)
+        accepted = None
+        if password is not None:
+            accepted = await self._passwords.accept(
+                password,
+                policy=await self._passwords.policy_for(None),
+                context=UserContext(email, display_name),
+                user_id=None,
+                place="created",
+                actor=actor,
+            )
+        password_hash = None if accepted is None else accepted.password_hash
         try:
             async with self._db.transaction(conn) as tx:
                 cur = await tx.execute(
@@ -164,6 +173,10 @@ class Users:
                     ),
                     conn=tx,
                 )
+                if accepted is not None:
+                    await self._passwords.record(
+                        tx, user.id, accepted, place="created", actor=actor
+                    )
         except psycopg.errors.UniqueViolation:
             raise UserError("a user with that email address already exists") from None
         return user
@@ -395,10 +408,29 @@ class Users:
         actor: str | None,
         conn: AsyncConnection[Any] | None = None,
     ) -> User:
-        """Set a new password (an administrative action; users change theirs by signing in)."""
-        password_hash = await self._hash_password(password)
+        """Set a new password (an administrative action; users change theirs by signing in).
+
+        Checked against the user's effective password policy: its rules,
+        watch lists and history, but not the minimum age, which limits only
+        the user's own changes. ``PasswordRejected`` (a ``UserError``) names
+        every failure. Clears any required change.
+        """
+        current = await self.get(user_id, conn=conn)
+        if current is None:
+            raise UserError(f"user {user_id} does not exist")
+        accepted = await self._passwords.accept(
+            password,
+            policy=await self._passwords.policy_for(user_id),
+            context=UserContext(current.email, current.display_name),
+            user_id=user_id,
+            place="administrator",
+            actor=actor,
+        )
         async with self._db.transaction(conn) as tx:
-            user = await self._update(tx, user_id, sql.SQL("password_hash = %s"), password_hash)
+            user = await self._update(
+                tx, user_id, sql.SQL("password_hash = %s"), accepted.password_hash
+            )
+            await self._passwords.record(tx, user_id, accepted, place="administrator", actor=actor)
             await record_audit(
                 AuditEvent(
                     action="warden.identity.user.password_set",
