@@ -195,3 +195,40 @@ def test_the_real_runtime_tree_passes_with_only_the_agreed_exception() -> None:
     assert "cognisn-konfig" in {p.name for p in report.checked}
     # fido2 is a runtime dependency, and the audit sees its bundled MPL-2.0 file.
     assert "fido2" in {p.name for p in report.excepted}
+
+
+# Bundled data (ruling PW12): a named, reviewed data exception, each with its reason.
+
+ROOT = SCRIPT.parents[1]
+
+
+def test_the_bundled_common_password_list_is_a_named_data_exception() -> None:
+    assert set(audit.DATA_EXCEPTIONS) == {
+        "src/warden/identity/password_policy/data/common-passwords.sha1.gz"
+    }
+    reason = audit.DATA_EXCEPTIONS[
+        "src/warden/identity/password_policy/data/common-passwords.sha1.gz"
+    ]
+    assert reason.startswith("MIT: ")
+    assert "SecLists" in reason and "question 33" in reason
+
+
+def test_every_data_exception_exists_beside_a_readme_and_its_licence_is_permissive() -> None:
+    for path, reason in audit.DATA_EXCEPTIONS.items():
+        data = ROOT / path
+        assert data.is_file(), path
+        readme = data.with_name("README.md")
+        assert readme.is_file(), readme
+        text = readme.read_text(encoding="utf-8")
+        assert "MIT License" in text and "Permission is hereby granted" in text
+        assert audit.classify([reason.split(":", 1)[0]]) == "permissive"
+
+
+def test_the_data_check_fails_for_a_missing_file(tmp_path: Path) -> None:
+    problems = audit.data_problems(tmp_path, {"missing.gz": "MIT: test"})
+    assert problems and "missing.gz" in problems[0]
+    (tmp_path / "copyleft.gz").write_bytes(b"x")
+    (tmp_path / "README.md").write_text("x", encoding="utf-8")
+    problems = audit.data_problems(tmp_path, {"copyleft.gz": "GPL-3.0: test"})
+    assert problems and "copyleft.gz" in problems[0]
+    assert audit.data_problems(ROOT, audit.DATA_EXCEPTIONS) == []

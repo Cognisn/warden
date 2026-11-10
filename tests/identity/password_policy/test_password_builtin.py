@@ -1,8 +1,7 @@
 """The built-in common-password list (ruling PW12): sorted SHA-1 digests, loaded once.
 
-The bundled data waits on Skuld question 33 (its source and licence); these
-tests use a small synthetic file. ``test_the_bundled_list_ships`` is a strict
-expected failure until the data lands, so it cannot be forgotten.
+Most tests use a small synthetic file; the last ones check the bundled data,
+SHA-1 digests of SecLists' top 100,000 passwords (Skuld question 33).
 """
 
 from __future__ import annotations
@@ -72,10 +71,15 @@ def test_an_empty_list_matches_nothing(tmp_path: Path) -> None:
     assert len(listed) == 0
 
 
-@pytest.mark.xfail(
-    strict=True, reason="the bundled data waits on Skuld question 33 (source and licence)"
-)
 def test_the_bundled_list_ships() -> None:
     listed = BuiltinList()
-    assert len(listed) >= 90_000
-    assert listed.contains(hashlib.sha1(b"password").digest())  # noqa: S324
+    assert len(listed) == 99_999
+    for word in (b"password", b"123456", b"qwerty"):
+        assert listed.contains(hashlib.sha1(word).digest())  # noqa: S324
+    assert not listed.contains(hashlib.sha1(b"an unremarkable synthetic passphrase").digest())  # noqa: S324
+
+
+def test_one_bundled_list_is_shared_by_the_process() -> None:
+    from warden.identity.password_policy.builtin import bundled_list
+
+    assert bundled_list() is bundled_list()

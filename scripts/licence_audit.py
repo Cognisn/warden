@@ -14,7 +14,9 @@ distribution's licence metadata. The policy:
 
 For a dual licence the most permissive alternative counts.
 
-Exceptions are listed below, each with the reason it was agreed. Adding one
+Exceptions are listed below, each with the reason it was agreed. Data
+bundled inside the package is listed too, as named data exceptions: each must
+be permissively licensed and have a README beside it. Adding one
 needs explicit agreement and a licence check, recorded in the project's
 knowledge base.
 """
@@ -26,6 +28,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib import metadata
+from pathlib import Path
 
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
@@ -47,6 +50,17 @@ EXCEPTIONS: dict[str, str] = {
         " (public_suffix_list.dat, MPL-2.0), which warden's WebAuthn relying-party checks"
         " read; agreed on 6 November 2026 (ruling P2); used unmodified as a separately"
         " installed package"
+    ),
+}
+
+# Data bundled inside the package, by path from the repository root. Each is a
+# named, reviewed exception with its licence first, then the reason it was
+# agreed; a README beside the file records its source and reproduces its licence.
+DATA_EXCEPTIONS: dict[str, str] = {
+    "src/warden/identity/password_policy/data/common-passwords.sha1.gz": (
+        "MIT: the built-in common-password list (ruling PW12), SHA-1 digests of SecLists'"
+        " xato-net-10-million-passwords-100000.txt at commit a1a06ab5; source agreed in"
+        " Skuld question 33 on 10 November 2026"
     ),
 }
 
@@ -149,6 +163,21 @@ def audit(
     return report
 
 
+def data_problems(root: Path, exceptions: dict[str, str] | None = None) -> list[str]:
+    """Each bundled data file exists, has a README beside it, and is permissively licensed."""
+    problems: list[str] = []
+    for path, reason in (DATA_EXCEPTIONS if exceptions is None else exceptions).items():
+        data = root / path
+        if not data.is_file():
+            problems.append(f"{path}: bundled data is missing")
+            continue
+        if not data.with_name("README.md").is_file():
+            problems.append(f"{path}: no README beside it records its source and licence")
+        if classify([reason.split(":", 1)[0]]) != "permissive":
+            problems.append(f"{path}: bundled data must be permissively licensed")
+    return problems
+
+
 def main() -> int:
     report = audit()
     for package in report.checked:
@@ -156,9 +185,16 @@ def main() -> int:
         print(f"{package.name:<24} {classify(package.licences):<16} {shown}")
     for package in report.excepted:
         print(f"EXCEPTION {package.name}: {EXCEPTIONS[package.name]}")
+    for path, reason in DATA_EXCEPTIONS.items():
+        print(f"DATA {path}: {reason}")
+    data = data_problems(Path(__file__).resolve().parents[1])
+    for problem in data:
+        print(f"REFUSED {problem}", file=sys.stderr)
     if report.violations:
         for package in report.violations:
             print(f"REFUSED {package.name}: {classify(package.licences)} licence", file=sys.stderr)
+        return 1
+    if data:
         return 1
     print(f"licence audit passed: {len(report.checked) - 1} runtime dependencies")
     return 0
