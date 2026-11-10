@@ -265,9 +265,16 @@ async def _user(identity: Identity, password: str, roles: tuple[str, ...] = ()) 
     return user
 
 
-async def _policy(identity: Identity, *, end_sessions: bool) -> Any:
-    listed = await identity.watch_lists.create("Local", "Banned", WatchListKind.MANUAL, actor="a")
-    await identity.watch_lists.add_entries(listed.id, [LISTED], actor="a")
+async def _banned(identity: Identity) -> Any:
+    return await identity.watch_lists.create("Local", "Banned", WatchListKind.MANUAL, actor="a")
+
+
+async def _policy(identity: Identity, *, end_sessions: bool, listed: Any = None) -> Any:
+    # With ``listed`` given, the caller adds the entry itself: sign-in checks
+    # the policy's watch lists (0.1.0b20), so a session must be made first.
+    if listed is None:
+        listed = await _banned(identity)
+        await identity.watch_lists.add_entries(listed.id, [LISTED], actor="a")
     policy = await identity.password_policies.create(
         PolicySettings(
             name="Fingerprinted",
@@ -293,11 +300,13 @@ async def test_recheck_flags_a_match_ends_sessions_and_prints_counts_only(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     identity = fp_identity
-    await _policy(identity, end_sessions=True)
+    listed = await _banned(identity)
+    await _policy(identity, end_sessions=True, listed=listed)
     matching = await _user(identity, LISTED, ("viewer",))
     other = await _user(identity, FINE, ("viewer",))
     signed_in = await identity.sign_in(matching.email, LISTED)
     assert signed_in.tokens is not None
+    await identity.watch_lists.add_entries(listed.id, [LISTED], actor="a")
 
     argv = ["passwords", "recheck", "--actor", "scheduler"]
     assert await run_cli(argv, migrated_dsn, cli_secrets, permissions) == 0
@@ -327,11 +336,13 @@ async def test_recheck_override_keeps_sessions_and_policy_limits_the_run(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     identity = fp_identity
-    policy = await _policy(identity, end_sessions=True)
+    listed = await _banned(identity)
+    policy = await _policy(identity, end_sessions=True, listed=listed)
     matching = await _user(identity, LISTED, ("viewer",))
     default_user = await _user(identity, LISTED)  # the default policy has no fingerprint
     signed_in = await identity.sign_in(matching.email, LISTED)
     assert signed_in.tokens is not None
+    await identity.watch_lists.add_entries(listed.id, [LISTED], actor="a")
 
     missing = ["passwords", "recheck", "--policy", "Nope"]
     assert await run_cli(missing, migrated_dsn, cli_secrets, permissions) == 1
