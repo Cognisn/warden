@@ -321,6 +321,7 @@ def _tier_problems(rules: PasswordRules) -> list[str]:
             problems.append(f"{where}.min_classes must be between 0 and {len(CLASS_CATEGORIES)}")
         if tier.max_age_days is not None and not _within(tier.max_age_days, 1, MAX_TIER_AGE_DAYS):
             problems.append(f"{where}.max_age_days must be between 1 and {MAX_TIER_AGE_DAYS}")
+    problems.extend(_unreached_tiers(rules))
     last = tiers[-1]
     relaxed = rules.passphrase is not None and rules.passphrase.relaxes_classes
     floor = 0 if relaxed else rules.min_classes
@@ -331,6 +332,42 @@ def _tier_problems(rules: PasswordRules) -> list[str]:
             " at most the policy's (0 when a passphrase relaxes the class rule)"
         )
     return problems
+
+
+def _preempts(earlier: Tier, later: Tier, rules: PasswordRules) -> bool:
+    """Whether every password meeting ``later`` also meets ``earlier``, so ``later`` is unused."""
+    if earlier.passphrase:
+        return later.passphrase
+    if later.passphrase:
+        # A passphrase is at least the passphrase length, with any number of classes.
+        phrase = rules.passphrase
+        return (
+            phrase is not None
+            and earlier.min_classes <= 0
+            and earlier.min_length <= phrase.min_length
+        )
+    return earlier.min_length <= later.min_length and earlier.min_classes <= later.min_classes
+
+
+def _unreached_tiers(rules: PasswordRules) -> list[str]:
+    """Tiers are ordered strongest first: a tier an earlier one always pre-empts is refused."""
+    tiers = rules.tiers
+    if not all(_well_formed(t) for t in tiers):
+        return []
+    return [
+        f"tiers[{index}] is never reached: an earlier tier accepts every password it does;"
+        " order tiers strongest first"
+        for index, later in enumerate(tiers)
+        if any(_preempts(earlier, later, rules) for earlier in tiers[:index])
+    ]
+
+
+def _well_formed(tier: Tier) -> bool:
+    return (
+        type(tier.passphrase) is bool
+        and type(tier.min_length) is int
+        and type(tier.min_classes) is int
+    )
 
 
 def normalise(password: str) -> str:

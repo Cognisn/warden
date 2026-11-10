@@ -240,6 +240,7 @@ SNAPSHOT: dict[str, list[str]] = {
         "VerifiedIdentity",
         "WatchList",
         "WatchListCheck",
+        "WatchListConflict",
         "WatchListError",
         "WatchListImportError",
         "WatchListKind",

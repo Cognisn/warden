@@ -11,6 +11,7 @@ __all__ = [
     "PasswordPolicyConflict",
     "PasswordPolicyError",
     "PasswordPolicyNotFound",
+    "WatchListConflict",
     "WatchListError",
     "WatchListImportError",
     "WatchListNotFound",
@@ -36,6 +37,10 @@ class WatchListError(ValueError):
 
 class WatchListNotFound(WatchListError):
     """No watch list has that id."""
+
+
+class WatchListConflict(WatchListError):
+    """The change clashes with the stored state: a list still attached to a policy."""
 
 
 class WatchListImportError(WatchListError):

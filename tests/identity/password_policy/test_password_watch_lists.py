@@ -18,6 +18,7 @@ from warden.db import Database
 from warden.identity import PermissionRegistry
 from warden.identity.password_policy import (
     PasswordRules,
+    WatchListConflict,
     WatchListError,
     WatchListImportError,
     WatchListNotFound,
@@ -267,12 +268,16 @@ async def test_attach_and_detach(
     assert detached.settings.watch_list_ids == ()
     with pytest.raises(WatchListNotFound):
         await policies.attach(policy.id, policy.id, actor="a")
-    # Deleting a list detaches it everywhere.
+    # A list attached to a policy cannot be deleted (wave 17): detach it first.
     await policies.attach(policy.id, listed.id, actor="a")
+    with pytest.raises(WatchListConflict, match="attached to 1 password policy"):
+        await lists.delete(listed.id, actor="a")
+    assert (await policies.get(policy.id)).settings.watch_list_ids == (listed.id,)
+    assert await audit_rows(db, "warden.identity.watch_list.deleted") == []
+    await policies.detach(policy.id, listed.id, actor="a")
     await lists.delete(listed.id, actor="a")
-    assert (await policies.get(policy.id)).settings.watch_list_ids == ()
     (row,) = await audit_rows(db, "warden.identity.watch_list.deleted")
-    assert row["details"] == {"policies_detached": 1}
+    assert row["details"] == {"policies_detached": 0}
 
 
 def _lines(words: list[str], count: int = 5) -> list[str]:

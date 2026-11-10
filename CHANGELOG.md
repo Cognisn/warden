@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Password policies, store semantics for administration (wave 17): `PasswordPolicies.delete` refuses a policy pinned on any user with `PasswordPolicyConflict` ("the policy is pinned on N users; unpin them first") instead of removing the pins, so no user's pinned policy is dropped without a decision about them; the `deleted` audit's `pins_removed` is therefore always 0. `WatchLists.delete` refuses a list attached to any policy with the new `WatchListConflict` (a `WatchListError`, exported from `warden.identity`) instead of detaching it; `policies_detached` is therefore always 0. `PasswordRules.validate()` also refuses tiers that are not ordered strongest first: a tier that an earlier tier always pre-empts is never reached, and is named (`tiers[N] is never reached`). `PasswordRecheck.run()` gains `policy_id` (check only the users one policy applies to) and `end_sessions` (False never ends a session whatever the policy says; None, the default, follows each policy), and `recheck_completed` records both. No released behaviour changes: nothing called these before wave 17.
+
 ## [0.1.0b19] - 2026-11-10
 
 Nineteenth beta: the password policy groundwork (configuration, schema, rule engine, policy store, history, watch lists, the built-in common-password list and recheck), with no change yet to any sign-in, set-password or refusal behaviour.

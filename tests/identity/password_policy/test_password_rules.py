@@ -241,3 +241,60 @@ def test_evaluation_never_raises_for_any_text() -> None:
     rules = _rules(min_classes=2, forbid_user_details=True, passphrase=PHRASE, tiers=TIERS)
     for text in ("", "\x00", "\ud800", "a" * 5000, "\u200b" * 20):
         evaluate(text, rules, UserContext(email="x@example.com", display_name=""))
+
+
+# Tiers strongest first (wave 17): a tier that an earlier tier always pre-empts
+# is never reached, so the rules are refused with the tier's own field.
+
+
+@pytest.mark.parametrize(
+    ("tiers", "unreachable"),
+    [
+        # A weaker tier before a stronger one pre-empts it.
+        (
+            (
+                Tier(name="standard", min_length=12, max_age_days=90),
+                Tier(name="long", min_length=16, min_classes=3, max_age_days=365),
+            ),
+            "tiers[1]",
+        ),
+        # An equal tier is pre-empted too.
+        (
+            (
+                Tier(name="a", min_length=14, min_classes=2, max_age_days=90),
+                Tier(name="b", min_length=14, min_classes=2, max_age_days=30),
+                Tier(name="c", min_length=12, max_age_days=10),
+            ),
+            "tiers[1]",
+        ),
+        # A length-only tier no longer than the passphrase length pre-empts the passphrase tier.
+        (
+            (
+                Tier(name="any", min_length=12, max_age_days=90),
+                Tier(name="phrase", passphrase=True),
+                Tier(name="last", min_length=12, max_age_days=30),
+            ),
+            "tiers[1]",
+        ),
+    ],
+)
+def test_tiers_must_be_ordered_strongest_first(tiers: tuple[Tier, ...], unreachable: str) -> None:
+    rules = _rules(passphrase=PassphraseRule(min_length=20, min_words=4), tiers=tiers)
+    with pytest.raises(PasswordPolicyError) as caught:
+        rules.validate()
+    assert f"{unreachable} is never reached" in str(caught.value)
+
+
+def test_strongest_first_tiers_are_accepted() -> None:
+    _rules(
+        passphrase=PassphraseRule(min_length=20, min_words=4),
+        tiers=(
+            Tier(name="phrase", passphrase=True),
+            Tier(name="long", min_length=16, min_classes=3, max_age_days=365),
+            # Longer but with fewer classes: not pre-empted by "long".
+            Tier(name="longer", min_length=18, min_classes=1, max_age_days=180),
+            # A classed tier shorter than the passphrase does not pre-empt a later
+            # passphrase tier, and a passphrase tier never pre-empts a length tier.
+            Tier(name="standard", min_length=12, max_age_days=90),
+        ),
+    ).validate()
