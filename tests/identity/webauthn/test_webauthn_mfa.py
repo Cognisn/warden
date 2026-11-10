@@ -880,7 +880,8 @@ async def test_the_administrators_view_shows_how_many_keys_a_user_holds(
         await _register(http, SoftwareAuthenticator(), headers=key_headers)
     shown = await http.get(f"/admin/users/{user.id}", headers=headers)
     assert shown.json()["webauthn_credentials"] == 2
-    assert set(shown.json()) == {"user", "roles", "webauthn_credentials"}
+    # The password status joined the view additively in wave 17.
+    assert set(shown.json()) == {"user", "roles", "webauthn_credentials", "password"}
 
 
 # Pruning (wave 9 decision D19).
