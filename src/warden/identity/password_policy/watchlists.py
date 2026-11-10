@@ -48,6 +48,7 @@ from warden.db import (
 from warden.identity.password_policy.builtin import BUILTIN_REASON, BuiltinList
 from warden.identity.password_policy.errors import (
     HibpUnavailable,
+    WatchListConflict,
     WatchListError,
     WatchListImportError,
     WatchListNotFound,
@@ -336,7 +337,7 @@ class WatchLists:
         return after
 
     async def delete(self, list_id: uuid.UUID, *, actor: str | None) -> None:
-        """Remove a list, detaching it from every policy."""
+        """Remove a list. Refused while any policy checks it: detach it first."""
         from warden.identity.password_policy.store import lock_policies, notify_policies
 
         try:
@@ -348,13 +349,20 @@ class WatchLists:
                     (list_id,),
                 )
                 row = await cur.fetchone()
+                attached = 0 if row is None else int(row[0])
+                if attached:
+                    policies = "policy" if attached == 1 else "policies"
+                    raise WatchListConflict(
+                        f"the watch list is attached to {attached} password {policies};"
+                        " detach it first"
+                    )
                 await tx.execute(sql.SQL("DELETE FROM {} WHERE id = %s").format(_LISTS), (list_id,))
                 await self._audit(
                     tx,
                     "deleted",
                     list_id,
                     actor=actor,
-                    details={"policies_detached": 0 if row is None else int(row[0])},
+                    details={"policies_detached": attached},
                 )
                 await notify_policies(tx)
         finally:

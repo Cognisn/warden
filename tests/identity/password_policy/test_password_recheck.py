@@ -162,6 +162,8 @@ async def test_a_listed_fingerprint_flags_a_change_and_others_are_left(
         "hibp_unavailable": 0,
         # The locally listed password matched before the range API was needed.
         "hibp_lookups": 2,
+        "policy_id": None,
+        "end_sessions": "policy",
     }
     # A second run finds the same matches but flags no one again.
     again = await identity.password_recheck.run(actor="scheduler")
@@ -240,3 +242,69 @@ async def test_without_a_fingerprint_key_recheck_checks_no_one(
     assert report.checked == 0 and report.matched == 0
     (done,) = await audit_rows(db, "warden.identity.password.recheck_completed")
     assert done["details"]["checked"] == 0
+
+
+# Wave 17: one policy only, and an override that never ends sessions.
+
+
+async def _two_policies(identity: Identity, *, entry: bool = True) -> tuple[Any, Any, Any]:
+    listed = await identity.watch_lists.create("Local", "Banned", WatchListKind.MANUAL, actor="a")
+    policies = []
+    for priority, (name, role) in enumerate((("First", "viewer"), ("Second", "analyst")), 1):
+        policy = await identity.password_policies.create(
+            PolicySettings(
+                name=name,
+                rules=PasswordRules(min_length=12),
+                include_builtin=False,
+                watch_list_ids=(listed.id,),
+                fingerprint_enabled=True,
+                end_sessions_on_match=True,
+            ),
+            priority=priority,
+            actor="a",
+        )
+        await identity.password_policies.map_role(role, policy.id, actor="a")
+        policies.append(policy)
+    if entry:
+        await identity.watch_lists.add_entries(listed.id, [LISTED], actor="a")
+    return listed, policies[0], policies[1]
+
+
+async def test_a_run_can_be_limited_to_one_policy(fp_identity: Identity, db: Database) -> None:
+    identity = fp_identity
+    _, _, second = await _two_policies(identity)
+    under_first = await _user(identity, LISTED, ("viewer",))
+    under_second = await _user(identity, LISTED, ("analyst",))
+
+    report = await identity.password_recheck.run(actor="a", policy_id=second.id)
+
+    assert (report.checked, report.matched, report.flagged) == (1, 1, 1)
+    flagged = await identity.password_states.get(under_second.id)
+    assert flagged is not None and flagged.change_reason == ChangeReason.WATCH_LIST
+    left = await identity.password_states.get(under_first.id)
+    assert left is not None and left.change_reason is None
+    (done,) = await audit_rows(db, "warden.identity.password.recheck_completed")
+    assert done["details"]["policy_id"] == str(second.id)
+    assert done["details"]["end_sessions"] == "policy"
+
+
+async def test_the_override_keeps_sessions_the_policy_would_end(
+    fp_identity: Identity, db: Database
+) -> None:
+    identity = fp_identity
+    # Sign in before the entry is added: sign-in checks the policy's watch
+    # lists (0.1.0b20), as the wave 16 test above does.
+    listed, _, _ = await _two_policies(identity, entry=False)
+    user = await _user(identity, LISTED, ("viewer",))
+    signed_in = await identity.sign_in(user.email, LISTED)
+    assert signed_in.tokens is not None
+    await identity.watch_lists.add_entries(listed.id, [LISTED], actor="a")
+
+    report = await identity.password_recheck.run(actor="a", end_sessions=False)
+
+    assert (report.flagged, report.sessions_ended) == (1, 0)
+    refreshed = await identity.refresh(signed_in.tokens.refresh_token)
+    assert refreshed is not None
+    (done,) = await audit_rows(db, "warden.identity.password.recheck_completed")
+    assert done["details"]["end_sessions"] == "off"
+    assert done["details"]["policy_id"] is None

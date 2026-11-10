@@ -21,6 +21,8 @@ EXPECTED = {
     "warden.identity.password.changed",
     "warden.identity.password.change_required",
     "warden.identity.password.change_completed",
+    # Wave 17, Skuld question 36: an administrator clears a required change.
+    "warden.identity.password.change_cleared",
     "warden.identity.password.rejected",
     "warden.identity.password.expired",
     "warden.identity.password.recheck_completed",
@@ -48,3 +50,4 @@ def test_a_forced_change_and_an_unavailable_range_service_are_warnings() -> None
     severities = {action: severity for action, severity, _ in PASSWORD_ACTIONS}
     assert severities["warden.identity.password.change_required"] == Severity.WARNING
     assert severities["warden.identity.password.watch_list_unavailable"] == Severity.WARNING
+    assert severities["warden.identity.password.change_cleared"] == Severity.NOTICE

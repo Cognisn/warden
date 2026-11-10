@@ -740,7 +740,11 @@ class PasswordPolicies:
     async def delete(
         self, policy_id: uuid.UUID, *, actor: str | None, conn: AsyncConnection[Any] | None = None
     ) -> None:
-        """Remove a policy; its users return to a role mapping or the default. Never the default."""
+        """Remove a policy; its users return to a role mapping or the default.
+
+        Never the default, and never a policy pinned on a user: unpin them first,
+        so no user's pinned policy is dropped without a decision about them.
+        """
         try:
             async with self._db.transaction(conn) as tx:
                 await lock_policies(tx)
@@ -752,6 +756,12 @@ class PasswordPolicies:
                     (policy_id,),
                 )
                 pins = await cur.fetchone()
+                pinned = 0 if pins is None else int(pins[0])
+                if pinned:
+                    users = "user" if pinned == 1 else "users"
+                    raise PasswordPolicyConflict(
+                        f"the policy is pinned on {pinned} {users}; unpin them first"
+                    )
                 await tx.execute(
                     sql.SQL("DELETE FROM {} WHERE id = %s").format(_POLICIES), (policy_id,)
                 )
@@ -763,7 +773,7 @@ class PasswordPolicies:
                     resource_id=policy_id,
                     details={
                         "roles_unmapped": len(policy.roles),
-                        "pins_removed": 0 if pins is None else int(pins[0]),
+                        "pins_removed": pinned,
                     },
                 )
                 await notify_policies(tx)

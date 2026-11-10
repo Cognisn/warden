@@ -3,13 +3,14 @@
 No module under ``src/warden`` touches ``os.environ`` or ``os.getenv``,
 or opens or reads a file itself.
 
-Two reads are exempt by name, each input data rather than configuration:
+Three reads are exempt by name, each input data rather than configuration:
 the SIEM export an operator passes to ``warden audit verify --anchors FILE``
-(ruling of 28 October 2026), and the built-in common-password list bundled
-inside the package (ruling PW12 of 10 November 2026). Each exemption is a
-single (module, function, operation) triple, and a companion test fails
-unless each matches exactly one read, so neither can widen silently nor go
-stale.
+(ruling of 28 October 2026), the built-in common-password list bundled
+inside the package (ruling PW12 of 10 November 2026), and the breach list an
+operator passes to ``warden passwords import --file PATH`` (ruling PW7, wave
+17). Each exemption is a single (module, function, operation) triple, and a
+companion test fails unless each matches exactly one read, so none can
+widen silently nor go stale.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ _FORBIDDEN_CALLS = {"open"}
 # (module, enclosing function, forbidden name) allowed to read a file.
 _EXEMPT = {
     ("warden/cli.py", "_read_anchors_file", "read_text"),
+    ("warden/cli.py", "_open_import_file", "open"),
     ("warden/identity/password_policy/builtin.py", "_read", "read_bytes"),
 }
 
@@ -78,6 +80,9 @@ def test_no_module_reads_the_environment_or_files_directly() -> None:
 def test_each_exemption_covers_exactly_one_read() -> None:
     exempt = sorted(text for text, exempt in _findings() if exempt)
     assert len(exempt) == len(_EXEMPT), exempt
-    assert exempt[0].startswith("warden/cli.py:") and exempt[0].endswith(": .read_text")
-    assert exempt[1].startswith("warden/identity/password_policy/builtin.py:")
-    assert exempt[1].endswith(": .read_bytes")
+    cli = sorted(e for e in exempt if e.startswith("warden/cli.py:"))
+    assert len(cli) == 2
+    assert {e.rsplit(": ", 1)[1] for e in cli} == {".read_text", "open()"}
+    (builtin,) = [e for e in exempt if not e.startswith("warden/cli.py:")]
+    assert builtin.startswith("warden/identity/password_policy/builtin.py:")
+    assert builtin.endswith(": .read_bytes")

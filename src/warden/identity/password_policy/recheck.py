@@ -79,7 +79,9 @@ class PasswordRecheck:
         self._states = states
         self._sessions = sessions
 
-    async def _candidates(self) -> list[tuple[uuid.UUID, uuid.UUID, str, bytes]]:
+    async def _candidates(
+        self, policy_id: uuid.UUID | None
+    ) -> list[tuple[uuid.UUID, uuid.UUID, str, bytes]]:
         declared = self._policies.declared_roles()
         async with self._db.connection() as conn:
             cur = await conn.execute(
@@ -89,21 +91,34 @@ class PasswordRecheck:
                     " JOIN {states} s ON s.user_id = e.user_id"
                     " JOIN {policies} p ON p.id = e.policy_id"
                     " WHERE p.fingerprint_enabled AND s.fingerprint_sealed IS NOT NULL"
+                    " AND (%(policy)s::uuid IS NULL OR e.policy_id = %(policy)s::uuid)"
                     " ORDER BY e.user_id"
                 ).format(effective=EFFECTIVE_SQL, states=_STATES, policies=_POLICIES),
-                {"declared": declared},
+                {"declared": declared, "policy": policy_id},
             )
             return [(r[0], r[1], r[2], bytes(r[3])) for r in await cur.fetchall()]
 
-    async def run(self, *, actor: str | None) -> RecheckReport:
-        """Check every fingerprinted password in use; flag, end sessions and audit on a match."""
+    async def run(
+        self,
+        *,
+        actor: str | None,
+        policy_id: uuid.UUID | None = None,
+        end_sessions: bool | None = None,
+    ) -> RecheckReport:
+        """Check every fingerprinted password in use; flag, end sessions and audit on a match.
+
+        ``policy_id`` limits the run to the users that policy applies to.
+        ``end_sessions`` False never ends a session, whatever the policy says;
+        None (the default) follows each policy's ``end_sessions_on_match``.
+        """
         counts = dict.fromkeys(
             ("checked", "matched", "flagged", "sessions_ended", "resealed", "unopened"), 0
         )
         unavailable = 0
         cache = RangeCache()
-        candidates = await self._candidates() if self._fingerprints.available else []
-        for user_id, policy_id, key_id, sealed in candidates:
+        candidates = await self._candidates(policy_id) if self._fingerprints.available else []
+        ending = "policy" if end_sessions is None else ("on" if end_sessions else "off")
+        for user_id, applies, key_id, sealed in candidates:
             opened = self._fingerprints.open(user_id, SealedFingerprint(key_id, sealed))
             if opened is None:
                 counts["unopened"] += 1
@@ -112,7 +127,7 @@ class PasswordRecheck:
             if opened.resealed is not None:
                 await self._states.store_fingerprint(user_id, opened.resealed)
                 counts["resealed"] += 1
-            policy = await self._policies.get(policy_id)
+            policy = await self._policies.get(applies)
             checked = await self._lists.match_digest(opened.digest, policy, cache=cache)
             del opened
             counts["checked"] += 1
@@ -125,7 +140,10 @@ class PasswordRecheck:
                     user_id, ChangeReason.WATCH_LIST, match=checked.match, conn=tx
                 )
                 ended = 0
-                if flagged and policy.settings.end_sessions_on_match:
+                end = end_sessions
+                if end is None:
+                    end = policy.settings.end_sessions_on_match
+                if flagged and end:
                     ended = await self._sessions.revoke_all(
                         user_id, reason=SESSION_END_REASON, conn=tx
                     )
@@ -159,7 +177,11 @@ class PasswordRecheck:
                 outcome="success",
                 actor=actor,
                 resource_type="password_policy",
-                details=asdict(report),
+                details={
+                    **asdict(report),
+                    "policy_id": None if policy_id is None else str(policy_id),
+                    "end_sessions": ending,
+                },
             )
         )
         return report

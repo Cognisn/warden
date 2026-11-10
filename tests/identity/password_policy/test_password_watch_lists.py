@@ -11,13 +11,14 @@ from typing import Any
 
 import httpx
 import pytest
-from identity_support import audit_rows
+from identity_support import audit_rows, race
 
 from warden.config import PasswordsConfig
 from warden.db import Database
 from warden.identity import PermissionRegistry
 from warden.identity.password_policy import (
     PasswordRules,
+    WatchListConflict,
     WatchListError,
     WatchListImportError,
     WatchListNotFound,
@@ -267,12 +268,16 @@ async def test_attach_and_detach(
     assert detached.settings.watch_list_ids == ()
     with pytest.raises(WatchListNotFound):
         await policies.attach(policy.id, policy.id, actor="a")
-    # Deleting a list detaches it everywhere.
+    # A list attached to a policy cannot be deleted (wave 17): detach it first.
     await policies.attach(policy.id, listed.id, actor="a")
+    with pytest.raises(WatchListConflict, match="attached to 1 password policy"):
+        await lists.delete(listed.id, actor="a")
+    assert (await policies.get(policy.id)).settings.watch_list_ids == (listed.id,)
+    assert await audit_rows(db, "warden.identity.watch_list.deleted") == []
+    await policies.detach(policy.id, listed.id, actor="a")
     await lists.delete(listed.id, actor="a")
-    assert (await policies.get(policy.id)).settings.watch_list_ids == ()
     (row,) = await audit_rows(db, "warden.identity.watch_list.deleted")
-    assert row["details"] == {"policies_detached": 1}
+    assert row["details"] == {"policies_detached": 0}
 
 
 def _lines(words: list[str], count: int = 5) -> list[str]:
@@ -384,3 +389,54 @@ async def test_an_import_racing_matches_sees_the_old_or_the_new_list_never_a_mix
     assert reads > 5, "the reads did not overlap the import"
     assert missing == 0, "a password on both lists was missing during the swap"
     assert sizes <= {len(old), len(new)}, sizes
+
+
+async def test_an_import_racing_an_attach_leaves_a_consistent_state(
+    lists: WatchLists, policies: PasswordPolicies, db: Database
+) -> None:
+    listed = await lists.create("Breaches", "r", WatchListKind.IMPORTED, actor="a")
+    await lists.import_hibp(listed.id, _lines(["before-1", "before-2"]), actor="a")
+    policy = await policies.create(_settings(name="Strict"), priority=1, actor="a")
+    words = [f"raced-{n}" for n in range(12_000)]
+
+    outcomes = await race(
+        lambda: lists.import_hibp(listed.id, _lines(words), actor="a"),
+        lambda: policies.attach(policy.id, listed.id, actor="a"),
+    )
+
+    assert not [o for o in outcomes if isinstance(o, BaseException)], outcomes
+    attached = await policies.get(policy.id)
+    assert attached.settings.watch_list_ids == (listed.id,)
+    after = await lists.get(listed.id)
+    async with db.connection() as conn:
+        cur = await conn.execute(
+            "SELECT count(*) FROM warden.watch_list_entries WHERE list_id = %s", (listed.id,)
+        )
+        stored = (await cur.fetchone() or (0,))[0]
+        cur = await conn.execute("SELECT count(*) FROM warden.watch_list_staging")
+        staged = (await cur.fetchone() or (0,))[0]
+    assert after.entry_count == stored == len(words)
+    assert staged == 0
+    # The policy now checks the new list, and the old entries are gone.
+    assert (await lists.match("raced-11999", attached)).match is not None
+    assert (await lists.match("before-1", attached)).match is None
+
+
+async def test_a_failed_import_through_the_pool_leaves_the_list_as_it_was(
+    lists: WatchLists, db: Database
+) -> None:
+    # Through a pool, so a write committed apart from the import's transaction
+    # would show here (the CLI's single connection would hide it).
+    listed = await lists.create("Breaches", "r", WatchListKind.IMPORTED, actor="a")
+    await lists.import_hibp(listed.id, _lines(["kept"]), actor="a")
+    lines = [*_lines([f"staged-{n}" for n in range(6_000)]), "not a line"]
+    with pytest.raises(WatchListImportError) as caught:
+        await lists.import_hibp(listed.id, lines, actor="a")
+    assert caught.value.line == 6_001
+    async with db.connection() as conn:
+        cur = await conn.execute(
+            "SELECT upper(encode(hash, 'hex')) FROM warden.watch_list_entries WHERE list_id = %s",
+            (listed.id,),
+        )
+        assert [r[0] for r in await cur.fetchall()] == [_sha1("kept")]
+    assert (await lists.get(listed.id)).entry_count == 1

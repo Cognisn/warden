@@ -280,11 +280,17 @@ async def test_deleting_a_policy_returns_its_users_to_the_default(
     user: User = await make_user(roles=("viewer",))
     pinned: User = await make_user()
     await store.pin(pinned.id, policy.id, actor="a")
+    # A policy pinned on a user is refused (wave 17): unpin first, deliberately.
+    with pytest.raises(PasswordPolicyConflict, match="pinned on 1 user"):
+        await store.delete(policy.id, actor="a")
+    assert (await store.effective(pinned.id)).source == "pin"
+    assert await audit_rows(db, "warden.identity.password_policy.deleted") == []
+    await store.unpin(pinned.id, actor="a")
     await store.delete(policy.id, actor="a")
     assert (await store.effective(user.id)).source == "default"
     assert (await store.effective(pinned.id)).source == "default"
     (row,) = await audit_rows(db, "warden.identity.password_policy.deleted")
-    assert row["details"] == {"roles_unmapped": 1, "pins_removed": 1}
+    assert row["details"] == {"roles_unmapped": 1, "pins_removed": 0}
 
 
 async def test_pinning_an_unknown_user_or_policy_is_refused(
