@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-13
+
+First release: 0.1.0b25 as it stands, after the release gate, with the licence recorded as decided and the README's status line updated. No library change since 0.1.0b25.
+
+### Known issues
+
+- Sample console (`examples/console`): on the forced-enrolment card after a password sign-in, "Set up an authenticator app instead" replaces the card with a status line, so no secret or code field appears. Registering a security key or passkey from the same card works, as does setting up an authenticator from Account. To be fixed in 0.1.1.
+
 ### Changed
 
 - The design overview records the licence as decided: Apache-2.0, confirmed for 0.1.0. Section 8 has no open items left.
