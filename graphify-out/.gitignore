@@ -1,0 +1,9 @@
+# Local to each machine: interpreter path, scan root, extraction cache and token costs.
+.graphify_python
+.graphify_root
+cache/
+cost.json
+.graphify_build_state.json
+.graphify_labels.json.sig
+.graphify_labels.pending.json
+20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]/

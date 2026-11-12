@@ -1,0 +1,11 @@
+# Keeps the commit SHAs that pin every GitHub Action current. Dependabot keeps
+# the pinned form (full SHA, release as a trailing comment), which the
+# pinned-actions tripwire accepts.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
