@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - The design overview records the licence as decided: Apache-2.0, confirmed for 0.1.0. Section 8 has no open items left.
+- The README's status line names 0.1.0 as the first release instead of a beta in testing.
 
 ## [0.1.0b25] - 2026-11-11
 

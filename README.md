@@ -2,7 +2,7 @@
 
 Identity and audit for Python web applications: users, sign-in, invitations, OpenID Connect single sign-on, roles and permissions, API keys, and a tamper-evident audit trail with syslog forwarding.
 
-> **Status: beta.** 0.1.0 is feature complete and in testing; it takes fixes only until its release. Before 1.0 a minor version may break the public API, and every break is named in the [changelog](https://github.com/Cognisn/warden/blob/main/CHANGELOG.md) with an upgrade note.
+> **Status: 0.1.0, the first release.** Before 1.0 a minor version may break the public API, and every break is named in the [changelog](https://github.com/Cognisn/warden/blob/main/CHANGELOG.md) with an upgrade note.
 
 warden is built by [Cognisn](https://github.com/Cognisn) as the shared identity and audit foundation for its products. It is an embedded library, not a service: an application installs it, passes in its database connection pool and configuration, and mounts warden's FastAPI routers wherever it chooses. warden has no user interface; each application builds its own screens against warden's documented HTTP contract.
 
