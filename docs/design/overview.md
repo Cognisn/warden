@@ -231,12 +231,13 @@ Each behaviour below is written as a failing test before the code that satisfies
 
 ## 8. Open items
 
-1. Licence choice pending legal confirmation (D8).
+None for 0.1.0.
 
 ### Resolved
 
 | Item | Resolution |
 |---|---|
+| Licence (D8) | Apache-2.0, confirmed for 0.1.0 on 13 November 2026. |
 | IANA Private Enterprise Number (D12) | Registered: 67382. The default SD-ID is `warden@67382`. |
 | Audit retention default and minimum | No default period: the trail is kept for ever unless the product sets `audit.retention_days`, which must be at least 365. |
 | Anchoring checkpoints outside the database | In 0.1.0: signed head attestation rows, a `warden audit anchor` command, and verification against anchors exported from a SIEM (D13). |

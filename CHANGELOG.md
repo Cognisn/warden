@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- The design overview records the licence as decided: Apache-2.0, confirmed for 0.1.0. Section 8 has no open items left.
+
 ## [0.1.0b25] - 2026-11-11
 
 Twenty-fifth beta: the sample console explains password policies and watch lists, says the range API needs no key and that warden bundles its common-password list, and splits the manual watch list into Exact passwords and Terms panels. No library change.
