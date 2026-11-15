@@ -250,7 +250,7 @@ def test_a_totp_issuer_with_spaces_is_allowed() -> None:
     assert _parse(identity={"totp_issuer": "Example Corp"}).identity.totp_issuer == "Example Corp"
 
 
-# Fields wave 2 relies on, declared now (provisional until 0.1.0b1).
+# Fields wave 2 relies on.
 
 
 def test_api_key_fields() -> None:
@@ -356,25 +356,11 @@ def test_sso_refetch_interval_must_not_exceed_the_cache_lifetime() -> None:
     )
 
 
-def test_provisional_fields_are_marked_in_their_docstrings() -> None:
+def test_no_docstring_calls_a_field_provisional() -> None:
     from warden import config
 
     source = config.__file__
     assert source is not None
     with open(source, encoding="utf-8") as handle:
         text = handle.read()
-    for name in (
-        "api_key_prefix",
-        "api_key_max_lifetime_days",
-        "template_package",
-        "subject_prefix",
-        "jwks_cache_seconds",
-        "jwks_refetch_min_seconds",
-        "login_transaction_ttl_seconds",
-        "handoff_code_ttl_seconds",
-        "allowed_algorithms",
-        "clock_skew_seconds",
-    ):
-        declaration = text.index(f"    {name}:")
-        following = text[declaration : declaration + 600]
-        assert "Provisional until 0.1.0b1" in following, name
+    assert "Provisional" not in text
