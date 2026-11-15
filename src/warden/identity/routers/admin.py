@@ -898,7 +898,10 @@ def build_admin_router(
             await identity.invitations.revoke(
                 uid, actor=str(principal.user_id), source_ip=source(request)
             )
-        except InvitationError:
+        except InvitationError as exc:
+            # No such user, including an invitation already revoked, is the 404 (GitHub #4).
+            if str(exc) == "no such user":
+                return _not_found()
             return _detail("the invitation is not pending", 409)
         return _no_content()
 
