@@ -31,10 +31,6 @@ MIN_REASON_WORDS = 8
 
 # (module, enclosing function, action as written) -> reason.
 ALLOWED: dict[tuple[str, str, str], str] = {
-    ("warden/audit/anchor.py", "anchor", "ANCHOR_ACTION"): (
-        "cli: `warden audit anchor` and a product's scheduled anchoring append the anchor; "
-        "warden has no anchoring route, so no request supplies an address."
-    ),
     ("warden/audit/retention.py", "purge", "PURGE_ACTION"): (
         "cli: `warden audit purge` runs the retention purge, refusing a broken chain; "
         "warden has no purge route, so no request supplies an address."

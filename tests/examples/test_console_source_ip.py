@@ -101,3 +101,12 @@ async def test_importing_the_sample_file_records_the_address(
         client.post(f"/api/watch-lists/{list_id}/import-sample", headers=headers),
         "warden.identity.watch_list.imported",
     )
+
+
+async def test_anchoring_the_head_records_the_address(
+    console: Any, client: httpx.AsyncClient, headers: dict[str, str]
+) -> None:
+    answer = await _recorded(
+        console, client.post("/api/audit/anchor", headers=headers), "warden.audit.anchor"
+    )
+    assert answer.json()["anchored"] is not None

@@ -205,9 +205,11 @@ def console_router(
         return {"policy": _policy(policy)}
 
     @router.post("/audit/anchor")
-    async def anchor_head(principal: AuditWriter) -> JSONResponse:
+    async def anchor_head(request: Request, principal: AuditWriter) -> JSONResponse:
         try:
-            written = await write_anchor(recorder, keys, actor=str(principal.user_id))
+            written = await write_anchor(
+                recorder, keys, actor=str(principal.user_id), source_ip=source(request)
+            )
         except AnchorError:
             return JSONResponse({"detail": "the head could not be anchored"}, status_code=409)
         if written is None:

@@ -33,6 +33,7 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
+from ipaddress import IPv4Address, IPv6Address
 from typing import Any, Protocol
 
 from psycopg import sql
@@ -202,6 +203,7 @@ async def anchor(
     *,
     actor: str | None = None,
     min_rows: int | None = None,
+    source_ip: IPv4Address | IPv6Address | None = None,
 ) -> AnchorRecord | None:
     """Append a signed attestation of the committed chain head.
 
@@ -217,6 +219,10 @@ async def anchor(
     other connections are all queued on that lock. Rows recorded meanwhile
     may therefore sit between the head and the anchor row; the anchor
     attests the head as it was committed at ``anchored_at``.
+
+    ``source_ip`` is the client address a product's own anchoring route ran
+    it for, recorded on the anchor row; the command line and a scheduler
+    have none.
     """
     if min_rows is not None and min_rows < 1:
         raise ValueError("min_rows must be at least 1")
@@ -250,6 +256,7 @@ async def anchor(
             action=ANCHOR_ACTION,
             outcome="success",
             actor=actor,
+            source_ip=source_ip,
             details=attested.to_details(),
         )
     )
