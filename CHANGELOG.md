@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.1a1] - 2026-11-16
+
+First alpha of 0.1.1: the sample console's forced-enrolment authenticator route and the stray "null" on its Account screen are fixed. No library change.
+
 ### Fixed
 
 - Sample console (`examples/console`, no library change): on the forced-enrolment card after a password sign-in, "Set up an authenticator app instead" now keeps the card and shows the authenticator's secret and code field beneath it. The button's own status was drawn over the card, so nothing appeared. Confirming a code shows "Enrolled." and the recovery codes, as before. The security key and passkey route on the same card, and the authenticator set-up on the Account screen, are unchanged.
