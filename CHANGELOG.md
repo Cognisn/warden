@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Sample console (`examples/console`, no library change): on the forced-enrolment card after a password sign-in, "Set up an authenticator app instead" now keeps the card and shows the authenticator's secret and code field beneath it. The button's own status was drawn over the card, so nothing appeared. Confirming a code shows "Enrolled." and the recovery codes, as before. The security key and passkey route on the same card, and the authenticator set-up on the Account screen, are unchanged.
+- Sample console: the Account screen no longer shows the stray text "null" under its heading when the password has no expiry warning.
+
+### Added
+
+- A browser check of the sample console (`tests/examples/test_console_browser.py`, marked `integration`): Chromium walks the forced-enrolment card with an authenticator app and with a security key, the authenticator set-up on the Account screen, and the Account screen's text.
+
 ## [0.1.0] - 2026-11-13
 
 First release: 0.1.0b25 as it stands, after the release gate, with the licence recorded as decided and the README's status line updated. No library change since 0.1.0b25.

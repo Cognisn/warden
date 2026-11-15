@@ -238,13 +238,17 @@ function keyRegistration(under, after = async () => {}) {
 
 // mfa_enrolment_required: the account must have a second factor first; either kind will do.
 function forcedEnrolment(challenge, area) {
+  // The enrolment card draws itself into ``target``; the button's own status
+  // ("Working.", or an error) goes in ``note``, so it never replaces the card.
   const target = h("div", {});
+  const note = h("div", {});
   area.replaceChildren(
     card(
       "Set up a second factor",
       h("p", { class: "muted" }, "This account needs a second factor before it can sign in. Set up an authenticator app or register a security key or passkey; the recovery codes come with the first."),
       supported() ? keyRegistration({ challenge }) : status("info", "This browser cannot use security keys or passkeys."),
-      h("p", {}, action("Set up an authenticator app instead", async () => enrolStep({ challenge }, target), target, "quiet")),
+      h("p", {}, action("Set up an authenticator app instead", async () => enrolStep({ challenge }, target), note, "quiet")),
+      note,
       target,
     ),
   );
@@ -483,14 +487,20 @@ export async function accountScreen(main) {
       return outcome(answer, "password changed");
     },
   );
+  // Element.replaceChildren turns a null argument into the text "null", so an
+  // absent notice is an empty list that spreads to nothing.
+  const expiry =
+    expiryDays === null
+      ? []
+      : [
+          status(
+            "info",
+            `Your password expires in ${expiryDays === 1 ? "1 day" : `${expiryDays} days`}. Change it under Change password below; after that warden will ask for a change at sign-in.`,
+          ),
+        ];
   main.replaceChildren(
     h("h2", {}, "Account"),
-    expiryDays === null
-      ? null
-      : status(
-          "info",
-          `Your password expires in ${expiryDays === 1 ? "1 day" : `${expiryDays} days`}. Change it under Change password below; after that warden will ask for a change at sign-in.`,
-        ),
+    ...expiry,
     card(
       "Signed in",
       json(who),
