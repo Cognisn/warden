@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.1a3] - 2026-11-16
+
+Third alpha of 0.1.1: release housekeeping. Releasing no longer uses TestPyPI, Dependabot targets the release branch, the workflow actions are bumped, and the configuration docstrings no longer call any setting provisional. No library behaviour change.
+
 ### Changed
 
 - Releasing no longer uses TestPyPI. The release workflow (`.github/workflows/publish.yml`) has no manual run and no `testpypi` job; a version tag still publishes to PyPI from the protected `pypi` environment after a maintainer approves. `docs/releasing.md` drops every TestPyPI step. Upgrade note: delete the `testpypi` environment and the TestPyPI trusted publisher in the repository and project settings if they still exist.
