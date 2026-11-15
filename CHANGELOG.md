@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Releasing no longer uses TestPyPI. The release workflow (`.github/workflows/publish.yml`) has no manual run and no `testpypi` job; a version tag still publishes to PyPI from the protected `pypi` environment after a maintainer approves. `docs/releasing.md` drops every TestPyPI step. Upgrade note: delete the `testpypi` environment and the TestPyPI trusted publisher in the repository and project settings if they still exist.
+- Dependabot now targets the open release branch (`release/v0.1.1`) instead of `main`, and `docs/releasing.md` has a step to retarget it when a release branch is cut.
+- GitHub Actions are bumped to `actions/checkout` 7.0.1 and `actions/setup-python` 7.1.0, still pinned to full commit SHAs.
+
+### Removed
+
+- The "Provisional until 0.1.0b1" notes in the configuration docstrings, and the module docstring's paragraph about provisional fields. The settings are part of the released configuration; no field, type or default changed.
+
 ## [0.1.0] - 2026-11-13
 
 First release: 0.1.0b25 as it stands, after the release gate, with the licence recorded as decided and the README's status line updated. No library change since 0.1.0b25.

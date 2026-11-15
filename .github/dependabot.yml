@@ -5,6 +5,10 @@ version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
+    # Updates target the open release branch, never main, which holds only
+    # released versions. Retarget this at each release branch cut (see
+    # docs/releasing.md).
+    target-branch: release/v0.1.1
     schedule:
       interval: weekly
     commit-message:
