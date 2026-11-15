@@ -21,6 +21,7 @@ from psycopg import AsyncConnection, sql
 
 from warden.audit import AuditEvent, record_audit
 from warden.db import Database, schema, table
+from warden.identity.http import SourceIp
 from warden.identity.password_policy.rules import UserContext
 from warden.identity.roles import LastAdministratorError, Roles, lock_administrators
 
@@ -128,13 +129,16 @@ class Users:
         status: UserStatus = UserStatus.ACTIVE,
         sign_in_method: SignInMethod = SignInMethod.PASSWORD_AND_SSO,
         password: str | None = None,
+        source_ip: SourceIp = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> User:
         """Create a user. The email address must be unique, ignoring case.
 
         A password is checked against the default password policy (a new
         user holds no role and no pin yet); ``PasswordRejected``, a
-        ``UserError``, names every failure.
+        ``UserError``, names every failure. ``source_ip``, the client address
+        the user was created from (first-run setup, say), goes on every event
+        recorded.
         """
         check_email(email)
         accepted = None
@@ -146,6 +150,7 @@ class Users:
                 user_id=None,
                 place="created",
                 actor=actor,
+                source_ip=source_ip,
             )
         password_hash = None if accepted is None else accepted.password_hash
         try:
@@ -169,13 +174,14 @@ class Users:
                         actor=actor,
                         resource_type="user",
                         resource_id=str(user.id),
+                        source_ip=source_ip,
                         details={"status": status.value, "sign_in_method": sign_in_method.value},
                     ),
                     conn=tx,
                 )
                 if accepted is not None:
                     await self._passwords.record(
-                        tx, user.id, accepted, place="created", actor=actor
+                        tx, user.id, accepted, place="created", actor=actor, source_ip=source_ip
                     )
         except psycopg.errors.UniqueViolation:
             raise UserError("a user with that email address already exists") from None
@@ -264,9 +270,13 @@ class Users:
         status: UserStatus,
         *,
         actor: str | None,
+        source_ip: SourceIp = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> User:
-        """Change a user's status. Refuses leaving no active administrator."""
+        """Change a user's status. Refuses leaving no active administrator.
+
+        ``source_ip`` is the client address the change was asked from, if any.
+        """
         previous: str | None = None
         try:
             async with self._db.transaction(conn) as tx:
@@ -294,6 +304,7 @@ class Users:
                         actor=actor,
                         resource_type="user",
                         resource_id=str(user_id),
+                        source_ip=source_ip,
                         details={"from": previous, "to": status.value},
                     ),
                     conn=tx,
@@ -306,6 +317,7 @@ class Users:
                     actor=actor,
                     resource_type="user",
                     resource_id=str(user_id),
+                    source_ip=source_ip,
                     details={"from": previous, "to": status.value, "reason": "last_administrator"},
                 )
             )
@@ -318,6 +330,7 @@ class Users:
         method: SignInMethod,
         *,
         actor: str | None,
+        source_ip: SourceIp = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> User:
         """Change how a user signs in.
@@ -326,7 +339,8 @@ class Users:
         holds any security key or passkey (ruling P5, Skuld question 25): the
         administrator's reset of second factors removes them first. The
         user's row is locked, as a registration locks it, so a key cannot be
-        added between the check and the change.
+        added between the check and the change. ``source_ip`` is the client
+        address the change was asked from, if any.
         """
         previous: str | None = None
         try:
@@ -351,6 +365,7 @@ class Users:
                         actor=actor,
                         resource_type="user",
                         resource_id=str(user_id),
+                        source_ip=source_ip,
                         details={"from": previous, "to": method.value},
                     ),
                     conn=tx,
@@ -363,6 +378,7 @@ class Users:
                     actor=actor,
                     resource_type="user",
                     resource_id=str(user_id),
+                    source_ip=source_ip,
                     details={
                         "from": previous,
                         "to": method.value,
@@ -406,6 +422,7 @@ class Users:
         password: str,
         *,
         actor: str | None,
+        source_ip: SourceIp = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> User:
         """Set a new password (an administrative action; users change theirs by signing in).
@@ -413,7 +430,8 @@ class Users:
         Checked against the user's effective password policy: its rules,
         watch lists and history, but not the minimum age, which limits only
         the user's own changes. ``PasswordRejected`` (a ``UserError``) names
-        every failure. Clears any required change.
+        every failure. Clears any required change. ``source_ip`` is the client
+        address the change was asked from, if any.
         """
         current = await self.get(user_id, conn=conn)
         if current is None:
@@ -425,12 +443,15 @@ class Users:
             user_id=user_id,
             place="administrator",
             actor=actor,
+            source_ip=source_ip,
         )
         async with self._db.transaction(conn) as tx:
             user = await self._update(
                 tx, user_id, sql.SQL("password_hash = %s"), accepted.password_hash
             )
-            await self._passwords.record(tx, user_id, accepted, place="administrator", actor=actor)
+            await self._passwords.record(
+                tx, user_id, accepted, place="administrator", actor=actor, source_ip=source_ip
+            )
             await record_audit(
                 AuditEvent(
                     action="warden.identity.user.password_set",
@@ -438,6 +459,7 @@ class Users:
                     actor=actor,
                     resource_type="user",
                     resource_id=str(user_id),
+                    source_ip=source_ip,
                 ),
                 conn=tx,
             )

@@ -623,7 +623,7 @@ class Invitations:
                     if not await self._activate(tx, invitee.id):
                         reason = "concurrent_change"
                         raise _Abort
-                    roles = await self._apply_grants(tx, invitee.id)
+                    roles = await self._apply_grants(tx, invitee.id, source_ip)
                     await self._tokens.revoke_live(tx, invitee.id, Purpose.INVITATION)
                     await self._audit_success(
                         tx,
@@ -788,7 +788,9 @@ class Invitations:
         )
         return await cur.fetchone() is not None
 
-    async def _apply_grants(self, tx: AsyncConnection[Any], user_id: uuid.UUID) -> tuple[str, ...]:
+    async def _apply_grants(
+        self, tx: AsyncConnection[Any], user_id: uuid.UUID, source_ip: SourceIp
+    ) -> tuple[str, ...]:
         cur = await tx.execute(
             sql.SQL(
                 "DELETE FROM {} WHERE user_id = %s RETURNING role, expires_at, staged_by"
@@ -799,7 +801,14 @@ class Invitations:
         for role, expires_at, staged_by in sorted(await cur.fetchall()):
             if role not in self._roles.registry:
                 continue  # the product no longer defines it; it would grant nothing
-            await self._roles.assign(user_id, role, actor=staged_by, expires_at=expires_at, conn=tx)
+            await self._roles.assign(
+                user_id,
+                role,
+                actor=staged_by,
+                expires_at=expires_at,
+                source_ip=source_ip,
+                conn=tx,
+            )
             applied.append(role)
         return tuple(applied)
 

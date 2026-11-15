@@ -1286,7 +1286,7 @@ class Identity:
         if user is None:
             raise AuthenticationRefused("user_missing")
         try:
-            return await self.mfa.begin_enrolment(user_id, account=user.email)
+            return await self.mfa.begin_enrolment(user_id, account=user.email, source_ip=source_ip)
         except MfaError:
             if principal is not None:
                 raise  # a signed-in user is told; the routes answer 409
@@ -1306,7 +1306,7 @@ class Identity:
         the password must change; the recovery codes are returned either way.
         """
         if principal is not None:
-            codes = await self.mfa.confirm_enrolment(principal.user_id, code)
+            codes = await self.mfa.confirm_enrolment(principal.user_id, code, source_ip=source_ip)
             if codes is None:
                 # Signed in: say the code was wrong, not that authentication failed.
                 await self._audit_second_factor_failure(
@@ -1330,7 +1330,9 @@ class Identity:
                 else:
                     reason = await self._account_refusal(tx, opened.user_id)
                 if reason is None and opened is not None:
-                    codes = await self.mfa.confirm_enrolment(opened.user_id, code, conn=tx)
+                    codes = await self.mfa.confirm_enrolment(
+                        opened.user_id, code, source_ip=source_ip, conn=tx
+                    )
                     if codes is None:
                         reason = "wrong_code"
                     elif not await self.mfa.consume_challenge(tx, opened):

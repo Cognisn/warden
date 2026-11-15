@@ -26,6 +26,10 @@ cover what the console needs that warden leaves to the product:
 - ``GET``/``PUT /dev/clock``: the development clock, present only when the
   console was started with ``serve --dev-clock``.
 
+Each route that changes something through warden's Python API passes the
+client address (``source_ip``), resolved as warden's own routes resolve it,
+so its audit event carries the address as a warden route's would.
+
 The sample mounts them under ``/api``. The outbox is unauthenticated so an
 invitee can follow a link: acceptable only because the sample is for local
 development.
@@ -60,6 +64,7 @@ from warden.audit import (
 from warden.audit import anchor as write_anchor
 from warden.audit.syslog import SyslogForwarder
 from warden.identity import Identity, PolicyError, Principal, require_permission, require_user
+from warden.identity.http import SourceIp, client_ip
 from warden.identity.password_policy import WatchListError, WatchListNotFound
 from warden.identity.password_policy.builtin import bundled_list
 from warden.keys import KeyStore
@@ -117,6 +122,12 @@ def console_router(
     dev_clock: DevClock | None = None,
 ) -> APIRouter:
     router = APIRouter(tags=["sample: console"])
+    trusted_proxies = tuple(identity.config.audit.trusted_proxies)
+
+    def source(request: Request) -> SourceIp:
+        """The client address, believing X-Forwarded-For only from a trusted proxy."""
+        return client_ip(request, trusted_proxies)
+
     User = Annotated[Principal, Depends(require_user)]
     PolicyAdmin = Annotated[Principal, Depends(require_permission(POLICY_MANAGE))]
     AuditReader = Annotated[Principal, Depends(require_permission(AUDIT_READ))]
@@ -179,14 +190,19 @@ def console_router(
         if not isinstance(body, dict):
             return JSONResponse({"detail": "the request is not valid"}, status_code=400)
         try:
-            policy = await identity.policy.update(actor=str(principal.user_id), **body)
+            policy = await identity.policy.update(
+                actor=str(principal.user_id), source_ip=source(request), **body
+            )
         except (PolicyError, TypeError, ValueError):
             return JSONResponse({"detail": "the policy is not valid"}, status_code=400)
         return JSONResponse({"policy": _policy(policy)})
 
     @router.post("/policy/reset")
-    async def reset_policy(principal: PolicyAdmin) -> dict[str, Any]:
-        return {"policy": _policy(await identity.policy.reset(actor=str(principal.user_id)))}
+    async def reset_policy(request: Request, principal: PolicyAdmin) -> dict[str, Any]:
+        policy = await identity.policy.reset(
+            actor=str(principal.user_id), source_ip=source(request)
+        )
+        return {"policy": _policy(policy)}
 
     @router.post("/audit/anchor")
     async def anchor_head(principal: AuditWriter) -> JSONResponse:
@@ -228,8 +244,10 @@ def console_router(
         )
 
     @router.post("/passwords/recheck")
-    async def recheck_passwords(principal: PasswordAdmin) -> dict[str, int]:
-        report = await identity.password_recheck.run(actor=str(principal.user_id))
+    async def recheck_passwords(request: Request, principal: PasswordAdmin) -> dict[str, int]:
+        report = await identity.password_recheck.run(
+            actor=str(principal.user_id), source_ip=source(request)
+        )
         return {
             "checked": report.checked,
             "matched": report.matched,
@@ -241,11 +259,13 @@ def console_router(
         }
 
     @router.post("/watch-lists/{list_id}/import-sample")
-    async def import_sample(list_id: uuid.UUID, principal: PasswordAdmin) -> JSONResponse:
+    async def import_sample(
+        list_id: uuid.UUID, request: Request, principal: PasswordAdmin
+    ) -> JSONResponse:
         lines = SAMPLE_IMPORT.read_text(encoding="utf-8").splitlines()
         try:
             result = await identity.watch_lists.import_hibp(
-                list_id, lines, actor=str(principal.user_id)
+                list_id, lines, actor=str(principal.user_id), source_ip=source(request)
             )
         except WatchListNotFound:
             return JSONResponse({"detail": "no such watch list"}, status_code=404)
