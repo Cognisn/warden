@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.1a2] - 2026-11-16
+
+Second alpha of 0.1.1: every audit event raised in answer to a request records the client address (#3), and revoking an invitation that no longer exists answers 404 (#4). Adds an optional `source_ip` to the methods that record events; no migration.
+
 ### Added
 
 - An optional keyword-only `source_ip` on every public method that records an audit event and did not take one, so a product can pass the client address from its own routes (session policy, first-run setup and the like); each event the call records carries it (#3). The methods: `Users.create`, `set_status`, `set_sign_in_method` and `set_password`; `Roles.assign` and `revoke`; `Mfa.begin_enrolment` and `confirm_enrolment`; `PolicyStore.update` and `reset` (`Identity.policy`); `PasswordPolicies.create`, `update`, `delete`, `set_priority`, `reorder`, `map_role`, `pin`, `unpin`, `attach` and `detach`; `WatchLists.create`, `update`, `delete`, `add_entries`, `remove_entries`, `add_terms`, `remove_terms` and `import_hibp`; `PasswordRecheck.run`; `SsoSettingsStore.update` and `reset`; `SingleSignOn.unpin`; and `warden.audit.anchor`. Existing calls are unchanged. The client guide says when to pass it.
