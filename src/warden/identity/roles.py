@@ -21,6 +21,7 @@ from psycopg import AsyncConnection, sql
 
 from warden.audit import AuditEvent, record_audit
 from warden.db import ADMINISTRATOR_LOCK_KEY, Database, schema, table
+from warden.identity.http import SourceIp
 
 __all__ = [
     "ADMINISTRATOR_LOCK_KEY",
@@ -172,12 +173,14 @@ class Roles:
         *,
         actor: str | None,
         expires_at: datetime | None = None,
+        source_ip: SourceIp = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> None:
         """Grant ``role`` to the user, or update the expiry of an existing grant.
 
         An administrator role cannot expire: expiry is a clock, not a change
         warden can refuse, so it could silently leave no administrator.
+        ``source_ip`` is the client address the change was asked from, if any.
         """
         definition = self._registry.role(role)
         if definition.administrator and expires_at is not None:
@@ -206,6 +209,7 @@ class Roles:
                     actor=actor,
                     resource_type="user",
                     resource_id=str(user_id),
+                    source_ip=source_ip,
                     details={
                         "role": role,
                         "expires_at": expires_at.isoformat() if expires_at else None,
@@ -220,12 +224,14 @@ class Roles:
         role: str,
         *,
         actor: str | None,
+        source_ip: SourceIp = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> bool:
         """Remove ``role`` from the user. False if they did not hold it.
 
         Raises ``LastAdministratorError`` (and audits the refusal) if this
-        would leave no active administrator.
+        would leave no active administrator. ``source_ip`` is the client
+        address the change was asked from, if any.
         """
         administrator = role in self._registry.administrator_roles()
         try:
@@ -249,6 +255,7 @@ class Roles:
                         actor=actor,
                         resource_type="user",
                         resource_id=str(user_id),
+                        source_ip=source_ip,
                         details={"role": role},
                     ),
                     conn=tx,
@@ -261,6 +268,7 @@ class Roles:
                     actor=actor,
                     resource_type="user",
                     resource_id=str(user_id),
+                    source_ip=source_ip,
                     details={"role": role, "reason": "last_administrator"},
                 )
             )

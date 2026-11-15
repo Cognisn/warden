@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- An optional keyword-only `source_ip` on every public method that records an audit event and did not take one, so a product can pass the client address from its own routes (session policy, first-run setup and the like); each event the call records carries it (#3). The methods: `Users.create`, `set_status`, `set_sign_in_method` and `set_password`; `Roles.assign` and `revoke`; `Mfa.begin_enrolment` and `confirm_enrolment`; `PolicyStore.update` and `reset` (`Identity.policy`); `PasswordPolicies.create`, `update`, `delete`, `set_priority`, `reorder`, `map_role`, `pin`, `unpin`, `attach` and `detach`; `WatchLists.create`, `update`, `delete`, `add_entries`, `remove_entries`, `add_terms`, `remove_terms` and `import_hibp`; `PasswordRecheck.run`; `SsoSettingsStore.update` and `reset`; `SingleSignOn.unpin`; and `warden.audit.anchor`. Existing calls are unchanged. The client guide says when to pass it.
+
+### Fixed
+
+- Audit events raised in answer to a request now record the client address the router resolves (#3). Before, these were written with `source_ip` empty: `warden.identity.role.assigned` and `role.revoked` (including a role staged on an invitation and applied when it is accepted), `user.status_changed`, `user.sign_in_method_changed`, `mfa.enrolment_started` and `mfa.enrolled`, every `password_policy.*` and `watch_list.*` change made through the administration routes, `password.change_required` and `password.change_cleared` from an administrator, `sso.settings_changed`, `sso.disabled` and `sso.subject_unpinned`, and `warden.syslog.test_sent`. Events with no request (the `warden` commands, a scheduled job, the default password policy warden seeds on first read) still carry none. A tripwire test fails on any new warden audit event recorded without `source_ip` unless it is on a reasoned allow-list.
+- `PUT <admin>/sso/settings` with `actor` or `source_ip` in the body is a 400 naming the unknown setting, like any other unknown field, instead of a server error.
+- `DELETE <admin>/invitations/{user_id}` answers 404, as documented, when no user has the id, which includes an invitation already revoked; 409 only when the user exists and is not invited (#4). Of two concurrent revocations one gets 204 and the other 404. The refusal is audited with the reason `no_such_user` or `not_pending`.
+- Sample console (`examples/console`): its session policy, password recheck, sample import and anchor routes pass the client address to warden, so their audit events carry it.
+
 ## [0.1.1a1] - 2026-11-16
 
 First alpha of 0.1.1: the sample console's forced-enrolment authenticator route and the stray "null" on its Account screen are fixed. No library change.

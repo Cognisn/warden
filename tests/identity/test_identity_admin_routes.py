@@ -351,8 +351,9 @@ async def test_invitations_are_created_listed_resent_and_revoked(
     assert resent.status_code == 200 and len(mail.sent) == 2
     revoked = await client.delete(f"/admin/invitations/{user_id}", headers=headers)
     assert revoked.status_code == 204
+    # Revoking deleted the invited user, so there is no such user now (GitHub #4).
     again = await client.delete(f"/admin/invitations/{user_id}", headers=headers)
-    assert again.status_code == 409
+    assert again.status_code == 404
     for action in ("created", "resent", "revoked"):
         rows = await audit_rows(db, f"warden.identity.invitation.{action}")
         assert rows[0]["actor"] == str(me.id), action

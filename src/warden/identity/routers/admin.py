@@ -403,7 +403,9 @@ def build_admin_router(
         except ValueError:
             return _invalid()
         try:
-            user = await identity.users.set_status(uid, status, actor=str(principal.user_id))
+            user = await identity.users.set_status(
+                uid, status, actor=str(principal.user_id), source_ip=source(request)
+            )
         except LastAdministratorError:
             return _detail("this would leave no active administrator", 409)
         except UserError:
@@ -446,7 +448,7 @@ def build_admin_router(
             return _invalid()
         try:
             user = await identity.users.set_sign_in_method(
-                uid, method, actor=str(principal.user_id)
+                uid, method, actor=str(principal.user_id), source_ip=source(request)
             )
         except SignInMethodConflict:
             return _detail(_HOLDS_KEYS, 409)
@@ -682,7 +684,11 @@ def build_admin_router(
             return _invalid()
         try:
             await identity.roles.assign(
-                uid, role, actor=str(principal.user_id), expires_at=expires_at
+                uid,
+                role,
+                actor=str(principal.user_id),
+                expires_at=expires_at,
+                source_ip=source(request),
             )
         except RoleError as exc:
             return _not_found() if "does not exist" in str(exc) else _invalid()
@@ -708,13 +714,18 @@ def build_admin_router(
         },
     )
     async def revoke_role(
-        user_id: str, role: str, principal: Annotated[Principal, Depends(roles_admin)]
+        user_id: str,
+        role: str,
+        request: Request,
+        principal: Annotated[Principal, Depends(roles_admin)],
     ) -> Response:
         uid = _id(user_id)
         if uid is None:
             return _not_found()
         try:
-            held = await identity.roles.revoke(uid, role, actor=str(principal.user_id))
+            held = await identity.roles.revoke(
+                uid, role, actor=str(principal.user_id), source_ip=source(request)
+            )
         except LastAdministratorError:
             return _detail("this would leave no active administrator", 409)
         return _no_content() if held else _not_found()
@@ -887,7 +898,10 @@ def build_admin_router(
             await identity.invitations.revoke(
                 uid, actor=str(principal.user_id), source_ip=source(request)
             )
-        except InvitationError:
+        except InvitationError as exc:
+            # No such user, including an invitation already revoked, is the 404 (GitHub #4).
+            if str(exc) == "no such user":
+                return _not_found()
             return _detail("the invitation is not pending", 409)
         return _no_content()
 

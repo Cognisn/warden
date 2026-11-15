@@ -67,7 +67,7 @@ from warden.db import (
     table,
 )
 from warden.identity.dependencies import Principal, require_permission
-from warden.identity.http import NO_STORE, json_response, read_object
+from warden.identity.http import NO_STORE, SourceIp, client_ip, json_response, read_object
 from warden.identity.password_policy import (
     ChangeReason,
     PassphraseRule,
@@ -618,8 +618,13 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
     lists = identity.watch_lists
     Admin = Annotated[Principal, Depends(admin)]
 
+    trusted_proxies = tuple(identity.config.audit.trusted_proxies)
+
     def actor(principal: Principal) -> str:
         return str(principal.user_id)
+
+    def source(request: Request) -> SourceIp:
+        return client_ip(request, trusted_proxies)
 
     async def attached_to(list_id: uuid.UUID) -> list[str]:
         return [str(p.id) for p in await policies.list() if list_id in p.settings.watch_list_ids]
@@ -693,7 +698,9 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
         if errors or priority is None:
             return _refused(errors)
         try:
-            policy = await policies.create(settings, priority=priority, actor=actor(principal))
+            policy = await policies.create(
+                settings, priority=priority, actor=actor(principal), source_ip=source(request)
+            )
         except WatchListNotFound:
             return _refused([("watch_list_ids", "a watch list to attach does not exist")])
         except PasswordPolicyConflict as exc:
@@ -808,7 +815,11 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
             return _refused(errors)
         try:
             updated = await policies.update(
-                policy.id, settings, expected_version=version, actor=actor(principal)
+                policy.id,
+                settings,
+                expected_version=version,
+                actor=actor(principal),
+                source_ip=source(request),
             )
         except PasswordPolicyNotFound:
             return _not_found()
@@ -839,12 +850,12 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
             **FORBIDDEN,
         },
     )
-    async def delete_policy(policy_id: str, principal: Admin) -> Response:
+    async def delete_policy(policy_id: str, request: Request, principal: Admin) -> Response:
         pid = _id(policy_id)
         if pid is None:
             return _not_found()
         try:
-            await policies.delete(pid, actor=actor(principal))
+            await policies.delete(pid, actor=actor(principal), source_ip=source(request))
         except PasswordPolicyNotFound:
             return _not_found()
         except PasswordPolicyConflict as exc:
@@ -881,7 +892,9 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
         if priority is None:
             return _invalid_request()
         try:
-            moved = await policies.set_priority(pid, priority, actor=actor(principal))
+            moved = await policies.set_priority(
+                pid, priority, actor=actor(principal), source_ip=source(request)
+            )
         except PasswordPolicyNotFound:
             return _not_found()
         except PasswordPolicyConflict as exc:
@@ -914,7 +927,7 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
             return _invalid_request()
         try:
             ordered = await policies.reorder(
-                [i for i in ids if i is not None], actor=actor(principal)
+                [i for i in ids if i is not None], actor=actor(principal), source_ip=source(request)
             )
         except PasswordPolicyError:
             return _invalid_request()
@@ -948,7 +961,11 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
         settings = dataclasses.replace(policy.settings, include_builtin=include)
         try:
             updated = await policies.update(
-                policy.id, settings, expected_version=policy.version, actor=actor(principal)
+                policy.id,
+                settings,
+                expected_version=policy.version,
+                actor=actor(principal),
+                source_ip=source(request),
             )
         except PasswordPolicyNotFound:
             return _not_found()
@@ -957,14 +974,14 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
         return json_response({"policy": _policy(updated)})
 
     async def attachment(
-        policy_id: str, list_id: str, principal: Principal, *, attach: bool
+        policy_id: str, list_id: str, request: Request, principal: Principal, *, attach: bool
     ) -> Response:
         pid, lid = _id(policy_id), _id(list_id)
         if pid is None or lid is None:
             return _not_found()
         change: Callable[..., Any] = policies.attach if attach else policies.detach
         try:
-            changed = await change(pid, lid, actor=actor(principal))
+            changed = await change(pid, lid, actor=actor(principal), source_ip=source(request))
         except (PasswordPolicyNotFound, WatchListNotFound):
             return _not_found()
         return json_response({"policy": _policy(changed)})
@@ -983,8 +1000,10 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
             **FORBIDDEN,
         },
     )
-    async def attach_list(policy_id: str, list_id: str, principal: Admin) -> Response:
-        return await attachment(policy_id, list_id, principal, attach=True)
+    async def attach_list(
+        policy_id: str, list_id: str, request: Request, principal: Admin
+    ) -> Response:
+        return await attachment(policy_id, list_id, request, principal, attach=True)
 
     @router.delete(
         "/password-policies/{policy_id}/watch-lists/{list_id}",
@@ -997,8 +1016,10 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
             **FORBIDDEN,
         },
     )
-    async def detach_list(policy_id: str, list_id: str, principal: Admin) -> Response:
-        return await attachment(policy_id, list_id, principal, attach=False)
+    async def detach_list(
+        policy_id: str, list_id: str, request: Request, principal: Admin
+    ) -> Response:
+        return await attachment(policy_id, list_id, request, principal, attach=False)
 
     @router.get(
         "/password-policies/{policy_id}/affected-users",
@@ -1054,7 +1075,7 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
         if pid is None:
             return _invalid_request()
         try:
-            await policies.map_role(role, pid, actor=actor(principal))
+            await policies.map_role(role, pid, actor=actor(principal), source_ip=source(request))
         except PasswordPolicyNotFound:
             return _invalid_request()
         except PasswordPolicyConflict as exc:
@@ -1075,9 +1096,9 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
             **FORBIDDEN,
         },
     )
-    async def unmap_role(role: str, principal: Admin) -> Response:
+    async def unmap_role(role: str, request: Request, principal: Admin) -> Response:
         try:
-            await policies.map_role(role, None, actor=actor(principal))
+            await policies.map_role(role, None, actor=actor(principal), source_ip=source(request))
         except PasswordPolicyError as exc:
             return _detail(str(exc), 400)
         return _no_content()
@@ -1132,7 +1153,7 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
         if pid is None:
             return _invalid_request()
         try:
-            await policies.pin(user.id, pid, actor=actor(principal))
+            await policies.pin(user.id, pid, actor=actor(principal), source_ip=source(request))
         except PasswordPolicyNotFound:
             return _invalid_request()
         except PasswordPolicyError:
@@ -1151,9 +1172,11 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
             **FORBIDDEN,
         },
     )
-    async def unpin(user_id: str, principal: Admin) -> Response:
+    async def unpin(user_id: str, request: Request, principal: Admin) -> Response:
         uid = _id(user_id)
-        if uid is None or not await policies.unpin(uid, actor=actor(principal)):
+        if uid is None or not await policies.unpin(
+            uid, actor=actor(principal), source_ip=source(request)
+        ):
             return _not_found()
         return _no_content()
 
@@ -1175,7 +1198,7 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
             **FORBIDDEN,
         },
     )
-    async def require_change(user_id: str, principal: Admin) -> Response:
+    async def require_change(user_id: str, request: Request, principal: Admin) -> Response:
         user = await user_or_none(user_id)
         if user is None:
             return _not_found()
@@ -1190,6 +1213,7 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
                     action="warden.identity.password.change_required",
                     outcome="success",
                     actor=actor(principal),
+                    source_ip=source(request),
                     resource_type="user",
                     resource_id=str(user.id),
                     details={
@@ -1224,7 +1248,7 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
             **FORBIDDEN,
         },
     )
-    async def clear_change(user_id: str, principal: Admin) -> Response:
+    async def clear_change(user_id: str, request: Request, principal: Admin) -> Response:
         uid = _id(user_id)
         if uid is None:
             return _not_found()
@@ -1246,6 +1270,7 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
                     action="warden.identity.password.change_cleared",
                     outcome="success",
                     actor=actor(principal),
+                    source_ip=source(request),
                     resource_type="user",
                     resource_id=str(uid),
                     details={"reason": row[0]},
@@ -1319,7 +1344,9 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
         if not isinstance(name, str) or not isinstance(reason, str):
             return _invalid_request()
         try:
-            created = await lists.create(name, reason, kind, actor=actor(principal))
+            created = await lists.create(
+                name, reason, kind, actor=actor(principal), source_ip=source(request)
+            )
         except WatchListError as exc:
             if "already exists" in str(exc):
                 return conflict(exc)
@@ -1370,7 +1397,9 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
         ):
             return _invalid_request()
         try:
-            changed = await lists.update(lid, name=name, reason=reason, actor=actor(principal))
+            changed = await lists.update(
+                lid, name=name, reason=reason, actor=actor(principal), source_ip=source(request)
+            )
         except WatchListNotFound:
             return _not_found()
         except WatchListError as exc:
@@ -1395,12 +1424,12 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
             **FORBIDDEN,
         },
     )
-    async def delete_list(list_id: str, principal: Admin) -> Response:
+    async def delete_list(list_id: str, request: Request, principal: Admin) -> Response:
         lid = _id(list_id)
         if lid is None:
             return _not_found()
         try:
-            await lists.delete(lid, actor=actor(principal))
+            await lists.delete(lid, actor=actor(principal), source_ip=source(request))
         except WatchListNotFound:
             return _not_found()
         except WatchListConflict as exc:
@@ -1430,7 +1459,7 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
             ("terms", False): lists.remove_terms,
         }[(field, added)]
         try:
-            count = await method(lid, values, actor=actor(principal))
+            count = await method(lid, values, actor=actor(principal), source_ip=source(request))
         except WatchListNotFound:
             return _not_found()
         except WatchListError as exc:

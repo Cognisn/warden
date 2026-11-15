@@ -3,17 +3,20 @@
 warden has no notion of who may call these: the product passes an
 ``authorise`` dependency that refuses unauthorised callers (raising its own
 HTTP error) and returns the caller's actor id, which is recorded on the
-audit event for a test send. This keeps ``warden.audit`` free of any
-dependency on ``warden.identity``.
+audit event for a test send, with the request's client address, read as
+the audit export reads it (behind a proxy, install
+``warden.proxy.TrustedProxyMiddleware``). This keeps ``warden.audit`` free
+of any dependency on ``warden.identity``.
 
 FastAPI reads the route signatures at runtime, so this module does not use
 postponed annotations.
 """
 
 from collections.abc import Callable
+from ipaddress import IPv4Address, IPv6Address, ip_address
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict
 
 from warden.audit.events import AuditEvent, Severity
@@ -48,6 +51,16 @@ class TestSendResult(BaseModel):
 
     delivered: bool
     error: str | None
+
+
+def _client_address(request: Request) -> IPv4Address | IPv6Address | None:
+    """The peer as an address, or None for a non-address peer (a test client, a socket)."""
+    if request.client is None:
+        return None
+    try:
+        return ip_address(request.client.host)
+    except ValueError:
+        return None
 
 
 def register_syslog_actions(registry: ActionRegistry) -> None:
@@ -114,7 +127,7 @@ def syslog_router(
         ),
         responses=_REFUSED,
     )
-    async def syslog_test(actor: Actor) -> TestSendResult:
+    async def syslog_test(request: Request, actor: Actor) -> TestSendResult:
         result = await send_test_message(forwarder)
         if recorder is not None:
             await recorder.record(
@@ -122,6 +135,7 @@ def syslog_router(
                     action=SYSLOG_TEST_ACTION,
                     outcome="success" if result.delivered else "failure",
                     actor=None if actor is None else str(actor),
+                    source_ip=_client_address(request),
                     details={} if result.error is None else {"error": result.error},
                 )
             )

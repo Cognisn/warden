@@ -34,6 +34,7 @@ from pydantic import ValidationError
 from warden.audit import AuditEvent, record_audit
 from warden.config import SsoConfig, WardenConfig
 from warden.db import SETTINGS, Database, schema, table
+from warden.identity.http import SourceIp
 from warden.identity.sso.schema import SSO_SETTING, SSO_SETTINGS_LOCK_KEY
 
 __all__ = ["SSO_AMR", "SsoSettings", "SsoSettingsError", "SsoSettingsStore", "revoke_sso_sessions"]
@@ -126,9 +127,13 @@ class SsoSettingsStore:
             logger.warning("stored single sign-on overrides are invalid; using configuration")
             return self._defaults
 
-    async def update(self, *, actor: str | None, **changes: Any) -> SsoSettings:
+    async def update(
+        self, *, actor: str | None, source_ip: SourceIp = None, **changes: Any
+    ) -> SsoSettings:
         """Override some fields: validated as a whole, audited, and, when this
-        turns single sign-on off, every SSO session ended in the same transaction."""
+        turns single sign-on off, every SSO session ended in the same transaction.
+
+        ``source_ip`` is the client address the change was asked from, if any."""
         unknown = set(changes) - _FIELDS
         if unknown:
             raise SsoSettingsError(f"unknown settings: {', '.join(sorted(unknown))}")
@@ -147,19 +152,22 @@ class SsoSettingsStore:
                 ).format(_SETTINGS),
                 (SSO_SETTING, Jsonb(cast(Any, overrides))),
             )
-            await self._record_change(tx, actor, before, settings, sorted(changes))
+            await self._record_change(tx, actor, source_ip, before, settings, sorted(changes))
         self.invalidate()
         return settings
 
-    async def reset(self, *, actor: str | None) -> SsoSettings:
-        """Drop every override, returning to configuration."""
+    async def reset(self, *, actor: str | None, source_ip: SourceIp = None) -> SsoSettings:
+        """Drop every override, returning to configuration.
+
+        ``source_ip`` is the client address the reset was asked from, if any.
+        """
         async with self._db.transaction() as tx:
             await tx.execute("SELECT pg_advisory_xact_lock(%s)", (SSO_SETTINGS_LOCK_KEY,))
             before = await self.read(tx)
             await tx.execute(
                 sql.SQL("DELETE FROM {} WHERE key = %s").format(_SETTINGS), (SSO_SETTING,)
             )
-            await self._record_change(tx, actor, before, self._defaults, ["reset"])
+            await self._record_change(tx, actor, source_ip, before, self._defaults, ["reset"])
         self.invalidate()
         return self._defaults
 
@@ -167,6 +175,7 @@ class SsoSettingsStore:
         self,
         tx: AsyncConnection[Any],
         actor: str | None,
+        source_ip: SourceIp,
         before: SsoSettings,
         after: SsoSettings,
         changed: list[str],
@@ -177,6 +186,7 @@ class SsoSettingsStore:
                 outcome="success",
                 actor=actor,
                 resource_type="sso_settings",
+                source_ip=source_ip,
                 details={"changed": list[Any](changed), "enabled": after.enabled},
             ),
             conn=tx,
@@ -189,6 +199,7 @@ class SsoSettingsStore:
                     outcome="success",
                     actor=actor,
                     resource_type="sso_settings",
+                    source_ip=source_ip,
                     details={"sessions_revoked": ended},
                 ),
                 conn=tx,

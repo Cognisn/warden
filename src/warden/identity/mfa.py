@@ -42,6 +42,7 @@ from warden.db import Database, schema, table
 from warden.identity import totp
 from warden.identity.crypto import SecretBox
 from warden.identity.errors import MfaError
+from warden.identity.http import SourceIp
 
 __all__ = [
     "CHALLENGE_TTL_SECONDS",
@@ -255,9 +256,13 @@ class Mfa:
         *,
         account: str,
         actor: str | None = None,
+        source_ip: SourceIp = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> Enrolment:
-        """Start (or restart) an enrolment. Refused once an enrolment is confirmed."""
+        """Start (or restart) an enrolment. Refused once an enrolment is confirmed.
+
+        ``source_ip`` is the client address the enrolment was begun from, if any.
+        """
         secret = totp.generate_secret()
         key_id, sealed = self._box.seal(secret, context=user_id.bytes)
         async with self._db.transaction(conn) as tx:
@@ -279,6 +284,7 @@ class Mfa:
                     actor=actor or str(user_id),
                     resource_type="user",
                     resource_id=str(user_id),
+                    source_ip=source_ip,
                 ),
                 conn=tx,
             )
@@ -293,6 +299,7 @@ class Mfa:
         code: object,
         *,
         actor: str | None = None,
+        source_ip: SourceIp = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> list[str] | None:
         """Confirm with a current code. Returns the recovery codes, or None if refused.
@@ -300,7 +307,8 @@ class Mfa:
         The codes are fresh when TOTP is the user's first second factor, and
         none (an empty list) when the user already holds a security key or
         passkey, whose codes cover TOTP too. The confirming code's step is
-        claimed, so it cannot also complete a sign-in.
+        claimed, so it cannot also complete a sign-in. ``source_ip`` is the
+        client address the code came from, if any.
         """
         async with self._db.transaction(conn) as tx:
             # The user first, then the credential: the order every change to a
@@ -337,6 +345,7 @@ class Mfa:
                     actor=actor or str(user_id),
                     resource_type="user",
                     resource_id=str(user_id),
+                    source_ip=source_ip,
                 ),
                 conn=tx,
             )

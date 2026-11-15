@@ -151,8 +151,14 @@ def build_sso_settings_router(identity: "Identity", *, authorise: Callable[..., 
         body = await read_object(request)
         if body is None:
             return json_response({"detail": "the body must be a JSON object"}, 400)
+        # The route supplies these itself; from a body they are unknown settings.
+        reserved = sorted({"actor", "source_ip"} & set(body))
+        if reserved:
+            return json_response({"detail": f"unknown settings: {', '.join(reserved)}"}, 400)
         try:
-            settings = await identity.sso.settings.update(actor=actor_id(actor), **body)
+            settings = await identity.sso.settings.update(
+                actor=actor_id(actor), source_ip=source(request), **body
+            )
         except SsoSettingsError as exc:
             return json_response({"detail": str(exc)}, 400)
         return view(settings)
@@ -163,8 +169,10 @@ def build_sso_settings_router(identity: "Identity", *, authorise: Callable[..., 
         description="Back to the configuration's settings.",
         responses={200: _VIEW, **PRODUCT_AUTHORISATION},
     )
-    async def reset_settings(actor: Actor) -> Response:
-        return view(await identity.sso.settings.reset(actor=actor_id(actor)))
+    async def reset_settings(request: Request, actor: Actor) -> Response:
+        return view(
+            await identity.sso.settings.reset(actor=actor_id(actor), source_ip=source(request))
+        )
 
     @router.put(
         "/sso/client-secret",
@@ -229,12 +237,12 @@ def build_sso_settings_router(identity: "Identity", *, authorise: Callable[..., 
             **PRODUCT_AUTHORISATION,
         },
     )
-    async def unpin(user_id: str, actor: Actor) -> Response:
+    async def unpin(user_id: str, request: Request, actor: Actor) -> Response:
         try:
             parsed = uuid.UUID(user_id)
         except ValueError:
             return json_response({"detail": "no such pin"}, 404)
-        if not await identity.sso.unpin(parsed, actor=actor_id(actor)):
+        if not await identity.sso.unpin(parsed, actor=actor_id(actor), source_ip=source(request)):
             return json_response({"detail": "no such pin"}, 404)
         return Response(status_code=204, headers=NO_STORE)
 

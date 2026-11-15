@@ -749,8 +749,13 @@ class SingleSignOn:
         )
         return report
 
-    async def unpin(self, user_id: uuid.UUID, *, actor: str | None) -> bool:
-        """Remove a user's pinned subject, so their next sign-in pins afresh."""
+    async def unpin(
+        self, user_id: uuid.UUID, *, actor: str | None, source_ip: SourceIp = None
+    ) -> bool:
+        """Remove a user's pinned subject, so their next sign-in pins afresh.
+
+        ``source_ip`` is the client address the change was asked from, if any.
+        """
         async with self.db.transaction() as tx:
             cur = await tx.execute(
                 sql.SQL("DELETE FROM {} WHERE user_id = %s").format(_IDENTITIES), (user_id,)
@@ -764,6 +769,7 @@ class SingleSignOn:
                         actor=actor,
                         resource_type="user",
                         resource_id=str(user_id),
+                        source_ip=source_ip,
                     ),
                     conn=tx,
                 )

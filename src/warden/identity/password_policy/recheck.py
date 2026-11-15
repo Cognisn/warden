@@ -25,6 +25,7 @@ from psycopg import sql
 
 from warden.audit import AuditEvent, record_audit
 from warden.db import PASSWORD_POLICIES, PASSWORD_STATES, Database, table
+from warden.identity.http import SourceIp
 from warden.identity.password_policy.fingerprint import Fingerprints, SealedFingerprint
 from warden.identity.password_policy.hibp import RangeCache
 from warden.identity.password_policy.state import ChangeReason, PasswordStates
@@ -104,12 +105,15 @@ class PasswordRecheck:
         actor: str | None,
         policy_id: uuid.UUID | None = None,
         end_sessions: bool | None = None,
+        source_ip: SourceIp = None,
     ) -> RecheckReport:
         """Check every fingerprinted password in use; flag, end sessions and audit on a match.
 
         ``policy_id`` limits the run to the users that policy applies to.
         ``end_sessions`` False never ends a session, whatever the policy says;
         None (the default) follows each policy's ``end_sessions_on_match``.
+        ``source_ip`` is the client address a product's route ran it for, if
+        any; a scheduled run or ``warden passwords recheck`` has none.
         """
         counts = dict.fromkeys(
             ("checked", "matched", "flagged", "sessions_ended", "resealed", "unopened"), 0
@@ -164,6 +168,7 @@ class PasswordRecheck:
                         actor=actor,
                         resource_type="user",
                         resource_id=str(user_id),
+                        source_ip=source_ip,
                         details=details,
                     ),
                     conn=tx,
@@ -177,6 +182,7 @@ class PasswordRecheck:
                 outcome="success",
                 actor=actor,
                 resource_type="password_policy",
+                source_ip=source_ip,
                 details={
                     **asdict(report),
                     "policy_id": None if policy_id is None else str(policy_id),
