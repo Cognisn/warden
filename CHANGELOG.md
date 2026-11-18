@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-18
+
+A fixes-only patch on 0.1.0: 0.1.1a4 as it stands, after the release gate. No migration, no new runtime dependency, and the public API changes only by additions. The alpha sections below give the detail.
+
+### Added
+
+- An optional keyword-only `source_ip` on every public method that records an audit event and did not take one, including `warden.audit.anchor`, so a product can pass the client address from its own routes (#3). Existing calls are unchanged.
+
+### Fixed
+
+- Audit events raised in answer to a request now record the client address the router resolves (#3). A tripwire test fails on any new warden audit event recorded without `source_ip` unless it is on a reasoned allow-list of background events.
+- `DELETE <admin>/invitations/{user_id}` answers 404, as documented, when no user has the id, including an invitation already revoked; 409 only when the user exists and is not invited (#4).
+- `PUT <admin>/sso/settings` with `actor` or `source_ip` in the body is a 400 naming the unknown setting instead of a server error.
+- Sample console: the forced-enrolment card's authenticator route shows the secret and code form again, and the Account screen no longer shows a stray "null".
+
+### Changed
+
+- Releasing no longer uses TestPyPI; a version tag publishes to PyPI from the protected `pypi` environment after a maintainer approves. Dependabot targets the open release branch. `actions/checkout` 7.0.1 and `actions/setup-python` 7.1.0.
+
+### Removed
+
+- The "Provisional until 0.1.0b1" notes in the configuration docstrings. No field, type or default changed.
+
 ## [0.1.1a4] - 2026-11-18
 
 Fourth alpha of 0.1.1: the TestPyPI entry under 0.1.1a3 no longer carries an upgrade note, since there was nothing for users to remove. No library change.
