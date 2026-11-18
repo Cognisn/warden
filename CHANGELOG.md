@@ -12,7 +12,7 @@ Third alpha of 0.1.1: release housekeeping. Releasing no longer uses TestPyPI, D
 
 ### Changed
 
-- Releasing no longer uses TestPyPI. The release workflow (`.github/workflows/publish.yml`) has no manual run and no `testpypi` job; a version tag still publishes to PyPI from the protected `pypi` environment after a maintainer approves. `docs/releasing.md` drops every TestPyPI step. Upgrade note: delete the `testpypi` environment and the TestPyPI trusted publisher in the repository and project settings if they still exist.
+- Releasing no longer uses TestPyPI. The release workflow (`.github/workflows/publish.yml`) has no manual run and no `testpypi` job; a version tag still publishes to PyPI from the protected `pypi` environment after a maintainer approves. `docs/releasing.md` drops every TestPyPI step.
 - Dependabot now targets the open release branch (`release/v0.1.1`) instead of `main`, and `docs/releasing.md` has a step to retarget it when a release branch is cut.
 - GitHub Actions are bumped to `actions/checkout` 7.0.1 and `actions/setup-python` 7.1.0, still pinned to full commit SHAs.
 
