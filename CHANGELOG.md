@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.1a4] - 2026-11-18
+
+Fourth alpha of 0.1.1: the TestPyPI entry under 0.1.1a3 no longer carries an upgrade note, since there was nothing for users to remove. No library change.
+
 ## [0.1.1a3] - 2026-11-16
 
 Third alpha of 0.1.1: release housekeeping. Releasing no longer uses TestPyPI, Dependabot targets the release branch, the workflow actions are bumped, and the configuration docstrings no longer call any setting provisional. No library behaviour change.
