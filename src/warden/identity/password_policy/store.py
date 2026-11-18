@@ -49,6 +49,7 @@ from warden.db import (
     schema,
     table,
 )
+from warden.identity.http import SourceIp
 from warden.identity.password_policy.errors import (
     PasswordPolicyConflict,
     PasswordPolicyError,
@@ -633,6 +634,7 @@ class PasswordPolicies:
         action: str,
         *,
         actor: str | None,
+        source_ip: SourceIp,
         resource_type: str,
         resource_id: uuid.UUID,
         details: dict[str, Any],
@@ -642,6 +644,7 @@ class PasswordPolicies:
                 action=f"warden.identity.password_policy.{action}",
                 outcome="success",
                 actor=actor,
+                source_ip=source_ip,
                 resource_type=resource_type,
                 resource_id=str(resource_id),
                 details=details,
@@ -655,9 +658,14 @@ class PasswordPolicies:
         *,
         priority: int,
         actor: str | None,
+        source_ip: SourceIp = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> PasswordPolicy:
-        """Add a policy at ``priority`` (1 is the highest); it applies to no one until mapped."""
+        """Add a policy at ``priority`` (1 is the highest); it applies to no one until mapped.
+
+        Here and in every change below, ``source_ip`` is the client address the
+        change was asked from, if any, recorded with its audit event.
+        """
         self._check(settings)
         _check_priority(priority)
         await self._seeded()
@@ -669,6 +677,7 @@ class PasswordPolicies:
                     tx,
                     "created",
                     actor=actor,
+                    source_ip=source_ip,
                     resource_type="password_policy",
                     resource_id=policy.id,
                     details={"seeded": False, "version": 1},
@@ -689,6 +698,7 @@ class PasswordPolicies:
         *,
         expected_version: int,
         actor: str | None,
+        source_ip: SourceIp = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> PasswordPolicy:
         """Replace a policy's settings, if it is still at ``expected_version``."""
@@ -724,6 +734,7 @@ class PasswordPolicies:
                     tx,
                     "updated",
                     actor=actor,
+                    source_ip=source_ip,
                     resource_type="password_policy",
                     resource_id=policy_id,
                     details={"fields": changed, "version": after.version},
@@ -738,7 +749,12 @@ class PasswordPolicies:
         return after
 
     async def delete(
-        self, policy_id: uuid.UUID, *, actor: str | None, conn: AsyncConnection[Any] | None = None
+        self,
+        policy_id: uuid.UUID,
+        *,
+        actor: str | None,
+        source_ip: SourceIp = None,
+        conn: AsyncConnection[Any] | None = None,
     ) -> None:
         """Remove a policy; its users return to a role mapping or the default.
 
@@ -769,6 +785,7 @@ class PasswordPolicies:
                     tx,
                     "deleted",
                     actor=actor,
+                    source_ip=source_ip,
                     resource_type="password_policy",
                     resource_id=policy_id,
                     details={
@@ -786,6 +803,7 @@ class PasswordPolicies:
         priority: int,
         *,
         actor: str | None,
+        source_ip: SourceIp = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> PasswordPolicy:
         """Move one policy to a free ``priority``. The default has none."""
@@ -808,6 +826,7 @@ class PasswordPolicies:
                     tx,
                     "updated",
                     actor=actor,
+                    source_ip=source_ip,
                     resource_type="password_policy",
                     resource_id=policy_id,
                     details={"fields": ["priority"], "version": after.version},
@@ -824,6 +843,7 @@ class PasswordPolicies:
         policy_ids: Sequence[uuid.UUID],
         *,
         actor: str | None,
+        source_ip: SourceIp = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> builtins.list[PasswordPolicy]:
         """Give every non-default policy, in this order, priorities 1, 2, 3 and so on."""
@@ -849,6 +869,7 @@ class PasswordPolicies:
                         tx,
                         "updated",
                         actor=actor,
+                        source_ip=source_ip,
                         resource_type="password_policy",
                         resource_id=policy_id,
                         details={"fields": ["priority"], "priority": index},
@@ -865,6 +886,7 @@ class PasswordPolicies:
         policy_id: uuid.UUID | None,
         *,
         actor: str | None,
+        source_ip: SourceIp = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> None:
         """Map ``role`` to a policy, or with None remove its mapping."""
@@ -896,6 +918,7 @@ class PasswordPolicies:
                         action="warden.identity.password_policy.assigned",
                         outcome="success",
                         actor=actor,
+                        source_ip=source_ip,
                         resource_type="role",
                         resource_id=role,
                         details={
@@ -915,6 +938,7 @@ class PasswordPolicies:
         policy_id: uuid.UUID,
         *,
         actor: str | None,
+        source_ip: SourceIp = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> None:
         """Pin a policy on one user, overriding the role mapping (PW1)."""
@@ -934,6 +958,7 @@ class PasswordPolicies:
                     tx,
                     "pinned",
                     actor=actor,
+                    source_ip=source_ip,
                     resource_type="user",
                     resource_id=user_id,
                     details={"policy_id": str(policy_id)},
@@ -942,7 +967,12 @@ class PasswordPolicies:
             raise PasswordPolicyError("no such user") from None
 
     async def unpin(
-        self, user_id: uuid.UUID, *, actor: str | None, conn: AsyncConnection[Any] | None = None
+        self,
+        user_id: uuid.UUID,
+        *,
+        actor: str | None,
+        source_ip: SourceIp = None,
+        conn: AsyncConnection[Any] | None = None,
     ) -> bool:
         """Remove a user's pin; False if there was none."""
         async with self._db.transaction(conn) as tx:
@@ -958,6 +988,7 @@ class PasswordPolicies:
                 tx,
                 "unpinned",
                 actor=actor,
+                source_ip=source_ip,
                 resource_type="user",
                 resource_id=user_id,
                 details={"policy_id": str(row[0])},
@@ -965,19 +996,39 @@ class PasswordPolicies:
         return True
 
     async def attach(
-        self, policy_id: uuid.UUID, list_id: uuid.UUID, *, actor: str | None
+        self,
+        policy_id: uuid.UUID,
+        list_id: uuid.UUID,
+        *,
+        actor: str | None,
+        source_ip: SourceIp = None,
     ) -> PasswordPolicy:
         """Have a policy check a watch list as well."""
-        return await self._attachment(policy_id, list_id, attach=True, actor=actor)
+        return await self._attachment(
+            policy_id, list_id, attach=True, actor=actor, source_ip=source_ip
+        )
 
     async def detach(
-        self, policy_id: uuid.UUID, list_id: uuid.UUID, *, actor: str | None
+        self,
+        policy_id: uuid.UUID,
+        list_id: uuid.UUID,
+        *,
+        actor: str | None,
+        source_ip: SourceIp = None,
     ) -> PasswordPolicy:
         """Stop a policy checking a watch list."""
-        return await self._attachment(policy_id, list_id, attach=False, actor=actor)
+        return await self._attachment(
+            policy_id, list_id, attach=False, actor=actor, source_ip=source_ip
+        )
 
     async def _attachment(
-        self, policy_id: uuid.UUID, list_id: uuid.UUID, *, attach: bool, actor: str | None
+        self,
+        policy_id: uuid.UUID,
+        list_id: uuid.UUID,
+        *,
+        attach: bool,
+        actor: str | None,
+        source_ip: SourceIp,
     ) -> PasswordPolicy:
         try:
             async with self._db.transaction() as tx:
@@ -1012,6 +1063,7 @@ class PasswordPolicies:
                         tx,
                         "updated",
                         actor=actor,
+                        source_ip=source_ip,
                         resource_type="password_policy",
                         resource_id=policy_id,
                         details={"fields": ["watch_list_ids"], "version": after.version},

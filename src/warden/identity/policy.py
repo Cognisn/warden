@@ -28,6 +28,7 @@ from psycopg.types.json import Jsonb
 from warden.audit import AuditEvent, record_audit
 from warden.config import IdentityConfig
 from warden.db import POLICY_CHANNEL, POLICY_SETTING, SETTINGS, Database, table
+from warden.identity.http import SourceIp
 
 __all__ = ["POLICY_CHANNEL", "POLICY_SETTING", "PolicyError", "PolicyStore", "SessionPolicy"]
 
@@ -150,9 +151,18 @@ class PolicyStore:
         return policy
 
     async def update(
-        self, *, actor: str | None, conn: AsyncConnection[Any] | None = None, **changes: Any
+        self,
+        *,
+        actor: str | None,
+        source_ip: SourceIp = None,
+        conn: AsyncConnection[Any] | None = None,
+        **changes: Any,
     ) -> SessionPolicy:
-        """Override some fields. Validated as a whole; audited; announced on commit."""
+        """Override some fields. Validated as a whole; audited; announced on commit.
+
+        ``source_ip`` is the client address the change was asked from: a
+        product's own policy route should pass it.
+        """
         unknown = set(changes) - _FIELDS
         if unknown:
             raise PolicyError(f"unknown policy fields: {', '.join(sorted(unknown))}")
@@ -167,6 +177,7 @@ class PolicyStore:
                     outcome="success",
                     actor=actor,
                     resource_type="session_policy",
+                    source_ip=source_ip,
                     details=dict(sorted(changes.items())),
                 ),
                 conn=tx,
@@ -175,8 +186,11 @@ class PolicyStore:
             self.invalidate()
         return policy
 
-    async def reset(self, *, actor: str | None) -> SessionPolicy:
-        """Drop every override, returning to configuration."""
+    async def reset(self, *, actor: str | None, source_ip: SourceIp = None) -> SessionPolicy:
+        """Drop every override, returning to configuration.
+
+        ``source_ip`` is the client address the reset was asked from, if any.
+        """
         async with self._db.transaction() as tx:
             await tx.execute(
                 sql.SQL("DELETE FROM {} WHERE key = %s").format(_SETTINGS), (POLICY_SETTING,)
@@ -188,6 +202,7 @@ class PolicyStore:
                     outcome="success",
                     actor=actor,
                     resource_type="session_policy",
+                    source_ip=source_ip,
                     details={"reset": True},
                 ),
                 conn=tx,

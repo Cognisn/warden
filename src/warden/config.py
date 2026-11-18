@@ -15,9 +15,9 @@ Fields that name a konfig secret (``*_secret``) hold the secret's name, not
 its value; the component that needs the value reads it from the secrets
 store when it starts.
 
-This module is shared: only the session assigned it edits it. Fields marked
-"Provisional until 0.1.0b1" are declared now so the 0.1.0 workstreams can
-rely on them existing; their names and defaults may still change before b1.
+This module is shared: only the session assigned it edits it. Every field
+is part of the released configuration; a change to a name or default is a
+change to the public API and is named in the changelog.
 """
 
 from __future__ import annotations
@@ -362,10 +362,10 @@ class IdentityConfig(_Section):
     """Name of the konfig secret holding the previous TOTP key while rotating."""
 
     api_key_prefix: str = "wdn_"
-    """Prefix on every API key, so a leaked key is recognisable. Provisional until 0.1.0b1."""
+    """Prefix on every API key, so a leaked key is recognisable."""
     api_key_max_lifetime_days: int | None = Field(default=365, ge=1, le=3660)
     """Longest lifetime an API key may be given; None allows keys that never
-    expire. Provisional until 0.1.0b1."""
+    expire."""
 
     @field_validator("totp_issuer")
     @classmethod
@@ -407,8 +407,7 @@ class IdentityConfig(_Section):
 
 
 class SsoConfig(_Section):
-    """OIDC single sign-on. Provisional until 0.1.0b1: the single sign-on
-    workstream settles the fields."""
+    """OIDC single sign-on."""
 
     enabled: bool = False
     issuer_url: str | None = None
@@ -426,25 +425,25 @@ class SsoConfig(_Section):
     """A label for setup guidance only; it never changes behaviour."""
     discovery_cache_seconds: int = Field(default=3600, ge=60, le=86_400)
     jwks_cache_seconds: int = Field(default=3600, ge=60, le=86_400)
-    """How long the provider's signing keys are cached. Provisional until 0.1.0b1."""
+    """How long the provider's signing keys are cached."""
     jwks_refetch_min_seconds: int = Field(default=60, ge=1, le=3600)
     """Shortest interval between fetches forced by an unknown key id, so a
-    stream of forged tokens cannot hammer the provider. Provisional until 0.1.0b1."""
+    stream of forged tokens cannot hammer the provider."""
     login_transaction_ttl_seconds: int = Field(default=600, ge=60, le=3600)
     """How long a started sign-in (state, nonce, PKCE verifier) stays
-    usable. Provisional until 0.1.0b1."""
+    usable."""
     handoff_code_ttl_seconds: int = Field(default=60, ge=5, le=300)
     """How long the single-use code handed to the product's completion
-    screen stays usable. Provisional until 0.1.0b1."""
+    screen stays usable."""
     allowed_algorithms: Annotated[tuple[str, ...], BeforeValidator(_split_list)] = (
         "RS256",
         "ES256",
         "PS256",
     )
     """id_token signature algorithms accepted: asymmetric only, never ``none``
-    or HS*. Provisional until 0.1.0b1."""
+    or HS*."""
     clock_skew_seconds: int = Field(default=60, ge=0, le=300)
-    """Leeway when checking id_token times. Provisional until 0.1.0b1."""
+    """Leeway when checking id_token times."""
 
     @field_validator("client_secret")
     @classmethod
@@ -508,17 +507,16 @@ class SsoConfig(_Section):
 
 
 class MailConfig(_Section):
-    """Mail settings. The product implements the sender. Provisional until 0.1.0b1."""
+    """Mail settings. The product implements the sender."""
 
     from_address: str | None = None
     from_name: str | None = None
     reply_to: str | None = None
     template_package: str | None = None
     """Importable package holding the product's message templates, which
-    replace warden's own template by template. Provisional until 0.1.0b1."""
+    replace warden's own template by template."""
     subject_prefix: str | None = Field(default=None, max_length=64)
-    """Text put before every message subject, such as the product's name.
-    Provisional until 0.1.0b1."""
+    """Text put before every message subject, such as the product's name."""
 
     @field_validator("template_package")
     @classmethod

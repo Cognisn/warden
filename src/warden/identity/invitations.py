@@ -348,8 +348,12 @@ class Invitations:
         """Withdraw a pending invitation, deleting the invited user.
 
         One guarded delete: a user who has accepted, even concurrently, is
-        never removed, and the revocation is refused instead (#129).
+        never removed, and the revocation is refused instead (#129). The
+        refusal says "no such user" when no user has that id, which includes
+        an invitation already revoked (GitHub #4), and "the invitation is not
+        pending" when the user exists but is not invited.
         """
+        exists = True
         async with self._db.transaction() as tx:
             cur = await tx.execute(
                 sql.SQL("DELETE FROM {} WHERE id = %s AND status = %s RETURNING 1").format(_USERS),
@@ -360,11 +364,18 @@ class Invitations:
                 await self._audit_success(
                     tx, "warden.identity.invitation.revoked", actor, user_id, source_ip
                 )
+            else:
+                # A new statement, so it sees a concurrent revocation that won the row.
+                cur = await tx.execute(
+                    sql.SQL("SELECT 1 FROM {} WHERE id = %s").format(_USERS), (user_id,)
+                )
+                exists = await cur.fetchone() is not None
         if not deleted:
+            reason = "not_pending" if exists else "no_such_user"
             await self._audit_failure(
-                "warden.identity.invitation.revoked", actor, user_id, source_ip, "not_pending"
+                "warden.identity.invitation.revoked", actor, user_id, source_ip, reason
             )
-            raise InvitationError("the invitation is not pending")
+            raise InvitationError("the invitation is not pending" if exists else "no such user")
 
     async def pending(self) -> list[PendingInvitation]:
         """Every invited user, with the expiry of their live link and their staged grants."""
@@ -623,7 +634,7 @@ class Invitations:
                     if not await self._activate(tx, invitee.id):
                         reason = "concurrent_change"
                         raise _Abort
-                    roles = await self._apply_grants(tx, invitee.id)
+                    roles = await self._apply_grants(tx, invitee.id, source_ip)
                     await self._tokens.revoke_live(tx, invitee.id, Purpose.INVITATION)
                     await self._audit_success(
                         tx,
@@ -788,7 +799,9 @@ class Invitations:
         )
         return await cur.fetchone() is not None
 
-    async def _apply_grants(self, tx: AsyncConnection[Any], user_id: uuid.UUID) -> tuple[str, ...]:
+    async def _apply_grants(
+        self, tx: AsyncConnection[Any], user_id: uuid.UUID, source_ip: SourceIp
+    ) -> tuple[str, ...]:
         cur = await tx.execute(
             sql.SQL(
                 "DELETE FROM {} WHERE user_id = %s RETURNING role, expires_at, staged_by"
@@ -799,7 +812,14 @@ class Invitations:
         for role, expires_at, staged_by in sorted(await cur.fetchall()):
             if role not in self._roles.registry:
                 continue  # the product no longer defines it; it would grant nothing
-            await self._roles.assign(user_id, role, actor=staged_by, expires_at=expires_at, conn=tx)
+            await self._roles.assign(
+                user_id,
+                role,
+                actor=staged_by,
+                expires_at=expires_at,
+                source_ip=source_ip,
+                conn=tx,
+            )
             applied.append(role)
         return tuple(applied)
 

@@ -14,7 +14,7 @@
 
 This file is the project-level working agreement for warden. It sits under the workstation's global working agreement on any Cognisn development workstation; where the two overlap, the global agreement governs process (branching, versioning, commit format, worktrees, ports, Kvasir protocols, tagging) and this file governs what is specific to warden. On a machine without the global agreement (for example a cloud session), the rules in "Minimum rules without the global agreement" still apply.
 
-Project knowledge lives in the mwh-kvasir library `warden`; pass `library: "warden"` on every call. The active development plan, decisions, runbooks and per-workstream briefings are there.
+Project knowledge lives in the mwh-kvasir library `devwork`, filtered by the tag `project-warden`; pass `library: "devwork"` on every call. The active development plan, decisions, runbooks and per-workstream briefings are there. The library `warden` holds the knowledge written up to 0.1.0; it is read-only history, searched only as a fallback.
 
 ## What warden is
 
@@ -22,7 +22,7 @@ warden is a reusable Python library that gives Cognisn products the same identit
 
 It is published publicly on PyPI as `cognisn-warden` (import name `warden`) under Apache-2.0.
 
-`docs/design/overview.md` is the authoritative statement of design and scope. Read it at the start of any session that touches behaviour. Further design documents the code is built against live in `docs/design/` and are versioned with the code; all other project knowledge lives in the `warden` Kvasir library.
+`docs/design/overview.md` is the authoritative statement of design and scope. Read it at the start of any session that touches behaviour. Further design documents the code is built against live in `docs/design/` and are versioned with the code; all other project knowledge lives in the `devwork` Kvasir library under the tag `project-warden`.
 
 ## This is a public repository
 
@@ -123,7 +123,7 @@ The integration session works in the main clone on the release branch and merges
 When a session is running in a git worktree (`git rev-parse --git-common-dir` resolves outside the working tree), assume other sessions are active concurrently and apply these rules:
 
 - Work only inside your own worktree, on your own branch. Never touch the main clone or another worktree.
-- The Kvasir library is always `warden`, never the worktree directory name, and every document submitted from a worktree session carries that branch's `branch-` tag.
+- The Kvasir library is always `devwork`, tagged `project-warden`, never the worktree directory name, and every document submitted from a worktree session carries that branch's `branch-` tag.
 - Worktree sessions never bump the version and never create release stamp commits.
 - The shared modules in the project configuration are edited only by the session assigned them in its kick-off prompt. Any other session that needs a change there records the need and stops.
 
@@ -134,7 +134,7 @@ If the global working agreement is not present on this machine, these still appl
 - Australian English; no AI attribution in commits, changelogs or release notes.
 - The release-branch workflow above.
 - Do not push, tag, publish to PyPI or open a pull request unless the user instructs it in the session.
-- Use the `warden` Kvasir library for project knowledge, pass `library: "warden"` on every call, and submit a `type-session` summary at the end of every session with the mandatory `project-`, `type-`, `status-` and `source-` tags.
+- Use the `devwork` Kvasir library, tag `project-warden`, for project knowledge, pass `library: "devwork"` on every call, and submit a `type-session` summary at the end of every session with the mandatory `project-`, `type-`, `status-` and `source-` tags.
 
 ## Session start checklist
 

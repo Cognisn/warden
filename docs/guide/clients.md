@@ -158,7 +158,9 @@ For the product's server, not its client: an audit event recorded inside the pro
 
 warden records the client address on audit events and uses it for the sign-in throttle. Behind a reverse proxy the TCP peer is the proxy, so configure `audit.trusted_proxies` with the proxies' networks. `X-Forwarded-For` is believed only when the peer is one of them; entries are read from the right, skipping those added by further trusted proxies, and a malformed entry stops at the last known hop. `Forwarded` and `X-Real-IP` are never read. A forwarded header from a peer that is not a trusted proxy is ignored, so a client cannot choose its own address.
 
-Identity's routes resolve the address themselves. The audit export reads the request's client address, so behind a proxy install `warden.proxy.TrustedProxyMiddleware(app, trusted_proxies=config.audit.trusted_proxies)` as well; resolving twice gives the same address.
+Identity's routes resolve the address themselves. The audit export and the syslog test send read the request's client address, so behind a proxy install `warden.proxy.TrustedProxyMiddleware(app, trusted_proxies=config.audit.trusted_proxies)` as well; resolving twice gives the same address.
+
+Every method of `Identity` and its services that records an audit event, and `warden.audit.anchor`, takes an optional keyword-only `source_ip` (an `ipaddress` address, or None), and records it on every event the call writes. warden's own routes pass it. A product's own routes over the Python API should pass it too: its session policy routes over `Identity.policy`, a first-run setup that creates the first administrator with `Identity.users.create` and `Identity.roles.assign`, and any other route that changes something through `Identity`. Resolve the address as warden's routes do, with `warden.identity.http.client_ip(request, config.audit.trusted_proxies)`. Events with no request carry none: a command-line action (the `warden` commands, or a product's own bootstrap command), a scheduled job such as the password recheck run by a scheduler, and the default password policy, which warden seeds itself on the first read.
 
 ## 13. Administration routes
 
@@ -187,11 +189,23 @@ Some capabilities are in warden's Python API or command line but have no warden 
 
 **Who am I.** warden has no route that tells a client who its bearer is. A product route that depends on `require_user` gets the uniform refusal for a bad bearer and otherwise a `Principal`: `user_id`, `session_id`, `email`, `roles`, `permissions`, `amr` (how the session was authenticated) and, for an API key, `api_key_id`. A who-am-I route under the auth prefix (`<auth>/me`) is planned for 0.2.0.
 
-**The first administrator.** warden has no command that creates one. The product's own bootstrap command, run after `warden migrate` and `warden keys rotate`, creates the user with `Identity.users.create(email, actor=..., password=...)` and gives them an administrator role with `Identity.roles.assign(user_id, role, actor=...)`. The sample's `create-admin` command does this and is safe to run twice: it looks the user up with `Identity.users.get_by_email` and checks `Identity.roles.roles_of` first.
+**The first administrator.** warden has no command that creates one. The product's own bootstrap command, run after `warden migrate` and `warden keys rotate`, creates the user with `Identity.users.create(email, actor=..., password=...)` and gives them an administrator role with `Identity.roles.assign(user_id, role, actor=...)`. The sample's `create-admin` command does this and is safe to run twice: it looks the user up with `Identity.users.get_by_email` and checks `Identity.roles.roles_of` first. A command has no client address; a first-run setup the product serves over HTTP instead passes the client address as `source_ip` to both calls (section 12).
 
-**The session policy.** The session policy (`access_token_ttl_seconds`, `refresh_token_ttl_seconds`, `session_lifespan_seconds`, `refresh_reuse_grace_seconds` and `require_mfa`) has no warden route. Read it with `Identity.policy.current()` (the configured values are `Identity.policy.defaults`), change fields with `Identity.policy.update(actor=..., **fields)` (an unknown field or a bad value raises `PolicyError`) and return to the configured values with `Identity.policy.reset(actor=...)`. Each change is audited as `warden.identity.policy.changed`. Other processes of the deployment pick it up through the listener `Identity.running()` starts, and in any case within `identity.policy_cache_seconds`.
+**The session policy.** The session policy (`access_token_ttl_seconds`, `refresh_token_ttl_seconds`, `session_lifespan_seconds`, `refresh_reuse_grace_seconds` and `require_mfa`) has no warden route. Read it with `Identity.policy.current()` (the configured values are `Identity.policy.defaults`), change fields with `Identity.policy.update(actor=..., source_ip=..., **fields)` (an unknown field or a bad value raises `PolicyError`) and return to the configured values with `Identity.policy.reset(actor=..., source_ip=...)`. Each change is audited as `warden.identity.policy.changed`, with the client address the route passes as `source_ip` (section 12). Other processes of the deployment pick it up through the listener `Identity.running()` starts, and in any case within `identity.policy_cache_seconds`. The sample console's policy routes pass the address:
 
-**Audit anchors.** Anchoring is on the command line (`warden audit anchor`, and `warden audit verify --anchors FILE` to check) and in Python: `warden.audit.anchor(recorder, keys, actor=...)` appends a signed attestation of the chain head (returning None, and writing nothing, for an empty trail or, with `min_rows`, when fewer rows than that have been appended since the last anchor), and `verify_anchors(db, keys, read_anchors(lines))` checks the chain against anchors read back from the SIEM, as NDJSON or syslog lines. A product that wants an anchoring screen writes its routes over these.
+```python
+@router.put("/policy")
+async def change_policy(request: Request, principal: PolicyAdmin) -> JSONResponse:
+    body = await request.json()
+    policy = await identity.policy.update(
+        actor=str(principal.user_id),
+        source_ip=client_ip(request, identity.config.audit.trusted_proxies),
+        **body,
+    )
+    return JSONResponse({"policy": _policy(policy)})
+```
+
+**Audit anchors.** Anchoring is on the command line (`warden audit anchor`, and `warden audit verify --anchors FILE` to check) and in Python: `warden.audit.anchor(recorder, keys, actor=..., source_ip=...)` appends a signed attestation of the chain head (returning None, and writing nothing, for an empty trail or, with `min_rows`, when fewer rows than that have been appended since the last anchor), and `verify_anchors(db, keys, read_anchors(lines))` checks the chain against anchors read back from the SIEM, as NDJSON or syslog lines. A product that wants an anchoring screen writes its routes over these, passing the client address as `source_ip` (section 12).
 
 **Syslog settings.** Syslog forwarding is configured from the `syslog` section of the configuration, read when the product starts. warden has no route that changes it and stores no change made at run time, so to reconfigure syslog for good, change the configuration and restart the product's processes. A product's server can switch a running `SyslogForwarder` with `reconfigure(settings)`, but that is not audited, reaches only the forwarder in that process, and is lost at the next start.
 

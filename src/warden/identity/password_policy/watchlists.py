@@ -45,6 +45,7 @@ from warden.db import (
     Database,
     table,
 )
+from warden.identity.http import SourceIp
 from warden.identity.password_policy.builtin import BUILTIN_REASON, BuiltinList
 from warden.identity.password_policy.errors import (
     HibpUnavailable,
@@ -264,6 +265,7 @@ class WatchLists:
         list_id: uuid.UUID,
         *,
         actor: str | None,
+        source_ip: SourceIp,
         details: dict[str, Any],
         outcome: str = "success",
     ) -> None:
@@ -272,6 +274,7 @@ class WatchLists:
                 action=f"warden.identity.watch_list.{action}",
                 outcome=outcome,  # type: ignore[arg-type]
                 actor=actor,
+                source_ip=source_ip,
                 resource_type="watch_list",
                 resource_id=str(list_id),
                 details=details,
@@ -280,8 +283,19 @@ class WatchLists:
         )
 
     async def create(
-        self, name: str, reason: str, kind: WatchListKind, *, actor: str | None
+        self,
+        name: str,
+        reason: str,
+        kind: WatchListKind,
+        *,
+        actor: str | None,
+        source_ip: SourceIp = None,
     ) -> WatchList:
+        """Add an empty list.
+
+        Here and in every change below, ``source_ip`` is the client address the
+        change was asked from, if any, recorded with its audit event.
+        """
         _check_label(name, "name", 64)
         _check_label(reason, "reason", 200)
         kind = WatchListKind(kind)
@@ -298,7 +312,14 @@ class WatchLists:
                 if row is None:
                     raise WatchListError("the watch list was not recorded")
                 created = await self._fetch(tx, row[0])
-                await self._audit(tx, "created", row[0], actor=actor, details={"kind": kind.value})
+                await self._audit(
+                    tx,
+                    "created",
+                    row[0],
+                    actor=actor,
+                    source_ip=source_ip,
+                    details={"kind": kind.value},
+                )
         except psycopg.errors.UniqueViolation:
             raise WatchListError("a watch list with that name already exists") from None
         if created is None:
@@ -312,6 +333,7 @@ class WatchLists:
         name: str | None = None,
         reason: str | None = None,
         actor: str | None,
+        source_ip: SourceIp = None,
     ) -> WatchList:
         """Rename a list or change the reason users are shown."""
         if name is not None:
@@ -328,7 +350,14 @@ class WatchLists:
                     (name or before.name, reason or before.reason, list_id),
                 )
                 fields = [f for f, v in (("name", name), ("reason", reason)) if v is not None]
-                await self._audit(tx, "updated", list_id, actor=actor, details={"fields": fields})
+                await self._audit(
+                    tx,
+                    "updated",
+                    list_id,
+                    actor=actor,
+                    source_ip=source_ip,
+                    details={"fields": fields},
+                )
                 after = await self._fetch(tx, list_id)
         except psycopg.errors.UniqueViolation:
             raise WatchListError("a watch list with that name already exists") from None
@@ -336,7 +365,9 @@ class WatchLists:
             raise WatchListNotFound(f"no watch list {list_id}")
         return after
 
-    async def delete(self, list_id: uuid.UUID, *, actor: str | None) -> None:
+    async def delete(
+        self, list_id: uuid.UUID, *, actor: str | None, source_ip: SourceIp = None
+    ) -> None:
         """Remove a list. Refused while any policy checks it: detach it first."""
         from warden.identity.password_policy.store import lock_policies, notify_policies
 
@@ -362,6 +393,7 @@ class WatchLists:
                     "deleted",
                     list_id,
                     actor=actor,
+                    source_ip=source_ip,
                     details={"policies_detached": attached},
                 )
                 await notify_policies(tx)
@@ -377,6 +409,7 @@ class WatchLists:
         added: bool,
         what: str,
         actor: str | None,
+        source_ip: SourceIp,
     ) -> int:
         async with self._db.transaction() as tx:
             listed = await self._lock(tx, list_id)
@@ -397,11 +430,18 @@ class WatchLists:
                 f"{what}_added": changed if added else 0,
                 f"{what}_removed": 0 if added else changed,
             }
-            await self._audit(tx, "entries_changed", list_id, actor=actor, details=details)
+            await self._audit(
+                tx, "entries_changed", list_id, actor=actor, source_ip=source_ip, details=details
+            )
         return changed
 
     async def add_entries(
-        self, list_id: uuid.UUID, passwords: Iterable[str], *, actor: str | None
+        self,
+        list_id: uuid.UUID,
+        passwords: Iterable[str],
+        *,
+        actor: str | None,
+        source_ip: SourceIp = None,
     ) -> int:
         """Add exact passwords (kept as SHA-1 digests); returns how many were new."""
         digests = list(dict.fromkeys(_entry_digest(p) for p in passwords))
@@ -414,10 +454,16 @@ class WatchLists:
             added=True,
             what="entries",
             actor=actor,
+            source_ip=source_ip,
         )
 
     async def remove_entries(
-        self, list_id: uuid.UUID, passwords: Iterable[str], *, actor: str | None
+        self,
+        list_id: uuid.UUID,
+        passwords: Iterable[str],
+        *,
+        actor: str | None,
+        source_ip: SourceIp = None,
     ) -> int:
         digests = list(dict.fromkeys(_entry_digest(p) for p in passwords))
         return await self._change_entries(
@@ -427,6 +473,7 @@ class WatchLists:
             added=False,
             what="entries",
             actor=actor,
+            source_ip=source_ip,
         )
 
     def _terms(self, terms: Iterable[str]) -> builtins.list[str]:
@@ -443,7 +490,12 @@ class WatchLists:
         return builtins.list(dict.fromkeys(forms))
 
     async def add_terms(
-        self, list_id: uuid.UUID, terms: Iterable[str], *, actor: str | None
+        self,
+        list_id: uuid.UUID,
+        terms: Iterable[str],
+        *,
+        actor: str | None,
+        source_ip: SourceIp = None,
     ) -> int:
         """Add contained terms, matched without regard to case; returns how many were new."""
         return await self._change_entries(
@@ -455,10 +507,16 @@ class WatchLists:
             added=True,
             what="terms",
             actor=actor,
+            source_ip=source_ip,
         )
 
     async def remove_terms(
-        self, list_id: uuid.UUID, terms: Iterable[str], *, actor: str | None
+        self,
+        list_id: uuid.UUID,
+        terms: Iterable[str],
+        *,
+        actor: str | None,
+        source_ip: SourceIp = None,
     ) -> int:
         return await self._change_entries(
             list_id,
@@ -467,6 +525,7 @@ class WatchLists:
             added=False,
             what="terms",
             actor=actor,
+            source_ip=source_ip,
         )
 
     # Importing
@@ -478,6 +537,7 @@ class WatchLists:
         *,
         threshold: int | None = None,
         actor: str | None,
+        source_ip: SourceIp = None,
     ) -> ImportResult:
         """Replace an imported list's digests from HIBP downloader lines (``HASH:count``).
 
@@ -523,6 +583,7 @@ class WatchLists:
                     "imported",
                     list_id,
                     actor=actor,
+                    source_ip=source_ip,
                     details={
                         "imported": imported,
                         "below_threshold": below,
@@ -536,6 +597,7 @@ class WatchLists:
                 "imported",
                 list_id,
                 actor=actor,
+                source_ip=source_ip,
                 details={} if exc.line is None else {"line": exc.line},
                 outcome="failure",
             )

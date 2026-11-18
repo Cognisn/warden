@@ -4,11 +4,10 @@ warden is published to PyPI as [`cognisn-warden`](https://pypi.org/project/cogni
 
 ## How publication works
 
-- **Trusted publishing, no tokens.** The workflow authenticates to PyPI and TestPyPI with GitHub's OpenID Connect token. No API token or password exists in the repository, its secrets or its environments. PyPI accepts an upload only from this repository, this workflow file and the named environment.
-- **Two environments.** The `pypi` environment publishes to PyPI and requires a maintainer's approval in GitHub before the job runs. The `testpypi` environment publishes to TestPyPI.
+- **Trusted publishing, no tokens.** The workflow authenticates to PyPI with GitHub's OpenID Connect token. No API token or password exists in the repository, its secrets or its environments. PyPI accepts an upload only from this repository, this workflow file and the named environment.
+- **One environment.** The `pypi` environment publishes to PyPI and requires a maintainer's approval in GitHub before the job runs.
 - **What triggers what.**
   - A version tag (`v0.1.0b8`, `v0.1.0rc1`, `v0.1.0`) builds, checks and verifies the distributions, then waits for approval in the `pypi` environment.
-  - A manual run of the workflow (Actions, Release, Run workflow) does the same and publishes to TestPyPI. GitHub offers a manual run only once the workflow file is on the default branch.
   - A push to any branch runs the build, check and verify jobs as a dry run and publishes nothing.
 - **What is checked before anything is published.**
   - The tag must name exactly the version in `src/warden/__init__.py`.
@@ -18,6 +17,10 @@ warden is published to PyPI as [`cognisn-warden`](https://pypi.org/project/cogni
 - **Pinned actions.** Every action is pinned to a commit SHA, and the build tools to exact versions. A tripwire test refuses an unpinned action; Dependabot proposes updates.
 
 The same build and checks run in CI on every push (the `build` job), and `tests/packaging` builds both distributions and fails if either holds anything it should not.
+
+## Cutting a release branch
+
+When a new release branch (`release/v<version>`) is cut, the first commit on it sets `target-branch` in `.github/dependabot.yml` to that branch, so Dependabot's pull requests land on the open release and never on `main`. Close or retarget any Dependabot pull request left open against the previous branch.
 
 ## Versions and tags
 
@@ -48,14 +51,13 @@ Work on the release branch, `release/v<version>`, in a clean checkout.
    git push origin release/v0.1.0
    ```
    Wait for CI to pass on the pushed commit.
-3. **Optionally rehearse on TestPyPI.** Once the workflow is on the default branch, run it manually against the release branch and check the result at `https://test.pypi.org/project/cognisn-warden/`. TestPyPI also refuses a version it has seen, so rehearse each version once.
-4. **Tag the stamp commit and push the tag.** Use an annotated tag:
+3. **Tag the stamp commit and push the tag.** Use an annotated tag:
    ```
    git tag -a v0.1.0rc1 -m "warden 0.1.0rc1"
    git push origin v0.1.0rc1
    ```
-5. **Approve the deployment.** The Release run builds and verifies the distributions, then pauses at the `publish-pypi` job. Read the build and verify logs, then approve it in the run's page (Review deployments, `pypi`).
-6. **Check the published package.**
+4. **Approve the deployment.** The Release run builds and verifies the distributions, then pauses at the `publish-pypi` job. Read the build and verify logs, then approve it in the run's page (Review deployments, `pypi`).
+5. **Check the published package.**
    - The project page shows the version, the rendered README, the licence (Apache-2.0) and the links.
    - The files are one wheel (`py3-none-any`) and one sdist, each with a provenance attestation.
    - In a new virtual environment, outside any checkout:
@@ -65,7 +67,7 @@ Work on the release branch, `release/v<version>`, in a clean checkout.
      warden --version
      ```
      A pre-release is installed only when asked for by its exact version or with `--pre`.
-7. **Merge a final release to `main` by squash.** Only a final version (no suffix) reaches `main`, and only when the maintainer says so:
+6. **Merge a final release to `main` by squash.** Only a final version (no suffix) reaches `main`, and only when the maintainer says so:
    ```
    git switch main
    git pull
@@ -75,7 +77,7 @@ Work on the release branch, `release/v<version>`, in a clean checkout.
    git push origin main
    ```
    The `git diff` must print nothing: `main` then holds exactly the tree that was published. Betas and release candidates are never merged to `main`.
-8. **Record the release.** Create a GitHub release for the tag, with the version's `CHANGELOG.md` section as its notes, marked as a pre-release for a beta or a release candidate.
+7. **Record the release.** Create a GitHub release for the tag, with the version's `CHANGELOG.md` section as its notes, marked as a pre-release for a beta or a release candidate.
 
 ## If something goes wrong
 
@@ -88,7 +90,7 @@ Work on the release branch, `release/v<version>`, in a clean checkout.
 These are done once by a repository administrator, and are not part of any release.
 
 - The repository is public.
-- On PyPI and on TestPyPI, a project `cognisn-warden` with a trusted publisher for repository `Cognisn/warden`, workflow `publish.yml`, and environment `pypi` (PyPI) or `testpypi` (TestPyPI). Before the first upload this can be a pending publisher, which creates the project on first use.
-- In the repository's settings, the environments `pypi` and `testpypi`. `pypi` has required reviewers (the maintainers) and accepts deployments only from tags matching `v*`. `testpypi` accepts deployments only from the release branches and the default branch.
+- On PyPI, a project `cognisn-warden` with a trusted publisher for repository `Cognisn/warden`, workflow `publish.yml`, and environment `pypi`. Before the first upload this can be a pending publisher, which creates the project on first use.
+- In the repository's settings, the environment `pypi`, which has required reviewers (the maintainers) and accepts deployments only from tags matching `v*`.
 - Tag protection for `v*`, so only maintainers can create release tags.
 - Private vulnerability reporting enabled, as `SECURITY.md` describes.

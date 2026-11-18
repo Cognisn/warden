@@ -6,6 +6,75 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-18
+
+A fixes-only patch on 0.1.0: 0.1.1a4 as it stands, after the release gate. No migration, no new runtime dependency, and the public API changes only by additions. The alpha sections below give the detail.
+
+### Added
+
+- An optional keyword-only `source_ip` on every public method that records an audit event and did not take one, including `warden.audit.anchor`, so a product can pass the client address from its own routes (#3). Existing calls are unchanged.
+
+### Fixed
+
+- Audit events raised in answer to a request now record the client address the router resolves (#3). A tripwire test fails on any new warden audit event recorded without `source_ip` unless it is on a reasoned allow-list of background events.
+- `DELETE <admin>/invitations/{user_id}` answers 404, as documented, when no user has the id, including an invitation already revoked; 409 only when the user exists and is not invited (#4).
+- `PUT <admin>/sso/settings` with `actor` or `source_ip` in the body is a 400 naming the unknown setting instead of a server error.
+- Sample console: the forced-enrolment card's authenticator route shows the secret and code form again, and the Account screen no longer shows a stray "null".
+
+### Changed
+
+- Releasing no longer uses TestPyPI; a version tag publishes to PyPI from the protected `pypi` environment after a maintainer approves. Dependabot targets the open release branch. `actions/checkout` 7.0.1 and `actions/setup-python` 7.1.0.
+
+### Removed
+
+- The "Provisional until 0.1.0b1" notes in the configuration docstrings. No field, type or default changed.
+
+## [0.1.1a4] - 2026-11-18
+
+Fourth alpha of 0.1.1: the TestPyPI entry under 0.1.1a3 no longer carries an upgrade note, since there was nothing for users to remove. No library change.
+
+## [0.1.1a3] - 2026-11-16
+
+Third alpha of 0.1.1: release housekeeping. Releasing no longer uses TestPyPI, Dependabot targets the release branch, the workflow actions are bumped, and the configuration docstrings no longer call any setting provisional. No library behaviour change.
+
+### Changed
+
+- Releasing no longer uses TestPyPI. The release workflow (`.github/workflows/publish.yml`) has no manual run and no `testpypi` job; a version tag still publishes to PyPI from the protected `pypi` environment after a maintainer approves. `docs/releasing.md` drops every TestPyPI step.
+- Dependabot now targets the open release branch (`release/v0.1.1`) instead of `main`, and `docs/releasing.md` has a step to retarget it when a release branch is cut.
+- GitHub Actions are bumped to `actions/checkout` 7.0.1 and `actions/setup-python` 7.1.0, still pinned to full commit SHAs.
+
+### Removed
+
+- The "Provisional until 0.1.0b1" notes in the configuration docstrings, and the module docstring's paragraph about provisional fields. The settings are part of the released configuration; no field, type or default changed.
+
+## [0.1.1a2] - 2026-11-16
+
+Second alpha of 0.1.1: every audit event raised in answer to a request records the client address (#3), and revoking an invitation that no longer exists answers 404 (#4). Adds an optional `source_ip` to the methods that record events; no migration.
+
+### Added
+
+- An optional keyword-only `source_ip` on every public method that records an audit event and did not take one, so a product can pass the client address from its own routes (session policy, first-run setup and the like); each event the call records carries it (#3). The methods: `Users.create`, `set_status`, `set_sign_in_method` and `set_password`; `Roles.assign` and `revoke`; `Mfa.begin_enrolment` and `confirm_enrolment`; `PolicyStore.update` and `reset` (`Identity.policy`); `PasswordPolicies.create`, `update`, `delete`, `set_priority`, `reorder`, `map_role`, `pin`, `unpin`, `attach` and `detach`; `WatchLists.create`, `update`, `delete`, `add_entries`, `remove_entries`, `add_terms`, `remove_terms` and `import_hibp`; `PasswordRecheck.run`; `SsoSettingsStore.update` and `reset`; `SingleSignOn.unpin`; and `warden.audit.anchor`. Existing calls are unchanged. The client guide says when to pass it.
+
+### Fixed
+
+- Audit events raised in answer to a request now record the client address the router resolves (#3). Before, these were written with `source_ip` empty: `warden.identity.role.assigned` and `role.revoked` (including a role staged on an invitation and applied when it is accepted), `user.status_changed`, `user.sign_in_method_changed`, `mfa.enrolment_started` and `mfa.enrolled`, every `password_policy.*` and `watch_list.*` change made through the administration routes, `password.change_required` and `password.change_cleared` from an administrator, `sso.settings_changed`, `sso.disabled` and `sso.subject_unpinned`, and `warden.syslog.test_sent`. Events with no request (the `warden` commands, a scheduled job, the default password policy warden seeds on first read) still carry none. A tripwire test fails on any new warden audit event recorded without `source_ip` unless it is on a reasoned allow-list.
+- `PUT <admin>/sso/settings` with `actor` or `source_ip` in the body is a 400 naming the unknown setting, like any other unknown field, instead of a server error.
+- `DELETE <admin>/invitations/{user_id}` answers 404, as documented, when no user has the id, which includes an invitation already revoked; 409 only when the user exists and is not invited (#4). Of two concurrent revocations one gets 204 and the other 404. The refusal is audited with the reason `no_such_user` or `not_pending`.
+- Sample console (`examples/console`): its session policy, password recheck, sample import and anchor routes pass the client address to warden, so their audit events carry it.
+
+## [0.1.1a1] - 2026-11-16
+
+First alpha of 0.1.1: the sample console's forced-enrolment authenticator route and the stray "null" on its Account screen are fixed. No library change.
+
+### Fixed
+
+- Sample console (`examples/console`, no library change): on the forced-enrolment card after a password sign-in, "Set up an authenticator app instead" now keeps the card and shows the authenticator's secret and code field beneath it. The button's own status was drawn over the card, so nothing appeared. Confirming a code shows "Enrolled." and the recovery codes, as before. The security key and passkey route on the same card, and the authenticator set-up on the Account screen, are unchanged.
+- Sample console: the Account screen no longer shows the stray text "null" under its heading when the password has no expiry warning.
+
+### Added
+
+- A browser check of the sample console (`tests/examples/test_console_browser.py`, marked `integration`): Chromium walks the forced-enrolment card with an authenticator app and with a security key, the authenticator set-up on the Account screen, and the Account screen's text.
+
 ## [0.1.0] - 2026-11-13
 
 First release: 0.1.0b25 as it stands, after the release gate, with the licence recorded as decided and the README's status line updated. No library change since 0.1.0b25.

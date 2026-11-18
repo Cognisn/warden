@@ -141,3 +141,21 @@ def test_the_syslog_actions_register_idempotently() -> None:
     register_syslog_actions(registry)
     register_syslog_actions(registry)
     assert SYSLOG_TEST_ACTION in registry
+
+
+async def test_test_send_records_the_client_address(
+    pool: Any, registry: ActionRegistry, collector: StreamCollector
+) -> None:
+    """GitHub #3: the audited test send carries the caller's address, as the export does."""
+    db = Database(pool)
+    forwarder = SyslogForwarder(db, _settings(collector.port), registry)
+    recorder = AuditRecorder(db, registry)
+    app = FastAPI()
+    app.include_router(syslog_router(forwarder, authorise=authorise, recorder=recorder))
+    transport = httpx.ASGITransport(app=app, client=("2001:db8::10", 50000))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/syslog/test", headers={"x-test-actor": "admin-1"})
+    assert response.status_code == 200
+    async with pool.connection() as conn:
+        cur = await conn.execute("SELECT action, host(source_ip) FROM warden.audit_events")
+        assert list(await cur.fetchall()) == [(SYSLOG_TEST_ACTION, "2001:db8::10")]
