@@ -141,7 +141,7 @@ What is in the sample, and what is only for seeing it without waiting:
 
 | What | Where | Notes |
 |---|---|---|
-| Browser rules | `static/js/passwordrules.js` | Evaluates the policy description (`rules` from the policy routes) as the user types. `tests/examples/test_console_password_rules.py` runs every case of `docs/contract/password-rule-vectors.json` through this very file under Node. |
+| Browser rules | warden's packaged `warden/static/passwordrules.js`, served at `/api/warden/passwordrules.js` | Evaluates the policy description (`rules` from the policy routes) as the user types. `tests/static/run_vectors.mjs` runs every case of `docs/contract/password-rule-vectors.json` through this very file under Node. |
 | Live checklist | `static/js/checklist.js` | Shows each rule, the passphrase path (`Passphrase: 3 of 4 words`), and the tier with its change period; after the typing pauses (500 ms) it calls the check route to show a watch-list match and its reason. It is feedback: warden decides when you save. |
 | Administration | `static/js/passwords.js` | Under **Passwords**: **Password policies**, **Watch lists** and **Exposure report**; a user's effective policy, pin and "change at next sign-in" are on **Users and roles** (Manage). Both policy and watch list screens explain themselves: a how-to above the policy list, and plain help text beside each group of settings on the policy form. |
 | Recheck and clock | `static/js/dev.js`, `devclock.py` | Under **Development**. Sample only: warden schedules nothing, and a product does not move its clock. |

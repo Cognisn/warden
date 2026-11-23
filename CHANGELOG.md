@@ -20,6 +20,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The HTTP contract is regenerated for the new route and the `methods` field.
 - Upgrade note: remove `identity.require_mfa: false` from configuration before upgrading, or start-up fails. Users who signed in with a password alone are sent to enrol a second factor at their next sign-in; a product that switched MFA off at run time needs no change, since the stored override is ignored.
 
+## [0.2.0a3] - 2026-11-23
+
+Wave 2: the browser password rules published in the package (feat/0.2.0-password-evaluator).
+
+### Added
+
+- The browser password rules are published in the package (ruling CS23): `warden/static/passwordrules.js`, one classic script with no DOM and no network that evaluates the policy description the policy routes return, defining the global `WardenPasswordRules` (it also loads as a side-effect import and under Node `require`). `warden.static.path("passwordrules.js")` returns its location so a product serves it from its own static route; warden serves no file itself. The script ships in the wheel and the sdist. The clients guide has a section on serving and calling it, and on the server staying authoritative (18.12).
+- A CI job, `browser-rules`, runs every case of `docs/contract/password-rule-vectors.json` through the packaged script under Node (pinned to an exact version, standard library only), alongside the Python test of the same cases.
+
+### Changed
+
+- The sample console loads the packaged script, served by its own route `/api/warden/passwordrules.js`, instead of a copy of its own; its checklist behaves as before. The console's `static/js/passwordrules.js` is removed, and the test that ran it under Node moved to `tests/static`.
+
 ## [0.2.0a2] - 2026-11-23
 
 Wave 1: sign-in methods, the instance default and pending changes (feat/0.2.0-sign-in-methods). Adds migration `f1c7d24e8b93`.

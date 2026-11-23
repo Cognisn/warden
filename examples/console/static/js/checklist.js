@@ -4,7 +4,7 @@
 // page until a pause:
 //
 // 1. at once, in the browser: each rule from the policy description is checked
-//    (passwordrules.js, tested against warden's vectors), with the passphrase
+//    (warden's packaged passwordrules.js, tested against its vectors), with the passphrase
 //    path ("Passphrase: 3 of 4 words") and the tier with its change period;
 // 2. after the typing pauses (debounced), the password goes to warden's check
 //    route, which alone knows the watch lists, and the answer shows whether it
@@ -16,7 +16,12 @@
 // has its own pair of routes; the caller passes them as ``load`` and ``check``.
 
 import { h, status } from "./dom.js";
-import { evaluate, passphraseLine, ruleLabel, tierLine } from "./passwordrules.js";
+// warden's packaged evaluator (src/warden/static/passwordrules.js), served by this
+// console's own route. It is a classic script: importing it runs it, and it
+// defines the global WardenPasswordRules.
+import "/api/warden/passwordrules.js";
+
+const { evaluate, passphraseLine, ruleLabel, tierLine } = globalThis.WardenPasswordRules;
 
 // How long the typing must pause before the check route is called.
 export const PAUSE_MS = 500;
