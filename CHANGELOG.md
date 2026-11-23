@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0a7] - 2026-11-24
+
 Wave 3: routes over everything in 0.2.0, the client guide and the sample console (feat/0.2.0-settings-routes).
 
 ### Added
