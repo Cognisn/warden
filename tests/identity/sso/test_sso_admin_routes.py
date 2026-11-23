@@ -145,6 +145,9 @@ async def test_the_guide_follows_a_changed_preset(client: httpx.AsyncClient) -> 
     await client.put("/admin/sso/settings", headers=ADMIN, json={"provider_preset": "okta"})
     body = (await client.get("/admin/sso/setup-guide", headers=ADMIN)).json()
     assert body["preset"] == "okta"
+    shown = (await client.get("/admin/sso/settings", headers=ADMIN)).json()
+    assert shown["setup_guide"]["preset"] == "okta"
+    assert shown["setup_guide"] == body
     await client.post("/admin/sso/settings/reset", headers=ADMIN)
 
 
