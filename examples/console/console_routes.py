@@ -8,6 +8,9 @@ cover what the console needs that warden leaves to the product:
   warden's bundled common-password list);
 - ``GET /me``: who the bearer is (warden's routes have no such route; a
   product answers it from ``require_user``);
+- ``GET /warden/passwordrules.js``: warden's packaged browser password rules,
+  served from the console's own route as a product serves them (warden serves
+  no file itself; ``warden.static.path`` says where it is);
 - ``GET /outbox``: the in-memory mail outbox (the sample's own mail sender);
 - ``GET``/``PUT /policy``, ``POST /policy/reset``: the session policy, through
   ``Identity.policy`` (warden has no HTTP route for it);
@@ -43,7 +46,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from examples.console.devclock import DevClock
 from examples.console.outbox import Outbox
@@ -68,6 +71,7 @@ from warden.identity.http import SourceIp, client_ip
 from warden.identity.password_policy import WatchListError, WatchListNotFound
 from warden.identity.password_policy.builtin import bundled_list
 from warden.keys import KeyStore
+from warden.static import path as static_path
 
 __all__ = ["console_router"]
 
@@ -172,6 +176,11 @@ def console_router(
             "amr": list(principal.amr),
             "api_key_id": None if principal.api_key_id is None else str(principal.api_key_id),
         }
+
+    @router.get("/warden/passwordrules.js", include_in_schema=False)
+    async def password_rules_script() -> FileResponse:
+        """The packaged evaluator, served by the product as warden's guide describes."""
+        return FileResponse(static_path("passwordrules.js"), media_type="text/javascript")
 
     @router.get("/outbox")
     async def show_outbox() -> dict[str, Any]:

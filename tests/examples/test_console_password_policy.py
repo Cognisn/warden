@@ -113,7 +113,7 @@ async def test_the_console_settings_default_to_the_public_range_api(
 
 async def test_the_new_screens_are_served_with_the_policy(client: httpx.AsyncClient) -> None:
     for path in (
-        "/static/js/passwordrules.js",
+        "/api/warden/passwordrules.js",
         "/static/js/checklist.js",
         "/static/js/passwords.js",
         "/static/js/dev.js",
@@ -124,6 +124,21 @@ async def test_the_new_screens_are_served_with_the_policy(client: httpx.AsyncCli
         answer = await client.get(path)
         assert answer.status_code == 200, path
         assert_strict_csp(answer)
+
+
+async def test_the_console_serves_the_packaged_rules_not_a_copy(
+    client: httpx.AsyncClient,
+) -> None:
+    from warden.static import path as static_path
+
+    answer = await client.get("/api/warden/passwordrules.js")
+    assert answer.status_code == 200
+    assert answer.headers["content-type"].startswith("text/javascript")
+    assert answer.content == static_path("passwordrules.js").read_bytes()
+    assert (await client.get("/static/js/passwordrules.js")).status_code == 404
+    checklist = (SCRIPTS / "checklist.js").read_text(encoding="utf-8")
+    assert 'import "/api/warden/passwordrules.js";' in checklist
+    assert "./passwordrules.js" not in checklist
 
 
 # The development clock
