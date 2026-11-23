@@ -197,6 +197,9 @@ def test_every_json_body_route_documents_its_request_body(document: dict[str, An
                 ("/auth/passkey/options", "post"),
                 ("/auth/recovery-codes/regenerate", "post"),
                 ("/admin/invitations/{user_id}/resend", "post"),
+                ("/admin/users/{user_id}/sign-in-method/resend", "post"),
+                ("/admin/users/{user_id}/sign-in-method/cancel", "post"),
+                ("/admin/session-policy/reset", "post"),
                 ("/admin/password-policies/{policy_id}/watch-lists/{list_id}", "put"),
                 ("/admin/users/{user_id}/password-change-required", "put"),
             }

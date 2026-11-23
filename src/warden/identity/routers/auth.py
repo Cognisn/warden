@@ -13,6 +13,7 @@
 | ``POST /recovery-codes/regenerate`` | bearer token | ``recovery_codes`` |
 | ``POST /passkey/options`` | | options |
 | ``POST /passkey/sign-in`` | ``credential`` | tokens |
+| ``GET /sign-in-method`` | bearer token | the own method, pending change, allowed factors |
 | ``GET /capabilities`` | | ``password_reset``, ``single_sign_on``, ``passkey_sign_in`` |
 | ``GET /password/policy`` | bearer token | the policy (+) |
 | ``POST /password/check`` | bearer token; ``password`` | the check (+) |
@@ -67,6 +68,7 @@ from warden.identity.routers.contract import (
     RefreshBody,
     SignInBody,
     WardenEnrolmentConfirmed,
+    WardenOwnSignInMethod,
     WardenPasswordCheck,
     WardenPasswordPolicy,
     WardenRecoveryCodesRegenerated,
@@ -82,7 +84,9 @@ from warden.identity.routers.contract import (
     password_rejected,
 )
 from warden.identity.routers.tokens import change_body, session_body, token_body
+from warden.identity.routers.views import allowed_factors, method_state
 from warden.identity.routers.webauthn import build_webauthn_router
+from warden.identity.users import UserError
 
 if TYPE_CHECKING:
     from warden.identity.service import Identity
@@ -462,6 +466,46 @@ def build_auth_router(identity: Identity) -> APIRouter:
         except AuthenticationRefused:
             return refusal()
         return json_response(token_body(pair))
+
+    # The signed-in user's own method (ruling CS22): their own data only.
+
+    @router.get(
+        "/sign-in-method",
+        summary="Show the signed-in user's own sign-in method",
+        description=(
+            "Needs an access token as the bearer token. Answers with the user's own setting "
+            "(null when they follow the instance default), the method in force, any pending "
+            "change with the set-up link that completes it, and the second factors the "
+            "administrator allows. Never anyone else's data: there is no way to name another "
+            "user."
+        ),
+        responses={
+            200: {
+                "model": WardenOwnSignInMethod,
+                "description": "The user's own method and the allowed second factors.",
+                "headers": no_store(),
+            },
+            **REFUSED,
+        },
+    )
+    async def own_sign_in_method(request: Request) -> Response:
+        try:
+            principal = await principal_or_none(request)
+        except AuthenticationRefused:
+            return refusal()
+        if principal is None:
+            return refusal()
+        try:
+            state = await identity.sign_in_method(principal.user_id)
+        except UserError:
+            return refusal()
+        settings = await identity.sign_in_settings()
+        return json_response(
+            {
+                "sign_in_method": method_state(state),
+                "allowed_second_factors": allowed_factors(settings),
+            }
+        )
 
     # What a sign-in screen may offer: three booleans, the same for every caller.
 

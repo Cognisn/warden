@@ -914,6 +914,63 @@
         }
       }
     },
+    "/auth/sign-in-method": {
+      "get": {
+        "tags": [
+          "warden: sign-in"
+        ],
+        "summary": "Show the signed-in user's own sign-in method",
+        "description": "Needs an access token as the bearer token. Answers with the user's own setting (null when they follow the instance default), the method in force, any pending change with the set-up link that completes it, and the second factors the administrator allows. Never anyone else's data: there is no way to name another user.",
+        "operationId": "own_sign_in_method_auth_sign_in_method_get",
+        "responses": {
+          "200": {
+            "description": "The user's own method and the allowed second factors.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenOwnSignInMethod"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/capabilities": {
       "get": {
         "tags": [
@@ -8253,13 +8310,1250 @@
         }
       }
     },
+    "/admin/sign-in-settings": {
+      "get": {
+        "tags": [
+          "warden: administration",
+          "warden: administration"
+        ],
+        "summary": "Show the instance sign-in settings",
+        "description": "The default sign-in method every user without one of their own follows, and the second factors the administrator allows (`totp`, `passkey` or both, never empty). Behind the settings permission.",
+        "operationId": "get_sign_in_settings_admin_sign_in_settings_get",
+        "responses": {
+          "200": {
+            "description": "The settings.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSignInSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                },
+                "example": {
+                  "detail": "forbidden"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "warden: administration",
+          "warden: administration"
+        ],
+        "summary": "Change the instance sign-in settings",
+        "description": "Only the fields given change. A new `default_sign_in_method` moves every user who follows it: at once for those holding its credential, otherwise as a pending change with a set-up link mailed (`changed`, `pending` and `links_failed` list the users, so each failed delivery can be resent with `POST /users/{user_id}/sign-in-method/resend`). `allowed_second_factors` may not be emptied. Refused (409) with a `reason`: `sso_not_configured` for `sso_only` while single sign-on is not set up, `webauthn` for passkeys alone without WebAuthn, or the set-up link that cannot be sent (`mail_sender`, `passkey_registration_link`, `reset_password_link`). Nothing changes when refused. Every change is audited with the client address. Behind the settings permission.",
+        "operationId": "put_sign_in_settings_admin_sign_in_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "default_sign_in_method": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "password",
+                          "password_and_sso",
+                          "sso_only",
+                          "passkey_only"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Default Sign In Method",
+                    "description": "The new instance default. Moves every user who follows it: at once for those holding its credential, otherwise pending with a set-up link."
+                  },
+                  "allowed_second_factors": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "totp",
+                            "passkey"
+                          ]
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Allowed Second Factors",
+                    "description": "`totp`, `passkey` or both; never empty."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "title": "SignInSettingsBody",
+                "description": "At least one field; only the fields given change."
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The new settings and who the change reached.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSignInSettingsChanged"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a JSON object with a known field, or a value that is not valid.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "invalid settings: allowed_second_factors"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The change cannot be made now; `reason` says why.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenChangeRefused"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                },
+                "example": {
+                  "detail": "forbidden"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}/sign-in-method": {
+      "get": {
+        "tags": [
+          "warden: administration",
+          "warden: administration"
+        ],
+        "summary": "Show a user's sign-in method",
+        "description": "The user's own setting (null when they follow the instance default), the method in force and any pending change, with the set-up link that completes it and when it was mailed. `has_passkey` as well when the method is, or is moving to, `passkey_only`.",
+        "operationId": "get_user_method_admin_users__user_id__sign_in_method_get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user and their method.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSignInMethodSet"
+                }
+              }
+            },
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "warden: administration"
+        ],
+        "summary": "Set a user's sign-in method",
+        "description": "`password`, `password_and_sso`, `sso_only` or `passkey_only`, or null for the instance default. A `password` user signs in with a password and a second factor, never single sign-on. An `sso_only` or `passkey_only` user cannot sign in with, reset or change a password; a `passkey_only` user signs in with a passkey alone (`POST /passkey/sign-in` under the auth prefix). The change takes effect at once when the user holds the new method's credential, and whatever the new method does not allow is removed (a password, keys, sessions signed in another way). Otherwise it is pending: the method in force keeps working and the user is mailed a set-up link (a passkey registration link, or a set-password link through the reset page); a move to `sso_only` completes at the user's first single sign-on. `sign_in_method` in the answer reports the user's own setting, the method in force and any pending change. Setting `passkey_only` also answers `has_passkey`. `sso_only` is refused (409) while the user holds security keys or passkeys (reset their second factors first, `DELETE /users/{user_id}/mfa`) or while single sign-on is not set up; a change needing a link is refused (409) when the link cannot be sent, naming what is missing (such as `mail_sender`).",
+        "operationId": "set_method_admin_users__user_id__sign_in_method_post",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The updated user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSignInMethodSet"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The user cannot take that method now. `reason` says why (such as `sso_not_configured` or `mail_sender`); a refusal because the user holds security keys or passkeys answers only `detail`: the user holds security keys or passkeys; reset their second factors first.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenChangeRefused"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The set-up link could not be delivered.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the message could not be delivered"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "sign_in_method": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "password",
+                          "password_and_sso",
+                          "sso_only",
+                          "passkey_only"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "One of the four methods, or null to follow the instance default.",
+                    "title": "Sign In Method"
+                  }
+                },
+                "required": [
+                  "sign_in_method"
+                ],
+                "title": "SignInMethodBody",
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}/sign-in-method/resend": {
+      "post": {
+        "tags": [
+          "warden: administration",
+          "warden: administration"
+        ],
+        "summary": "Send a pending change's set-up link again",
+        "description": "Mails a fresh link at once and stops the earlier one working. Refused (409) with a `reason`: `not_pending`, `no_link` (a move to `sso_only` completes at the first single sign-on and has no link), `user_inactive`, or the link that cannot be sent (`mail_sender`, `passkey_registration_link`, `reset_password_link`, `webauthn`). Audited with the client address.",
+        "operationId": "resend_link_admin_users__user_id__sign_in_method_resend_post",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Sent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenLinkResent"
+                }
+              }
+            },
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A link cannot be sent; `reason` says why.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenChangeRefused"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The mail sender refused the message.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the message could not be delivered"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}/sign-in-method/cancel": {
+      "post": {
+        "tags": [
+          "warden: administration",
+          "warden: administration"
+        ],
+        "summary": "Cancel a pending sign-in method change",
+        "description": "The user stays on the method in force, their own setting goes back to what it was before the change, and the set-up link stops working. Refused (409, `reason` `not_pending`) when no change is pending. Audited with the client address.",
+        "operationId": "cancel_change_admin_users__user_id__sign_in_method_cancel_post",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user and their method.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSignInMethodSet"
+                }
+              }
+            },
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "not found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No change is pending; `reason` is `not_pending`.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenChangeRefused"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "authentication failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "forbidden"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/session-policy": {
+      "get": {
+        "tags": [
+          "warden: administration",
+          "warden: administration"
+        ],
+        "summary": "Show the session policy",
+        "description": "The effective session policy (token lifetimes, the session lifespan and the refresh reuse grace, in seconds), and the configuration's own, which a reset returns to. `require_mfa` is deprecated and always true. Behind the settings permission.",
+        "operationId": "get_session_policy_admin_session_policy_get",
+        "responses": {
+          "200": {
+            "description": "The policy and the defaults.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSessionPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                },
+                "example": {
+                  "detail": "forbidden"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "warden: administration",
+          "warden: administration"
+        ],
+        "summary": "Change the session policy",
+        "description": "Only the fields given change, each an integer number of seconds, validated as a whole by the rules the configuration applies at start-up. Shortening the session lifespan applies to existing sessions too. `require_mfa` is not changeable: `false` is refused. Every replica sees the change as soon as it commits. Audited with the client address. Behind the settings permission.",
+        "operationId": "put_session_policy_admin_session_policy_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "access_token_ttl_seconds": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Access Token Ttl Seconds",
+                    "description": "60 to 3600."
+                  },
+                  "refresh_token_ttl_seconds": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Refresh Token Ttl Seconds",
+                    "description": "At least 300 and longer than the access token lifetime."
+                  },
+                  "session_lifespan_seconds": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Session Lifespan Seconds",
+                    "description": "At least 300 and not shorter than the refresh token lifetime."
+                  },
+                  "refresh_reuse_grace_seconds": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Refresh Reuse Grace Seconds",
+                    "description": "0 to 120."
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "title": "SessionPolicyBody",
+                "description": "At least one field; only the fields given change."
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The new policy and the defaults.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSessionPolicy"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a JSON object with a known field, or a value the rules refuse.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the request is not valid"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "access_token_ttl_seconds must be between 60 and 3600"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                },
+                "example": {
+                  "detail": "forbidden"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/session-policy/reset": {
+      "post": {
+        "tags": [
+          "warden: administration",
+          "warden: administration"
+        ],
+        "summary": "Drop the session policy overrides",
+        "description": "Back to the configuration's policy. Audited with the client address.",
+        "operationId": "reset_session_policy_admin_session_policy_reset_post",
+        "responses": {
+          "200": {
+            "description": "The policy, now the defaults.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSessionPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without the permission this route requires.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenForbidden"
+                },
+                "example": {
+                  "detail": "forbidden"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/capabilities": {
       "get": {
         "tags": [
           "warden: administration"
         ],
         "summary": "What this deployment can do",
-        "description": "Whether invitations, password reset links and passkey registration links can be mailed, whether a mail sender is installed, whether single sign-on is enabled and whether passkeys and security keys work, so an administration screen can disable and explain those actions up front. Booleans only, never a setting's value. Each is the condition the route behind it checks; that route's own answer (such as its 503) stays the authority. Behind the user administration permission.",
+        "description": "Whether invitations, password reset links and passkey registration links can be mailed, whether a mail sender is installed, whether single sign-on is enabled and whether passkeys and security keys work, so an administration screen can disable and explain those actions up front, and the instance's default sign-in method and allowed second factors (the run-time settings `GET /sign-in-settings` reads). Otherwise booleans only, never a setting's value. Each boolean is the condition the route behind it checks; that route's own answer (such as its 503) stays the authority. Behind the user administration permission.",
         "operationId": "capabilities_admin_capabilities_get",
         "responses": {
           "200": {
@@ -8792,232 +10086,6 @@
                   "status"
                 ],
                 "title": "StatusBody",
-                "type": "object"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/admin/users/{user_id}/sign-in-method": {
-      "post": {
-        "tags": [
-          "warden: administration"
-        ],
-        "summary": "Set a user's sign-in method",
-        "description": "`password`, `password_and_sso`, `sso_only` or `passkey_only`, or null for the instance default. A `password` user signs in with a password and a second factor, never single sign-on. An `sso_only` or `passkey_only` user cannot sign in with, reset or change a password; a `passkey_only` user signs in with a passkey alone (`POST /passkey/sign-in` under the auth prefix). The change takes effect at once when the user holds the new method's credential, and whatever the new method does not allow is removed (a password, keys, sessions signed in another way). Otherwise it is pending: the method in force keeps working and the user is mailed a set-up link (a passkey registration link, or a set-password link through the reset page); a move to `sso_only` completes at the user's first single sign-on. `sign_in_method` in the answer reports the user's own setting, the method in force and any pending change. Setting `passkey_only` also answers `has_passkey`. `sso_only` is refused (409) while the user holds security keys or passkeys (reset their second factors first, `DELETE /users/{user_id}/mfa`) or while single sign-on is not set up; a change needing a link is refused (409) when the link cannot be sent, naming what is missing (such as `mail_sender`).",
-        "operationId": "set_method_admin_users__user_id__sign_in_method_post",
-        "parameters": [
-          {
-            "name": "user_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "User Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The updated user.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WardenSignInMethodSet"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "The request is not valid.",
-            "headers": {
-              "cache-control": {
-                "description": "Always `no-store`.",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "examples": {
-                  "message 1": {
-                    "value": {
-                      "detail": "the request is not valid"
-                    }
-                  }
-                },
-                "schema": {
-                  "$ref": "#/components/schemas/WardenDetail"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such user.",
-            "headers": {
-              "cache-control": {
-                "description": "Always `no-store`.",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "examples": {
-                  "message 1": {
-                    "value": {
-                      "detail": "not found"
-                    }
-                  }
-                },
-                "schema": {
-                  "$ref": "#/components/schemas/WardenDetail"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "The user cannot take that method now.",
-            "headers": {
-              "cache-control": {
-                "description": "Always `no-store`.",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "examples": {
-                  "message 1": {
-                    "value": {
-                      "detail": "the user holds security keys or passkeys; reset their second factors first"
-                    }
-                  }
-                },
-                "schema": {
-                  "$ref": "#/components/schemas/WardenDetail"
-                }
-              }
-            }
-          },
-          "502": {
-            "description": "The set-up link could not be delivered.",
-            "headers": {
-              "cache-control": {
-                "description": "Always `no-store`.",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "examples": {
-                  "message 1": {
-                    "value": {
-                      "detail": "the message could not be delivered"
-                    }
-                  }
-                },
-                "schema": {
-                  "$ref": "#/components/schemas/WardenDetail"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
-            "headers": {
-              "www-authenticate": {
-                "description": "`Bearer`.",
-                "schema": {
-                  "type": "string"
-                }
-              },
-              "cache-control": {
-                "description": "Always `no-store`.",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "example": {
-                  "detail": "authentication failed"
-                },
-                "schema": {
-                  "$ref": "#/components/schemas/WardenRefusal"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Signed in, but without the permission this route requires.",
-            "headers": {
-              "cache-control": {
-                "description": "Always `no-store`.",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "example": {
-                  "detail": "forbidden"
-                },
-                "schema": {
-                  "$ref": "#/components/schemas/WardenForbidden"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": false,
-                "properties": {
-                  "sign_in_method": {
-                    "anyOf": [
-                      {
-                        "enum": [
-                          "password",
-                          "password_and_sso",
-                          "sso_only",
-                          "passkey_only"
-                        ],
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "description": "One of the four methods, or null to follow the instance default.",
-                    "title": "Sign In Method"
-                  }
-                },
-                "required": [
-                  "sign_in_method"
-                ],
-                "title": "SignInMethodBody",
                 "type": "object"
               }
             }
@@ -11275,6 +12343,24 @@
               }
             }
           },
+          "409": {
+            "description": "Single sign-on cannot be turned off or cleared while the default sign-in method or an active user's own, pending or in-force method is `sso_only`. `users` lists them to move first (`POST /users/{user_id}/sign-in-method`); `default_sso_only` says whether the default is the cause. Nothing changed.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSsoStillRequired"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Refused by the product's `authorise` dependency; the body is the product's."
           },
@@ -11355,6 +12441,24 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WardenSsoSettingsView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Single sign-on cannot be turned off or cleared while the default sign-in method or an active user's own, pending or in-force method is `sso_only`. `users` lists them to move first (`POST /users/{user_id}/sign-in-method`); `default_sso_only` says whether the default is the cause. Nothing changed.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSsoStillRequired"
                 }
               }
             }
@@ -12631,6 +13735,26 @@
         ],
         "title": "ValidationError"
       },
+      "WardenAffectedSsoUser": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "UUID."
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "email"
+        ],
+        "title": "WardenAffectedSsoUser"
+      },
       "WardenAffectedUsers": {
         "properties": {
           "affected_users": {
@@ -12800,6 +13924,29 @@
             "type": "boolean",
             "title": "Webauthn",
             "description": "Passkeys and security keys work: a relying party id is known."
+          },
+          "allowed_second_factors": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "totp",
+                "passkey"
+              ]
+            },
+            "type": "array",
+            "title": "Allowed Second Factors",
+            "description": "The second factors the administrator allows, never empty: the run-time setting `GET /sign-in-settings` reads."
+          },
+          "default_sign_in_method": {
+            "type": "string",
+            "enum": [
+              "password",
+              "password_and_sso",
+              "sso_only",
+              "passkey_only"
+            ],
+            "title": "Default Sign In Method",
+            "description": "The method every user without one of their own follows."
           }
         },
         "additionalProperties": false,
@@ -12810,7 +13957,9 @@
           "password_reset",
           "passkey_registration_link",
           "single_sign_on",
-          "webauthn"
+          "webauthn",
+          "allowed_second_factors",
+          "default_sign_in_method"
         ],
         "title": "WardenCapabilities",
         "description": "What this deployment can do, for administration. Booleans only, never a setting."
@@ -12858,6 +14007,27 @@
         ],
         "title": "WardenChallengeIssued",
         "description": "The password was right; a second factor, or enrolment in one, comes next."
+      },
+      "WardenChangeRefused": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "description": "A fixed message; never a setting's value."
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "description": "Why the change cannot be made: `sso_not_configured`, `webauthn`, `mail_sender`, `passkey_registration_link`, `reset_password_link`, `not_pending`, `no_link`, `user_inactive`, or a refusal the route names."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "detail",
+          "reason"
+        ],
+        "title": "WardenChangeRefused"
       },
       "WardenChangeRequired": {
         "properties": {
@@ -13113,6 +14283,28 @@
         ],
         "title": "WardenInvitationList"
       },
+      "WardenLinkResent": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "sent",
+            "title": "Status"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At",
+            "description": "When the new link stops working."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "expires_at"
+        ],
+        "title": "WardenLinkResent"
+      },
       "WardenNewApiKeyIssued": {
         "properties": {
           "key": {
@@ -13131,6 +14323,32 @@
           "api_key"
         ],
         "title": "WardenNewApiKeyIssued"
+      },
+      "WardenOwnSignInMethod": {
+        "properties": {
+          "sign_in_method": {
+            "$ref": "#/components/schemas/WardenSignInMethodState"
+          },
+          "allowed_second_factors": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "totp",
+                "passkey"
+              ]
+            },
+            "type": "array",
+            "title": "Allowed Second Factors",
+            "description": "The second factors the administrator allows."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sign_in_method",
+          "allowed_second_factors"
+        ],
+        "title": "WardenOwnSignInMethod"
       },
       "WardenPasskeyInvitationAccepted": {
         "properties": {
@@ -14365,6 +15583,61 @@
         "title": "WardenSecondFactorAnswer",
         "description": "A completed second factor: a session, or a forced password change first."
       },
+      "WardenSessionPolicy": {
+        "properties": {
+          "policy": {
+            "$ref": "#/components/schemas/WardenSessionPolicyFields",
+            "description": "The effective policy."
+          },
+          "defaults": {
+            "$ref": "#/components/schemas/WardenSessionPolicyFields",
+            "description": "The configuration's policy, which a reset returns to."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "policy",
+          "defaults"
+        ],
+        "title": "WardenSessionPolicy"
+      },
+      "WardenSessionPolicyFields": {
+        "properties": {
+          "access_token_ttl_seconds": {
+            "type": "integer",
+            "title": "Access Token Ttl Seconds"
+          },
+          "refresh_token_ttl_seconds": {
+            "type": "integer",
+            "title": "Refresh Token Ttl Seconds"
+          },
+          "session_lifespan_seconds": {
+            "type": "integer",
+            "title": "Session Lifespan Seconds"
+          },
+          "refresh_reuse_grace_seconds": {
+            "type": "integer",
+            "title": "Refresh Reuse Grace Seconds"
+          },
+          "require_mfa": {
+            "type": "boolean",
+            "const": true,
+            "title": "Require Mfa",
+            "description": "Deprecated and always true: a password sign-in always needs a second factor."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "access_token_ttl_seconds",
+          "refresh_token_ttl_seconds",
+          "session_lifespan_seconds",
+          "refresh_reuse_grace_seconds",
+          "require_mfa"
+        ],
+        "title": "WardenSessionPolicyFields"
+      },
       "WardenSetupGuide": {
         "properties": {
           "preset": {
@@ -14568,6 +15841,99 @@
           "pending"
         ],
         "title": "WardenSignInMethodState"
+      },
+      "WardenSignInSettings": {
+        "properties": {
+          "default_sign_in_method": {
+            "type": "string",
+            "enum": [
+              "password",
+              "password_and_sso",
+              "sso_only",
+              "passkey_only"
+            ],
+            "title": "Default Sign In Method",
+            "description": "The method every user without one of their own follows."
+          },
+          "allowed_second_factors": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "totp",
+                "passkey"
+              ]
+            },
+            "type": "array",
+            "title": "Allowed Second Factors",
+            "description": "The second factors users may enrol and be challenged with, never empty. Recovery codes are always the backup."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By",
+            "description": "The actor who last changed the settings."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "default_sign_in_method",
+          "allowed_second_factors",
+          "updated_at",
+          "updated_by"
+        ],
+        "title": "WardenSignInSettings"
+      },
+      "WardenSignInSettingsChanged": {
+        "properties": {
+          "settings": {
+            "$ref": "#/components/schemas/WardenSignInSettings"
+          },
+          "changed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Changed",
+            "description": "User ids whose method in force changed at once (UUIDs)."
+          },
+          "pending": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Pending",
+            "description": "User ids whose change waits for its credential (UUIDs)."
+          },
+          "links_failed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Links Failed",
+            "description": "User ids whose set-up link was not delivered (UUIDs); resend each."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "settings",
+          "changed",
+          "pending",
+          "links_failed"
+        ],
+        "title": "WardenSignInSettingsChanged"
       },
       "WardenSignedIn": {
         "properties": {
@@ -14906,6 +16272,41 @@
           "setup_guide"
         ],
         "title": "WardenSsoSettingsView"
+      },
+      "WardenSsoStillRequired": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "reason": {
+            "type": "string",
+            "const": "sso_still_required",
+            "title": "Reason"
+          },
+          "default_sso_only": {
+            "type": "boolean",
+            "title": "Default Sso Only",
+            "description": "Whether the instance default is `sso_only`."
+          },
+          "users": {
+            "items": {
+              "$ref": "#/components/schemas/WardenAffectedSsoUser"
+            },
+            "type": "array",
+            "title": "Users",
+            "description": "Each active user whose own, pending or in-force method is `sso_only`."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "detail",
+          "reason",
+          "default_sso_only",
+          "users"
+        ],
+        "title": "WardenSsoStillRequired"
       },
       "WardenStagedGrant": {
         "properties": {
