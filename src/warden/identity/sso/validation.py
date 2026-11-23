@@ -9,11 +9,16 @@ reason: ``iss`` equal to the provider's issuer, ``aud`` containing the
 client id (and ``azp`` equal to it when there are several audiences, or
 whenever it is present), ``exp`` and ``iat`` within ``clock_skew_seconds``,
 and ``nonce`` equal to the one this sign-in sent.
+
+Whether the email is verified: ``email_verified`` exactly ``true``, or, from
+Microsoft Entra ID's v2.0 issuer only, ``xms_edov`` exactly ``true`` with a
+non-empty ``email`` (see ``_email_verified``).
 """
 
 from __future__ import annotations
 
 import hmac
+import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -31,6 +36,11 @@ _MAX_TOKEN = 16 * 1024
 _MAX_SUBJECT = 255
 # Never accepted, whatever configuration or the provider says.
 _FORBIDDEN = frozenset({"none", "HS256", "HS384", "HS512"})
+# Microsoft Entra ID's v2.0 issuer for one tenant, by its directory (tenant) id.
+_ENTRA_ISSUER = re.compile(
+    r"https://login\.microsoftonline\.com/"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/v2\.0"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +157,27 @@ class IdTokenValidator:
             issuer=issuer,
             subject=sub,
             email=email if isinstance(email, str) else None,
-            email_verified=claims.get("email_verified") is True,
+            email_verified=_email_verified(claims, issuer),
             claims=claims,
         )
+
+
+def _email_verified(claims: Mapping[str, Any], issuer: str) -> bool:
+    """Whether the ID token vouches for its email address.
+
+    ``email_verified`` exactly ``true``, from any provider. Microsoft Entra
+    ID publishes no ``email_verified`` claim; from its v2.0 issuer for a
+    tenant, and only from it, ``xms_edov`` exactly ``true`` (the owner of
+    the email's domain is verified) with a non-empty ``email`` counts too
+    (Skuld release 0.2.0, question 2). The issuer is the configured one,
+    which the token's ``iss`` has already been checked to equal.
+    """
+    if claims.get("email_verified") is True:
+        return True
+    email = claims.get("email")
+    return (
+        _ENTRA_ISSUER.fullmatch(issuer) is not None
+        and claims.get("xms_edov") is True
+        and isinstance(email, str)
+        and email != ""
+    )

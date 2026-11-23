@@ -906,18 +906,27 @@ class Identity:
     async def passkey_sign_in(self, credential: object, *, source_ip: SourceIp = None) -> TokenPair:
         """Sign in with a passkey alone: ``amr`` ``["hwk", "mfa"]``.
 
-        That satisfies ``require_mfa`` with no second step. The user is the
-        one holding the credential, found by the response's user handle and
-        credential id together. Open to ``password_and_sso`` and
+        A sign-in with no second step. The user is the one holding the
+        credential, found by the response's user handle and credential id
+        together. Open to ``password``, ``password_and_sso`` and
         ``passkey_only`` users, with a credential that is discoverable and
-        was registered with user verification. Throttled by source address
-        and, separately, by the credential id's hash. Every failure is
-        ``AuthenticationRefused``, its reason recorded as a failed
-        ``warden.identity.sign_in``.
+        was registered with user verification. While the administrator does
+        not allow passkeys as a second factor, only ``passkey_only`` users,
+        whose passkey is how they sign in, are let in; anyone else is
+        refused with reason ``factor_not_allowed`` (Skuld release 0.2.0,
+        question 1). Throttled by source address and, separately, by the
+        credential id's hash. Every failure is ``AuthenticationRefused``, its
+        reason recorded as a failed ``warden.identity.sign_in``.
+
+        Every refusal after the challenge does the same work: the ceremony
+        runs to its end whichever check fails, and the user's status, method
+        in force and the allowed second factors are read in its transaction on
+        every path (see ``WebAuthn.finish_authentication``).
 
         The ceremony is finished with no transaction of this method's open,
-        as ``verify_webauthn`` does; the user's status and sign-in method are
-        checked again in the transaction that issues the session.
+        as ``verify_webauthn`` does; the user's status, sign-in method and the
+        allowed second factors are checked again in the transaction that
+        issues the session.
         """
         raw_id = _credential_id(credential)
         if not await self.throttle.reserve_passkey(source_ip, raw_id or b""):
@@ -928,7 +937,9 @@ class Identity:
             await self._refuse_passkey("webauthn_unavailable", None, None, source_ip)
         policy = await self.policy.current()
         try:
-            assertion = await self.webauthn.finish_authentication(None, credential)
+            assertion = await self.webauthn.finish_authentication(
+                None, credential, decide=self._passkey_decision
+            )
         except WebAuthnError as exc:
             if exc.suspected_clone:
                 await self._audit_clone(exc, source_ip)
@@ -953,17 +964,32 @@ class Identity:
         return await self.sessions.finish(new)
 
     async def _passkey_refusal(self, conn: AsyncConnection[Any], user_id: uuid.UUID) -> str | None:
-        """Why this user may not sign in with a passkey now, or None."""
+        """Why this user may not sign in with a passkey now, or None.
+
+        Reads the user's status and method in force, and the allowed second
+        factors, whoever the user is (a user id no account has included), so
+        every caller does the same work.
+        """
         cur = await conn.execute(
             sql.SQL("SELECT status, {} FROM {} WHERE id = %s").format(_METHOD, _USERS),
             (user_id,),
         )
         row = await cur.fetchone()
+        allowed = await self._allowed(conn)
         if row is None or row[0] != UserStatus.ACTIVE:
             return "inactive_user"
         if not allows_passkey_sign_in(row[1]):
             return "sso_only"
+        if SecondFactorKind.PASSKEY not in allowed and row[1] != SignInMethod.PASSKEY_ONLY:
+            return "factor_not_allowed"
         return None
+
+    async def _passkey_decision(
+        self, conn: AsyncConnection[Any], user_id: uuid.UUID
+    ) -> WebAuthnRefusal | None:
+        """``_passkey_refusal`` inside the ceremony's transaction, on every path."""
+        reason = await self._passkey_refusal(conn, user_id)
+        return None if reason is None else WebAuthnRefusal(reason)
 
     async def _refuse_passkey(
         self,

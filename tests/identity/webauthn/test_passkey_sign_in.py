@@ -315,7 +315,11 @@ async def test_every_passkey_sign_in_failure_is_byte_identical(
 async def test_passkey_sign_in_timing_does_not_reveal_why_it_failed(
     http: httpx.AsyncClient, identity: Identity, db: Database, make_user: UserFactory
 ) -> None:
-    """As #133 measures password sign-in: interleaved cases, medians within a quarter."""
+    """As #133 measures password sign-in: interleaved cases, medians within a quarter.
+
+    Passkeys are not an allowed second factor here, so a password_and_sso user's
+    good assertion is refused as ``factor_not_allowed`` (Skuld question 1).
+    """
     stranger = passkey_authenticator()
     stranger.register(
         {"rp": {"id": "app.example.com"}, "user": {"id": "AAAA"}, "challenge": "AAAA"}
@@ -324,11 +328,17 @@ async def test_passkey_sign_in_timing_does_not_reveal_why_it_failed(
     suspended, suspended_key = await _passkey_user(identity, make_user)
     await set_status(db, suspended.id, "suspended")
     _, signature_key = await _passkey_user(identity, make_user)
+    sso_user, sso_key = await _passkey_user(identity, make_user)
+    await set_method(db, sso_user.id, SignInMethod.SSO_ONLY)
+    _, not_allowed_key = await _passkey_user(identity, make_user)
+    await identity.update_sign_in_settings(actor="admin-1", allowed_second_factors=["totp"])
     cases: dict[str, tuple[SoftwareAuthenticator, dict[str, Any]]] = {
         "unknown_credential": (stranger, {}),
         "user_handle": (handle_key, {"user_handle": b"\x00" * 64}),
         "inactive_user": (suspended_key, {}),
         "signature": (signature_key, {"signing_key": other_key()}),
+        "sso_only": (sso_key, {}),
+        "factor_not_allowed": (not_allowed_key, {}),
     }
     samples: dict[str, list[float]] = {name: [] for name in cases}
     for key, tamper in cases.values():  # warm-up
@@ -341,6 +351,11 @@ async def test_passkey_sign_in_timing_does_not_reveal_why_it_failed(
             samples[name].append(time.perf_counter() - start)
             assert_refused(answer)
     medians = {name: statistics.median(values) for name, values in samples.items()}
+    ratio = min(medians.values()) / max(medians.values())
+    print(
+        f"passkey timing ratio {ratio:.3f} medians_ms",
+        {k: round(v * 1000, 2) for k, v in medians.items()},
+    )
     assert min(medians.values()) / max(medians.values()) > 0.75, medians
 
 
