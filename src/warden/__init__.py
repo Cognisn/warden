@@ -18,6 +18,6 @@ this file first, so anything imported here would break audit's independence
 from identity (design D11).
 """
 
-__version__ = "0.2.0a5"
+__version__ = "0.2.0a6"
 
 __all__ = ["__version__"]

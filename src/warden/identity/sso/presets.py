@@ -143,23 +143,25 @@ _ENTRA = (
         _ISSUER,
     ),
     _step(
-        "Request the email claim",
-        "warden asks for the scopes {scopes}. For a member of your own directory the email "
-        "claim is not in the ID token by default, so open Token configuration, select Add "
-        "optional claim, choose the ID token type, tick email and select Add. Accept the prompt "
-        "to add the Microsoft Graph email permission if one appears. Every user who will sign in "
-        "needs an email address on their account, and it must be the address warden holds for "
-        "them.",
+        "Request the email and xms_edov claims",
+        "warden asks for the scopes {scopes}. Neither the email claim nor the xms_edov claim is "
+        "in the ID token by default, so open Token configuration, select Add optional claim, "
+        "choose the ID token type, tick both email and xms_edov and select Add. Accept the "
+        "prompt to add the Microsoft Graph email permission if one appears. Every user who will "
+        "sign in needs an email address on their account, and it must be the address warden "
+        "holds for them.",
     ),
     _step(
         "Check the verified email",
-        "warden refuses a first sign-in unless the ID token says email_verified is true. "
-        "Microsoft's published ID token and optional claim lists do not include an "
-        "email_verified claim; the nearest is the optional xms_edov claim, which reports "
-        "whether the owner of the email domain has been verified. If every Entra sign-in is "
-        "refused and the audit trail shows the reason email_unverified, the tenant's tokens do "
-        "not carry the claim, and this provider cannot satisfy that rule yet. Run the "
-        "configuration test and one real sign-in before relying on it.",
+        "Entra puts no email_verified claim in its ID tokens. When the issuer is Entra's v2.0 "
+        "issuer for your tenant, warden accepts instead the optional xms_edov claim with the "
+        "value true, together with the email claim: xms_edov is true when the owner of the "
+        "email's domain has been verified. Microsoft counts an address as domain verified when "
+        "it belongs to your tenant and a tenant administrator has verified its domain, so add "
+        "and verify each email domain your users sign in with as a custom domain name in Entra "
+        "ID. warden refuses a sign-in whose ID token carries neither email_verified true nor "
+        "xms_edov true with an email, and records the reason email_unverified in the audit "
+        "trail. Run the configuration test and one real sign-in before relying on it.",
     ),
     _step(
         "Limit who can sign in",
@@ -359,8 +361,8 @@ PRESETS: tuple[PresetGuide, ...] = (
         "Microsoft Entra ID",
         "https://login.microsoftonline.com/<tenant id>/v2.0",
         "Register a web application, add the callback URI as a redirect URI, and create a "
-        "client secret. Configure the optional email claim; single sign-on needs a verified "
-        "email (email_verified) on first sign-in.",
+        "client secret. Configure the optional email and xms_edov claims; single sign-on needs "
+        "a verified email, which from Entra is xms_edov true with the email claim.",
         _ENTRA,
     ),
     PresetGuide(

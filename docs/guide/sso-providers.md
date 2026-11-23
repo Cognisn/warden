@@ -23,9 +23,9 @@ warden needs the same from every provider:
 - the authorisation code flow, with a PKCE S256 challenge, a state value and a nonce, which warden sends itself;
 - a discovery document and signing keys over https, and an issuer that exactly equals the one warden holds;
 - ID tokens signed with RS256, ES256 or PS256;
-- `email` and `email_verified` in the ID token. On a first sign-in warden refuses the person unless `email_verified` is true, the address matches an existing or invited user, and (when set) its domain is in the allowed email domains.
+- `email` and `email_verified` in the ID token. warden refuses the person unless `email_verified` is exactly true, the address matches an existing or invited user, and (when set) its domain is in the allowed email domains.
 
-Known limitation: Microsoft Entra ID does not publish an `email_verified` claim in its ID tokens (see the Entra section), so warden's rule can refuse every Entra sign-in. The Entra guide says so plainly.
+Microsoft Entra ID is the one exception to the `email_verified` rule, because it publishes no such claim. When the configured issuer is Entra ID's v2.0 issuer for a tenant (`https://login.microsoftonline.com/<tenant id>/v2.0`, matched in full on the issuer URL, never by the chosen preset), an `xms_edov` claim that is exactly true, together with a non-empty `email` claim, counts as a verified email. From any other issuer `xms_edov` is ignored. The allowed email domains apply either way.
 
 ## Microsoft Entra ID
 
@@ -33,7 +33,7 @@ Single tenant is the supported shape: it gives an issuer that warden can match e
 
 Issuer hint: https://login.microsoftonline.com/<tenant id>/v2.0
 
-**Checked on 2026-11-23** against the sources listed at the end of this section.
+**Checked on 2026-11-23** against the sources listed at the end of this section. Steps 5 and 6 rechecked on 2026-11-24 against the optional claims reference, for `xms_edov`.
 
 1. Register the application
 
@@ -57,13 +57,13 @@ Issuer hint: https://login.microsoftonline.com/<tenant id>/v2.0
 
    Copy back: the issuer URL, into warden's `issuer_url`.
 
-5. Request the email claim
+5. Request the email and xms_edov claims
 
-   warden asks for the scopes <scopes>. For a member of your own directory the email claim is not in the ID token by default, so open Token configuration, select Add optional claim, choose the ID token type, tick email and select Add. Accept the prompt to add the Microsoft Graph email permission if one appears. Every user who will sign in needs an email address on their account, and it must be the address warden holds for them.
+   warden asks for the scopes <scopes>. Neither the email claim nor the xms_edov claim is in the ID token by default, so open Token configuration, select Add optional claim, choose the ID token type, tick both email and xms_edov and select Add. Accept the prompt to add the Microsoft Graph email permission if one appears. Every user who will sign in needs an email address on their account, and it must be the address warden holds for them.
 
 6. Check the verified email
 
-   warden refuses a first sign-in unless the ID token says email_verified is true. Microsoft's published ID token and optional claim lists do not include an email_verified claim; the nearest is the optional xms_edov claim, which reports whether the owner of the email domain has been verified. If every Entra sign-in is refused and the audit trail shows the reason email_unverified, the tenant's tokens do not carry the claim, and this provider cannot satisfy that rule yet. Run the configuration test and one real sign-in before relying on it.
+   Entra puts no email_verified claim in its ID tokens. When the issuer is Entra's v2.0 issuer for your tenant, warden accepts instead the optional xms_edov claim with the value true, together with the email claim: xms_edov is true when the owner of the email's domain has been verified. Microsoft counts an address as domain verified when it belongs to your tenant and a tenant administrator has verified its domain, so add and verify each email domain your users sign in with as a custom domain name in Entra ID. warden refuses a sign-in whose ID token carries neither email_verified true nor xms_edov true with an email, and records the reason email_unverified in the audit trail. Run the configuration test and one real sign-in before relying on it.
 
 7. Limit who can sign in
 
@@ -81,7 +81,7 @@ Issuer hint: https://login.microsoftonline.com/<tenant id>/v2.0
 - OpenID Connect (OIDC) on the Microsoft identity platform: <https://learn.microsoft.com/en-us/entra/identity-platform/v2-protocols-oidc>
 - Microsoft identity platform and OAuth 2.0 authorization code flow: <https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow>
 - ID token claims reference: <https://learn.microsoft.com/en-us/entra/identity-platform/id-token-claims-reference>
-- Optional claims reference: <https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims-reference>
+- Optional claims reference: <https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims-reference> (checked again on 2026-11-24: `xms_edov` is a Boolean saying whether the user's email domain owner has been verified; an email is domain verified when it belongs to the tenant where the user account resides and the tenant administrator has verified the domain, or comes from a Microsoft account, a Google account or the one-time passcode flow; Facebook and SAML/WS-Fed accounts have no verified domain; the claim is returned only when the `email` claim is present)
 - Configure and manage optional claims in ID tokens, access tokens, and SAML tokens: <https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims>
 - Scopes and permissions in the Microsoft identity platform: <https://learn.microsoft.com/en-us/entra/identity-platform/scopes-oidc>
 - Manage access to apps (requiring user assignment): <https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/what-is-access-management>

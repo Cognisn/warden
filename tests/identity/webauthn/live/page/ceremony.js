@@ -90,6 +90,10 @@ const flows = {
   "register-key": async (steps) => {
     await register(steps, "/webauthn/registration", "/webauthn/registration/confirm", {}, state.access);
   },
+  "enrol-key": async (steps) => {
+    const body = { challenge: state.challenge };
+    await register(steps, "/webauthn/registration", "/webauthn/registration/confirm", body);
+  },
   "passkey-sign-in": async (steps) => {
     const options = await call(steps, "/passkey/options", {});
     if (options.status !== 200) {

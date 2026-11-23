@@ -16,6 +16,7 @@ Wave 3: routes over everything in 0.2.0, the client guide and the sample console
 - A router for the session policy (0.2.0 backlog item 2): `GET` and `PUT <admin>/session-policy` and `POST <admin>/session-policy/reset`, audited with the client address. `require_mfa` is read-only and always true.
 - `Identity.admin_router(settings=...)` names the permission that guards the instance sign-in settings and the session policy; it defaults to the users permission, so existing products see no change.
 - `GET <admin>/capabilities` adds `allowed_second_factors` and `default_sign_in_method`. The anonymous `GET <auth>/capabilities` is unchanged and answers every caller identically.
+- Client guide: passkey sign-in refused while passkey is not allowed, `factor_not_allowed` among the audited reasons, `WebAuthn.finish_authentication`'s `decide` callback, and the Entra `xms_edov` rule (also in the 0.1.x upgrade steps).
 - Client guide chapters 19 (sign-in methods, the instance settings, pending changes and set-up links, the single sign-on guard, allowed factors and the always-on second factor, recovery codes, set-up steps, the session policy) and 20 (upgrading from 0.1.x).
 - Sample console: screens for the instance sign-in settings and the allowed factors, each user's method with its pending state (resend, cancel), recovery-code replacement, the single sign-on setup steps and the session policy.
 
@@ -25,6 +26,17 @@ Wave 3: routes over everything in 0.2.0, the client guide and the sample console
 - The client guide's stale statements are corrected: the password rules vectors file holds 63 cases, a password is always part of multi-factor authentication, `require_mfa` is deprecated, and the session policy has routes.
 - The sample console no longer offers to switch `require_mfa` off (README walk and policy screen), and its browser check completes the second factor at sign-in.
 - The HTTP contract is regenerated.
+
+## [0.2.0a6] - 2026-11-24
+
+Wave 3: passkey sign-in follows the allowed second factors with equal work on every refusal, and Entra's xms_edov accepted as a verified email (fix/0.2.0-sign-in-follow-ups).
+
+### Changed
+
+- Passkey sign-in follows the allowed second factors (Skuld release 0.2.0, question 1): while the administrator does not allow passkeys as a second factor, signing in with a passkey alone (`Identity.passkey_sign_in`, `POST <auth>/passkey/sign-in`) is refused for every user whose method in force is not `passkey_only`, with the uniform refusal, and audited as a failed `warden.identity.sign_in` with reason `factor_not_allowed`. The refused attempt leaves the credential's counter untouched. `passkey_only` users, whose passkey is how they sign in, sign in as before. The allowed set is read in the transaction that decides, so a change applies to the next sign-in.
+- Every refusal of a passkey sign-in after its challenge now does the same work, whichever check failed: `WebAuthn.finish_authentication` runs the ceremony to its end before refusing (an unknown credential is checked against a stand-in key), and reads the owner's handle and status on every path; the counter is written only when every check passed. The reason is still the first check that failed. It takes a new keyword-only `decide`, a callback run in the ceremony's transaction on every path, which passkey sign-in uses to read the user's status, method in force and the allowed second factors.
+- Single sign-on with Microsoft Entra ID (Skuld release 0.2.0, question 2): Entra publishes no `email_verified` claim in its ID tokens, so when the configured issuer is Entra ID's v2.0 issuer for a tenant (`https://login.microsoftonline.com/<tenant id>/v2.0`, matched in full on the issuer URL, never by the chosen preset), an `xms_edov` claim that is exactly `true` together with a non-empty `email` claim now counts as a verified email, on sign-in and on accepting an invitation. From every other issuer `email_verified` must still be exactly `true` and `xms_edov` is ignored. The allowed email domains apply as before. The Entra setup guide (`warden.identity.sso.presets` and `docs/guide/sso-providers.md`) now tells the administrator to add the optional claims `email` and `xms_edov`, and cites Microsoft's optional claims reference, checked on 2026-11-24.
+- Upgrade note: a deployment that has removed passkey from the allowed second factors will find its users other than `passkey_only` refused at passkey sign-in; they sign in with a password and an allowed second factor instead.
 
 ## [0.2.0a5] - 2026-11-23
 
