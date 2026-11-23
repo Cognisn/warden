@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI
-from identity_support import FAST_HASHER, PASSWORD, MemorySecrets, RecordingSender
+from identity_support import FAST_HASHER, PASSWORD, MemorySecrets, RecordingSender, complete_sign_in
 
 from warden.config import WardenConfig, parse_config
 from warden.db import Database
@@ -55,7 +55,7 @@ def deployment(
         http["passkey_registration_link"] = f"{base}/passkey?t={{token}}"
     complete = invitation_link and reset_link
     return parse_config(
-        {"http": http, "identity": {"require_mfa": False, "enabled": complete}},
+        {"http": http, "identity": {"enabled": complete}},
     )
 
 
@@ -113,7 +113,7 @@ async def make(
 
 
 async def bearer(identity: Identity, user: User) -> dict[str, str]:
-    result = await identity.sign_in(user.email, PASSWORD)
+    result = await complete_sign_in(identity, user.email, PASSWORD)
     assert result.tokens is not None
     return {"authorization": f"Bearer {result.tokens.access_token}"}
 

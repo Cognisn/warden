@@ -23,6 +23,7 @@ from identity_support import (
     RecordingSender,
     UserFactory,
     audit_rows,
+    http_sign_in,
     race,
 )
 from passkey_support import (
@@ -503,7 +504,7 @@ async def test_a_passkey_only_user_cannot_reset_or_change_a_password(
     (requested,) = await audit_rows(db, "warden.identity.password.reset_requested")
     assert requested["details"]["reason"] == "passkey_only"
     # The administrator's: a 409.
-    signed_in = await http.post("/auth/sign-in", json={"email": admin.email, "password": PASSWORD})
+    signed_in = await http_sign_in(http, admin.email, PASSWORD)
     admin_bearer = {"authorization": f"Bearer {signed_in.json()['access_token']}"}
     sent = await http.post(f"/admin/users/{user.id}/password-reset", headers=admin_bearer)
     assert sent.status_code == 409
@@ -547,7 +548,7 @@ async def test_a_reset_link_issued_before_the_switch_is_refused_and_spent(
 
 async def _admin(http: httpx.AsyncClient, make_user: UserFactory) -> dict[str, str]:
     admin = await make_user(roles=("admin",))
-    signed_in = await http.post("/auth/sign-in", json={"email": admin.email, "password": PASSWORD})
+    signed_in = await http_sign_in(http, admin.email, PASSWORD)
     return {"authorization": f"Bearer {signed_in.json()['access_token']}"}
 
 
@@ -658,7 +659,7 @@ async def test_a_key_registered_while_switching_to_sso_only_never_leaves_both(
                 "reset_password_link": "https://app.example.com/reset?t={token}",
                 "sso_completion_link": "https://app.example.com/signed-in",
             },
-            "identity": {"require_mfa": False},
+            "identity": {},
             "sso": {
                 "enabled": True,
                 "issuer_url": "https://idp.example.com/tenant",

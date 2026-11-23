@@ -35,7 +35,7 @@ def passkey_config(base_url: str = "https://app.example.com", **identity: Any) -
                 "reset_password_link": "https://app.example.com/reset?t={token}",
                 "passkey_registration_link": "https://app.example.com/passkey?t={token}",
             },
-            "identity": {"require_mfa": False, **identity},
+            "identity": {**identity},
         }
     )
 

@@ -19,7 +19,7 @@ from typing import Any
 
 import httpx
 import pytest
-from identity_support import FAST_HASHER, MemorySecrets, RecordingSender, audit_rows
+from identity_support import FAST_HASHER, MemorySecrets, RecordingSender, audit_rows, http_sign_in
 from password_support import OTHER_STRONG, STRICT, STRONG, http, pin_policy, set_default
 
 from warden.config import WardenConfig
@@ -68,7 +68,7 @@ async def _place(
         return
     if place == "forced_change":
         await identity.password_states.require_change(user.id, ChangeReason.ADMINISTRATOR)
-    answer = (await c.post("/auth/sign-in", json={"email": user.email, "password": STRONG})).json()
+    answer = (await http_sign_in(c, user.email, STRONG)).json()
     if place == "forced_change":
         yield (
             "/auth/password-change/policy",
@@ -321,9 +321,7 @@ async def test_the_vectors_file_and_the_server_agree_through_the_check_route(
                     password=STRONG,
                     actor="test",
                 )
-                answer = (
-                    await c.post("/auth/sign-in", json={"email": user.email, "password": STRONG})
-                ).json()
+                answer = (await http_sign_in(c, user.email, STRONG)).json()
                 users[key] = (user, {"authorization": f"Bearer {answer['access_token']}"})
             user, headers = users[key]
             await identity.password_policies.pin(user.id, policies[case["policy"]].id, actor="t")
@@ -352,9 +350,7 @@ async def test_a_pinned_policy_is_the_one_described(
     pinned = PasswordRules(min_length=16)
     await pin_policy(identity, user, rules=pinned, history_count=2)
     async with http(identity) as c:
-        answer = (
-            await c.post("/auth/sign-in", json={"email": user.email, "password": STRONG})
-        ).json()
+        answer = (await http_sign_in(c, user.email, STRONG)).json()
         headers = {"authorization": f"Bearer {answer['access_token']}"}
         described = await c.get("/auth/password/policy", headers=headers)
     assert described.json() == {"rules": pinned.describe(), "history_count": 2}

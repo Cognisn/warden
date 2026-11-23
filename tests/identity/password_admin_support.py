@@ -5,15 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-from identity_support import PASSWORD
+from identity_support import sign_in_tokens
 
 from warden.identity import Identity, User
 
 
 async def bearer(identity: Identity, user: User) -> dict[str, str]:
-    result = await identity.sign_in(user.email, PASSWORD)
-    assert result.tokens is not None
-    return {"authorization": f"Bearer {result.tokens.access_token}"}
+    tokens = await sign_in_tokens(identity, user.email)
+    return {"authorization": f"Bearer {tokens.access_token}"}
 
 
 def policy_body(name: str = "Strict", priority: int | None = 1, **overrides: Any) -> dict[str, Any]:

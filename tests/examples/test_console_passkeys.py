@@ -26,6 +26,7 @@ from console_support import (
     assert_strict_csp,
     authenticator,
     bearer,
+    key_session,
     make_user,
     sign_in,
 )
@@ -193,7 +194,7 @@ async def test_a_user_registers_lists_renames_and_removes_a_key(
     console: Any, client: httpx.AsyncClient
 ) -> None:
     await make_user(console, "alice@example.com", "editor")
-    token = await sign_in(client, "alice@example.com")
+    token = await key_session(console, "alice@example.com")  # holding no second factor yet
     key = authenticator()
 
     registered = await register_key(client, token, key, "Desk key")
@@ -215,12 +216,17 @@ async def test_a_user_registers_lists_renames_and_removes_a_key(
     assert renamed.status_code == 200, renamed.text
     assert renamed.json()["credential"]["nickname"] == "Blue key"
 
+    # The last second factor stays (always required since warden 0.2.0); with
+    # a second key, the first can go.
+    kept = await client.delete(f"/auth/webauthn/credentials/{credential_id}", headers=bearer(token))
+    assert kept.status_code == 409
+    assert (await register_key(client, token, authenticator(), "Spare")).status_code == 200
     removed = await client.delete(
         f"/auth/webauthn/credentials/{credential_id}", headers=bearer(token)
     )
     assert removed.status_code == 204
     listed = await client.get("/auth/webauthn/credentials", headers=bearer(token))
-    assert listed.json()["credentials"] == []
+    assert [c["nickname"] for c in listed.json()["credentials"]] == ["Spare"]
 
 
 async def test_a_passkey_sign_in_round_trip_through_the_sample(
@@ -262,7 +268,7 @@ async def test_a_key_is_offered_beside_the_code_when_mfa_is_required(
     console: Any, client: httpx.AsyncClient
 ) -> None:
     await make_user(console, "alice@example.com", "editor")
-    token = await sign_in(client, "alice@example.com")
+    token = await key_session(console, "alice@example.com")  # holding no second factor yet
     key = authenticator(resident=False, user_verifying=False)
     assert (await register_key(client, token, key)).status_code == 200
 

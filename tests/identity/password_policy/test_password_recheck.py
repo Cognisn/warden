@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 import pytest
-from identity_support import FAST_HASHER, MemorySecrets, audit_rows
+from identity_support import FAST_HASHER, MemorySecrets, audit_rows, complete_sign_in
 
 from warden.audit import ActionRegistry
 from warden.config import WardenConfig, parse_config
@@ -44,7 +44,7 @@ def _config(previous: str | None = None) -> WardenConfig:
                 "accept_invitation_link": "https://app.example.com/accept?t={token}",
                 "reset_password_link": "https://app.example.com/reset?t={token}",
             },
-            "identity": {"require_mfa": False},
+            "identity": {},
             "passwords": passwords,
         }
     )
@@ -123,7 +123,7 @@ async def test_a_listed_fingerprint_flags_a_change_and_others_are_left(
     breached = await _user(identity, LEAKED, ("viewer",))
     fine = await _user(identity, FINE, ("viewer",))
     unfingerprinted = await _user(identity, FINE + " too", ())  # default policy: no fingerprint
-    signed_in = await identity.sign_in(on_list.email, LISTED)
+    signed_in = await complete_sign_in(identity, on_list.email, LISTED)
     assert signed_in.tokens is not None
     await identity.watch_lists.add_entries(listed.id, [LISTED], actor="a")
 
@@ -296,7 +296,7 @@ async def test_the_override_keeps_sessions_the_policy_would_end(
     # lists (0.1.0b20), as the wave 16 test above does.
     listed, _, _ = await _two_policies(identity, entry=False)
     user = await _user(identity, LISTED, ("viewer",))
-    signed_in = await identity.sign_in(user.email, LISTED)
+    signed_in = await complete_sign_in(identity, user.email, LISTED)
     assert signed_in.tokens is not None
     await identity.watch_lists.add_entries(listed.id, [LISTED], actor="a")
 

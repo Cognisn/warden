@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
-from console_support import PASSWORD, assert_strict_csp, bearer, make_user, sign_in
+from console_support import PASSWORD, assert_strict_csp, bearer, http_sign_in, make_user, sign_in
 
 pytestmark = pytest.mark.db
 
@@ -109,9 +109,8 @@ async def test_warden_and_product_answers_carry_the_policy_too(client: httpx.Asy
 
 async def test_a_password_sign_in_round_trip(console: Any, client: httpx.AsyncClient) -> None:
     await make_user(console, "alice@example.com", "editor")
-    first = await client.post(
-        "/auth/sign-in", json={"email": "alice@example.com", "password": PASSWORD}
-    )
+    # The password, then the second factor (always required since warden 0.2.0).
+    first = await http_sign_in(client, "alice@example.com", PASSWORD)
     assert first.status_code == 200
     tokens = first.json()
 
@@ -294,5 +293,5 @@ async def test_an_administrator_resets_a_users_totp(
     reset = await client.delete(f"/admin/users/{bob.id}/totp", headers=bearer(admin))
     assert reset.status_code == 204 and reset.content == b""
 
-    after = await client.post("/auth/sign-in", json={"email": bob.email, "password": PASSWORD})
+    after = await http_sign_in(client, bob.email, PASSWORD)
     assert after.json()["status"] in ("signed_in", "mfa_enrolment_required")

@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import pytest
-from identity_support import PASSWORD, RecordingSender, UserFactory, current_code
+from identity_support import (
+    PASSWORD,
+    RecordingSender,
+    UserFactory,
+    current_code,
+    direct_session,
+)
 
 from warden.db import Database
 from warden.identity import Identity, MfaError
@@ -13,9 +19,11 @@ pytestmark = pytest.mark.db
 
 
 async def _signed_in(identity: Identity, email: str) -> object:
-    result = await identity.sign_in(email, PASSWORD)
-    assert result.tokens is not None
-    return await identity.authenticate(result.tokens.access_token)
+    """A session for a user holding no TOTP yet, as after signing in with a security key."""
+    user = await identity.users.get_by_email(email)
+    assert user is not None
+    pair = await direct_session(identity, user.id, ("pwd", "hwk"))
+    return await identity.authenticate(pair.access_token)
 
 
 async def _confirmed_at(db: Database, user_id: object) -> object:

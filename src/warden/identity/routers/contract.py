@@ -232,12 +232,12 @@ class WardenChallengeIssued(_Doc):
     status: Literal["mfa_required", "mfa_enrolment_required"]
     challenge: str = Field(description="Opaque; pass it to the next step.")
     expires_in: int = Field(description="Seconds until the challenge expires.")
-    methods: list[Literal["totp", "webauthn"]] | None = Field(
-        default=None,
+    methods: list[Literal["totp", "webauthn"]] = Field(
         description=(
-            "With `mfa_required` only (absent from `mfa_enrolment_required`): the kinds of "
-            "second factor the user holds, `totp` before `webauthn`. A recovery code is "
-            "always accepted as well."
+            "`totp` before `webauthn`. With `mfa_required`: the kinds of second factor the "
+            "user holds that the administrator allows; a recovery code is always accepted as "
+            "well. With `mfa_enrolment_required`: the kinds the user may enrol, the allowed "
+            "ones (`webauthn` only where WebAuthn is configured)."
         ),
     )
 
@@ -259,6 +259,12 @@ class WardenTotpEnrolment(_Doc):
 
 
 class WardenRecoveryCodes(_Doc):
+    recovery_codes: list[str] = Field(description="Each usable once; shown only now.")
+
+
+class WardenRecoveryCodesRegenerated(_Doc):
+    """The signed-in user's new recovery codes; every earlier code no longer works."""
+
     recovery_codes: list[str] = Field(description="Each usable once; shown only now.")
 
 

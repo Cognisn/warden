@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI
-from identity_support import PASSWORD
+from identity_support import PASSWORD, http_sign_in
 
 from warden.identity import Identity, PasswordPolicy, PasswordRules, PolicySettings, User
 
@@ -81,7 +81,8 @@ async def http(identity: Identity, address: str = "192.0.2.10") -> AsyncIterator
 
 
 async def sign_in(c: httpx.AsyncClient, email: str, password: str = PASSWORD) -> dict[str, Any]:
-    response = await c.post("/auth/sign-in", json={"email": email, "password": password})
+    """A password sign-in carried through its second factor: the final answer's body."""
+    response = await http_sign_in(c, email, password)
     assert response.status_code == 200, response.text
     body: dict[str, Any] = response.json()
     return body

@@ -20,6 +20,7 @@ from identity_support import (
     MemorySecrets,
     UserFactory,
     audit_rows,
+    complete_sign_in,
     make_config,
 )
 
@@ -312,7 +313,7 @@ async def test_access_tokens_still_work(
     identity: Identity, client: httpx.AsyncClient, make_user: UserFactory
 ) -> None:
     user = await make_user(roles=("viewer",))
-    result = await identity.sign_in(user.email, PASSWORD)
+    result = await complete_sign_in(identity, user.email, PASSWORD)
     assert result.tokens is not None
     me = await client.get("/me", headers=_bearer(result.tokens.access_token))
     assert me.status_code == 200 and me.json()["api_key"] is None

@@ -129,6 +129,16 @@ IDENTITY_ACTIONS: tuple[tuple[str, Severity, str], ...] = (
         "a security key of user {resource_id} may have been copied",
     ),
     (
+        "warden.identity.mfa.disallowed_removed",
+        Severity.NOTICE,
+        "second factors no longer allowed removed from user {resource_id}",
+    ),
+    (
+        "warden.identity.mfa.recovery_codes_regenerated",
+        Severity.NOTICE,
+        "{actor} replaced their recovery codes: {outcome}",
+    ),
+    (
         "warden.identity.passkey.link_sent",
         Severity.NOTICE,
         "{actor} sent user {resource_id} a passkey registration link: {outcome}",

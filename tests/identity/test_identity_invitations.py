@@ -14,7 +14,7 @@ from typing import Any
 
 import psycopg
 import pytest
-from identity_support import RecordingSender, UserFactory, audit_rows, race
+from identity_support import RecordingSender, UserFactory, audit_rows, complete_sign_in, race
 from psycopg import AsyncConnection
 
 from warden.db import Database
@@ -206,7 +206,7 @@ async def test_accepting_activates_sets_the_password_and_applies_staged_grants(
     assert assignments["viewer"].granted_by == "admin-1"
     user = await identity.users.get(user_id)
     assert user is not None
-    result = await identity.sign_in(user.email, NEW_PASSWORD)
+    result = await complete_sign_in(identity, user.email, NEW_PASSWORD)
     assert result.tokens is not None
     accepted_rows = await audit_rows(db, "warden.identity.invitation.accepted")
     assert [(r["outcome"], r["details"]["method"]) for r in accepted_rows] == [

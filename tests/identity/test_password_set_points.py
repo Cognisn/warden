@@ -15,7 +15,7 @@ from typing import Any
 
 import httpx
 import pytest
-from identity_support import RecordingSender, audit_rows
+from identity_support import RecordingSender, audit_rows, http_sign_in
 from password_support import (
     COMMON,
     DISPLAY_NAME,
@@ -83,7 +83,7 @@ async def _change(
     identity: Identity, c: httpx.AsyncClient, m: RecordingSender, pw: str
 ) -> list[str]:
     await identity.users.create(EMAIL, display_name=DISPLAY_NAME, password=STRONG, actor="test")
-    body = (await c.post("/auth/sign-in", json={"email": EMAIL, "password": STRONG})).json()
+    body = (await http_sign_in(c, EMAIL, STRONG)).json()
     headers = {"authorization": f"Bearer {body['access_token']}"}
     response = await c.post(
         "/auth/password",
@@ -132,7 +132,7 @@ async def _forced(
         EMAIL, display_name=DISPLAY_NAME, password=STRONG, actor="test"
     )
     await identity.password_states.require_change(user.id, ChangeReason.ADMINISTRATOR)
-    body = (await c.post("/auth/sign-in", json={"email": EMAIL, "password": STRONG})).json()
+    body = (await http_sign_in(c, EMAIL, STRONG)).json()
     assert body["status"] == "password_change_required"
     response = await c.post(
         "/auth/password-change", json={"challenge": body["challenge"], "new_password": pw}

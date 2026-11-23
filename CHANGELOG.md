@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- The allowed second factors are enforced (ruling CS14): the `mfa_required` challenge names and accepts only the allowed kinds a user holds (a recovery code is always accepted); a user holding no allowed factor, never enrolled or holding only a kind since removed, is sent to forced enrolment of an allowed one after the password, by TOTP or by a security key or passkey; enrolling a kind that is not allowed is refused, signed in (409 `TOTP is not allowed as a second factor`, or `security keys and passkeys are not allowed as a second factor`, with the new `WebAuthnRefusal.FACTOR_NOT_ALLOWED`) or under a challenge (the uniform refusal). Removing a kind deletes nobody's enrolment; once a user enrols an allowed factor, the enrolments no longer allowed are removed and audited as the new action `warden.identity.mfa.disallowed_removed`. A `passkey_only` user's passkeys are their sign-in credential and are not affected.
+- `mfa_enrolment_required` now carries `methods` too: the kinds the user may enrol (`webauthn` only where WebAuthn is configured).
+- Self-service replacement of recovery codes (ruling CS22): `Identity.regenerate_recovery_codes(principal, *, source_ip)` and `POST <auth>/recovery-codes/regenerate` replace every code the signed-in user holds and answer with the new ones, shown once. The session must have been signed in with TOTP, a security key or a passkey within `identity.mfa_challenge_ttl_seconds`; otherwise `FreshSecondFactorRequired` (a 403 asking the user to sign in again). Audited as the new action `warden.identity.mfa.recovery_codes_regenerated`, with counts only; with a mail sender the user is sent the new `recovery_codes_regenerated` notice (template attribute `RECOVERY_CODES_REGENERATED`), never the codes.
+- Exported from `warden.identity`: `SecondFactorNotAllowed` and `FreshSecondFactorRequired` (both `MfaError`).
+
+### Changed
+
+- MFA is always required for password sign-in (ruling CS14): every password sign-in answers with a challenge, whatever the user's method. `identity.require_mfa` is deprecated: true is still accepted, false is refused at start-up (`ConfigError`: "MFA is always required for password sign-in in warden 0.2.0 and later"). `SessionPolicy.require_mfa` stays readable and is always true; `Identity.policy.update(require_mfa=False)` raises `PolicyError`, and an override stored by 0.1.x is ignored while the other stored overrides still apply. Removing a user's last security key is refused for every user, as it was under `require_mfa`.
+- Allowing passkeys alone as second factors is refused (`SignInMethodChangeRefused`, reason `webauthn`) where WebAuthn is not configured, since a user without a factor could not enrol one. An empty set stays refused.
+- The HTTP contract is regenerated for the new route and the `methods` field.
+- Upgrade note: remove `identity.require_mfa: false` from configuration before upgrading, or start-up fails. Users who signed in with a password alone are sent to enrol a second factor at their next sign-in; a product that switched MFA off at run time needs no change, since the stored override is ignored.
+
 ## [0.2.0a2] - 2026-11-23
 
 Wave 1: sign-in methods, the instance default and pending changes (feat/0.2.0-sign-in-methods). Adds migration `f1c7d24e8b93`.

@@ -16,7 +16,7 @@
           "warden: sign-in"
         ],
         "summary": "Sign in with an email address and password",
-        "description": "Answers with a new session (`status` `signed_in`), or with a challenge when a second factor is needed: `mfa_required` (send a TOTP code to `/totp/verify`, a security key's answer to `/webauthn/verify`, or a recovery code to `/recovery-code`; `methods` lists the kinds the user holds) or `mfa_enrolment_required` (enrol through `/totp/enrolment` or `/webauthn/registration` under the challenge). Where a session would be issued, here or after the second factor, a password that must change first (expired, on a watch list, asked for by an administrator, or failing a policy enforced at sign-in) answers `password_change_required` instead; complete it at `/password-change`. A session within the password's expiry warning window carries `password_expires_in_days`. An unknown address, a wrong password, an `sso_only` user, a user who is not active and a throttled attempt all get the uniform refusal, in the same time.",
+        "description": "A right password always answers with a challenge, since a password sign-in always needs a second factor: `mfa_required` (send a TOTP code to `/totp/verify`, a security key's answer to `/webauthn/verify`, or a recovery code to `/recovery-code`; `methods` lists the kinds the user holds that the administrator allows) or `mfa_enrolment_required` when the user holds none of those (enrol through `/totp/enrolment` or `/webauthn/registration` under the challenge; `methods` lists the kinds allowed). Where a session would be issued, after the second factor, a password that must change first (expired, on a watch list, asked for by an administrator, or failing a policy enforced at sign-in) answers `password_change_required` instead; complete it at `/password-change`. A session within the password's expiry warning window carries `password_expires_in_days`. An unknown address, a wrong password, an `sso_only` user, a user who is not active and a throttled attempt all get the uniform refusal, in the same time.",
         "operationId": "sign_in_auth_sign_in_post",
         "requestBody": {
           "content": {
@@ -91,7 +91,7 @@
           "warden: sign-in"
         ],
         "summary": "Complete sign-in with a TOTP code",
-        "description": "Sends the `mfa_required` challenge with a six-digit code. A code is accepted at most once per time step; too many wrong codes end the challenge. When the password must change first, the answer is `password_change_required` instead of a session.",
+        "description": "Sends the `mfa_required` challenge with a six-digit code. A code is accepted at most once per time step; too many wrong codes end the challenge. Refused while the administrator does not allow TOTP. When the password must change first, the answer is `password_change_required` instead of a session.",
         "operationId": "totp_verify_auth_totp_verify_post",
         "requestBody": {
           "content": {
@@ -479,7 +479,7 @@
           "warden: sign-in"
         ],
         "summary": "Begin TOTP enrolment",
-        "description": "Under an access token (bearer) for a signed-in user, or under an `mfa_enrolment_required` challenge during a forced enrolment. The enrolment counts as a second factor only once confirmed.",
+        "description": "Under an access token (bearer) for a signed-in user, or under an `mfa_enrolment_required` challenge during a forced enrolment. The enrolment counts as a second factor only once confirmed. Refused while the administrator does not allow TOTP: a 409 for a signed-in user, the uniform refusal under a challenge.",
         "operationId": "begin_enrolment_auth_totp_enrolment_post",
         "requestBody": {
           "content": {
@@ -519,7 +519,7 @@
             }
           },
           "409": {
-            "description": "TOTP is already enrolled.",
+            "description": "TOTP is already enrolled, or not allowed.",
             "headers": {
               "cache-control": {
                 "description": "Always `no-store`.",
@@ -537,6 +537,11 @@
                   "message 1": {
                     "value": {
                       "detail": "TOTP is already enrolled"
+                    }
+                  },
+                  "message 2": {
+                    "value": {
+                      "detail": "TOTP is not allowed as a second factor"
                     }
                   }
                 }
@@ -579,7 +584,7 @@
           "warden: sign-in"
         ],
         "summary": "Confirm TOTP enrolment with a first code",
-        "description": "Answers with the recovery codes, shown once. Under a challenge (a forced enrolment) the answer is also the new session, or `password_change_required` when the password must change first. A wrong code from a signed-in user is a 400, so a client does not take it for a sign-out.",
+        "description": "Answers with the recovery codes, shown once. Under a challenge (a forced enrolment) the answer is also the new session, or `password_change_required` when the password must change first. A wrong code from a signed-in user is a 400, so a client does not take it for a sign-out. Once confirmed, any security key or passkey the administrator no longer allows as a second factor is removed. Refused while TOTP is not allowed: a 409 for a signed-in user, the uniform refusal under a challenge.",
         "operationId": "confirm_enrolment_auth_totp_enrolment_confirm_post",
         "requestBody": {
           "content": {
@@ -645,6 +650,113 @@
                   "message 1": {
                     "value": {
                       "detail": "code not accepted"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "TOTP is not allowed.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "TOTP is not allowed as a second factor"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform refusal. Every authentication failure on every identity route answers with these exact bytes, headers and status, with indistinguishable timing; the reason is recorded only in the audit trail.",
+            "headers": {
+              "www-authenticate": {
+                "description": "`Bearer`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRefusal"
+                },
+                "example": {
+                  "detail": "authentication failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/recovery-codes/regenerate": {
+      "post": {
+        "tags": [
+          "warden: sign-in"
+        ],
+        "summary": "Replace the signed-in user's recovery codes",
+        "description": "Needs an access token as the bearer token (not an API key) from a session signed in with a second factor (TOTP, a security key or a passkey; not a recovery code) within `identity.mfa_challenge_ttl_seconds`. Replaces every recovery code the user holds, used or not, and answers with the new ones, shown once. Audited; with a mail sender the user is sent a notice, never the codes. A session whose second factor is older, or that had none, is a 403: sign in again with a second factor and retry. No request body.",
+        "operationId": "regenerate_recovery_codes_auth_recovery_codes_regenerate_post",
+        "responses": {
+          "200": {
+            "description": "The new recovery codes.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenRecoveryCodesRegenerated"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No second factor within the challenge window.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                },
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "sign in again with a second factor to replace your recovery codes"
                     }
                   }
                 }
@@ -1276,7 +1388,7 @@
           "warden: sign-in"
         ],
         "summary": "Begin completing sign-in with a security key or passkey",
-        "description": "Sends the `mfa_required` challenge; answers with the options for `navigator.credentials.get()`, listing only the user's own credentials. User verification is preferred, not required. A user without a key, like every other failure, gets the uniform refusal.",
+        "description": "Sends the `mfa_required` challenge; answers with the options for `navigator.credentials.get()`, listing only the user's own credentials. User verification is preferred, not required. A user without a key, keys the administrator does not allow, and every other failure get the uniform refusal.",
         "operationId": "verify_options_auth_webauthn_verify_options_post",
         "requestBody": {
           "content": {
@@ -1348,7 +1460,7 @@
           "warden: sign-in"
         ],
         "summary": "Complete sign-in with a security key or passkey",
-        "description": "Sends the `mfa_required` challenge with the browser's answer to `navigator.credentials.get()`. The session's `amr` is `[\"pwd\", \"hwk\"]`. Each options' challenge is accepted once; a refused answer counts as a wrong code does, and too many end the challenge. When the password must change first, the answer is `password_change_required` instead of a session (`POST /password-change`).",
+        "description": "Sends the `mfa_required` challenge with the browser's answer to `navigator.credentials.get()`. The session's `amr` is `[\"pwd\", \"hwk\"]`. Each options' challenge is accepted once; a refused answer counts as a wrong code does, and too many end the challenge. Refused while the administrator does not allow security keys and passkeys. When the password must change first, the answer is `password_change_required` instead of a session (`POST /password-change`).",
         "operationId": "verify_auth_webauthn_verify_post",
         "requestBody": {
           "content": {
@@ -1427,7 +1539,7 @@
           "warden: sign-in"
         ],
         "summary": "Begin registering a security key or passkey as a second factor",
-        "description": "Under an access token (bearer) for a signed-in user, or under an `mfa_enrolment_required` challenge during a forced enrolment. Answers with the options for `navigator.credentials.create()`: resident key and user verification preferred, and the user's existing credentials excluded.",
+        "description": "Under an access token (bearer) for a signed-in user, or under an `mfa_enrolment_required` challenge during a forced enrolment. Answers with the options for `navigator.credentials.create()`: resident key and user verification preferred, and the user's existing credentials excluded. Refused while the administrator does not allow security keys and passkeys as a second factor, except for a `passkey_only` user.",
         "operationId": "begin_registration_auth_webauthn_registration_post",
         "requestBody": {
           "content": {
@@ -1467,7 +1579,7 @@
             }
           },
           "409": {
-            "description": "WebAuthn is not configured, the user has as many credentials as allowed, or the user signs in only through single sign-on.",
+            "description": "WebAuthn is not configured, the user has as many credentials as allowed, the user signs in only through single sign-on, or the administrator does not allow security keys and passkeys as a second factor.",
             "headers": {
               "cache-control": {
                 "description": "Always `no-store`.",
@@ -1495,6 +1607,11 @@
                   "message 3": {
                     "value": {
                       "detail": "security keys are not available to this user"
+                    }
+                  },
+                  "message 4": {
+                    "value": {
+                      "detail": "security keys and passkeys are not allowed as a second factor"
                     }
                   }
                 }
@@ -1538,7 +1655,7 @@
           "warden: sign-in"
         ],
         "summary": "Register a security key or passkey with the browser's answer",
-        "description": "Sends the browser's answer to `navigator.credentials.create()` and an optional nickname. Answers with the credential and, when it is the user's first second factor, fresh recovery codes, shown once (otherwise an empty list). Under a challenge (a forced enrolment) the answer is also the new session, with `amr` `[\"pwd\", \"hwk\"]`, or `password_change_required` when the password must change first. A refused answer from a signed-in user is a 400, so a client does not take it for a sign-out.",
+        "description": "Sends the browser's answer to `navigator.credentials.create()` and an optional nickname. Answers with the credential and, when it is the user's first second factor, fresh recovery codes, shown once (otherwise an empty list). Under a challenge (a forced enrolment) the answer is also the new session, with `amr` `[\"pwd\", \"hwk\"]`, or `password_change_required` when the password must change first. A refused answer from a signed-in user is a 400, so a client does not take it for a sign-out. Once registered, a TOTP enrolment the administrator no longer allows is removed.",
         "operationId": "confirm_registration_auth_webauthn_registration_confirm_post",
         "requestBody": {
           "content": {
@@ -1629,7 +1746,7 @@
             }
           },
           "409": {
-            "description": "WebAuthn is not configured, the user has as many credentials as allowed, or the user signs in only through single sign-on.",
+            "description": "WebAuthn is not configured, the user has as many credentials as allowed, the user signs in only through single sign-on, or the administrator does not allow security keys and passkeys as a second factor.",
             "headers": {
               "cache-control": {
                 "description": "Always `no-store`.",
@@ -1657,6 +1774,11 @@
                   "message 3": {
                     "value": {
                       "detail": "security keys are not available to this user"
+                    }
+                  },
+                  "message 4": {
+                    "value": {
+                      "detail": "security keys and passkeys are not allowed as a second factor"
                     }
                   }
                 }
@@ -12658,23 +12780,16 @@
             "description": "Seconds until the challenge expires."
           },
           "methods": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string",
-                  "enum": [
-                    "totp",
-                    "webauthn"
-                  ]
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "items": {
+              "type": "string",
+              "enum": [
+                "totp",
+                "webauthn"
+              ]
+            },
+            "type": "array",
             "title": "Methods",
-            "description": "With `mfa_required` only (absent from `mfa_enrolment_required`): the kinds of second factor the user holds, `totp` before `webauthn`. A recovery code is always accepted as well."
+            "description": "`totp` before `webauthn`. With `mfa_required`: the kinds of second factor the user holds that the administrator allows; a recovery code is always accepted as well. With `mfa_enrolment_required`: the kinds the user may enrol, the allowed ones (`webauthn` only where WebAuthn is configured)."
           }
         },
         "additionalProperties": false,
@@ -12682,7 +12797,8 @@
         "required": [
           "status",
           "challenge",
-          "expires_in"
+          "expires_in",
+          "methods"
         ],
         "title": "WardenChallengeIssued",
         "description": "The password was right; a second factor, or enrolment in one, comes next."
@@ -13997,6 +14113,25 @@
           "recovery_codes"
         ],
         "title": "WardenRecoveryCodes"
+      },
+      "WardenRecoveryCodesRegenerated": {
+        "properties": {
+          "recovery_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Recovery Codes",
+            "description": "Each usable once; shown only now."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "recovery_codes"
+        ],
+        "title": "WardenRecoveryCodesRegenerated",
+        "description": "The signed-in user's new recovery codes; every earlier code no longer works."
       },
       "WardenRefusal": {
         "properties": {
