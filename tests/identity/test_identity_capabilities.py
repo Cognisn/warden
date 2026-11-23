@@ -307,7 +307,9 @@ async def test_the_anonymous_route_does_not_depend_on_any_account_or_setting(mak
     for headers in (None, d.admin, {"x-forwarded-for": "198.51.100.1"}, {"cookie": "a=b"}):
         answer = await d.client.get("/auth/capabilities", headers=headers)
         assert answer.content == empty
-    for probe in ("alice@example.com", "bob@example.com"):
+    # Asking about accounts that exist, and one that does not, changes nothing.
+    probes = [f"{method.value}@example.com" for method in SignInMethod]
+    for probe in (*probes, "admin-1@example.com", "nobody@example.com"):
         answer = await d.client.get("/auth/capabilities", params={"email": probe})
         assert answer.content == empty
 
