@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Passkey sign-in follows the allowed second factors (Skuld release 0.2.0, question 1): while the administrator does not allow passkeys as a second factor, signing in with a passkey alone (`Identity.passkey_sign_in`, `POST <auth>/passkey/sign-in`) is refused for every user whose method in force is not `passkey_only`, with the uniform refusal, and audited as a failed `warden.identity.sign_in` with reason `factor_not_allowed`. The refused attempt leaves the credential's counter untouched. `passkey_only` users, whose passkey is how they sign in, sign in as before. The allowed set is read in the transaction that decides, so a change applies to the next sign-in.
+- Every refusal of a passkey sign-in after its challenge now does the same work, whichever check failed: `WebAuthn.finish_authentication` runs the ceremony to its end before refusing (an unknown credential is checked against a stand-in key), reads the owner's handle and status on every path, and issues its guarded counter write, which changes nothing on a refusal. The reason is still the first check that failed. It takes a new keyword-only `decide`, a callback run in the ceremony's transaction on every path, which passkey sign-in uses to read the user's status, method in force and the allowed second factors.
+- Upgrade note: a deployment that has removed passkey from the allowed second factors will find its users other than `passkey_only` refused at passkey sign-in; they sign in with a password and an allowed second factor instead.
+
 ## [0.2.0a5] - 2026-11-23
 
 Wave 2: MFA always required for password sign-in, the allowed second factors enforced, and self-service recovery-code replacement (feat/0.2.0-mfa-factors).
