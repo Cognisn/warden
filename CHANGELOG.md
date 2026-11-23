@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0a2] - 2026-11-23
+
+Wave 1: sign-in methods, the instance default and pending changes (feat/0.2.0-sign-in-methods). Adds migration `f1c7d24e8b93`.
+
 ### Added
 
 - Sign-in methods (rulings CS13 to CS18): a fourth method, `password` (Password + MFA, never single sign-on, a second factor always asked for), beside `password_and_sso`, `sso_only` and `passkey_only`; an instance default sign-in method, initially `password_and_sso`, that every user follows unless they have one of their own; and the allowed second factors (`totp`, `passkey`, both by default), stored for wave 2 to enforce. Both live in the new `warden.sign_in_settings` table, changed at run time and audited.
