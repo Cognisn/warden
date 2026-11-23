@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0a1] - 2026-11-23
+
+First alpha of 0.2.0, opened from the 0.1.1 release. No library change yet; the HTTP contract's version now reads 0.2.
+
 ## [0.1.1] - 2026-11-18
 
 A fixes-only patch on 0.1.0: 0.1.1a4 as it stands, after the release gate. No migration, no new runtime dependency, and the public API changes only by additions. The alpha sections below give the detail.
