@@ -8683,7 +8683,7 @@
           "warden: administration"
         ],
         "summary": "Set a user's sign-in method",
-        "description": "`password_and_sso`, `sso_only` or `passkey_only`. An `sso_only` or `passkey_only` user cannot sign in with, reset or change a password; a `passkey_only` user signs in with a passkey alone (`POST /passkey/sign-in` under the auth prefix). Setting `passkey_only` also answers `has_passkey`: when false, the user cannot sign in until they register a passkey from a link (`POST /users/{user_id}/passkey-registration`). `sso_only` is refused (409) while the user holds security keys or passkeys: reset their second factors first (`DELETE /users/{user_id}/mfa`).",
+        "description": "`password`, `password_and_sso`, `sso_only` or `passkey_only`, or null for the instance default. A `password` user signs in with a password and a second factor, never single sign-on. An `sso_only` or `passkey_only` user cannot sign in with, reset or change a password; a `passkey_only` user signs in with a passkey alone (`POST /passkey/sign-in` under the auth prefix). The change takes effect at once when the user holds the new method's credential, and whatever the new method does not allow is removed (a password, keys, sessions signed in another way). Otherwise it is pending: the method in force keeps working and the user is mailed a set-up link (a passkey registration link, or a set-password link through the reset page); a move to `sso_only` completes at the user's first single sign-on. `sign_in_method` in the answer reports the user's own setting, the method in force and any pending change. Setting `passkey_only` also answers `has_passkey`. `sso_only` is refused (409) while the user holds security keys or passkeys (reset their second factors first, `DELETE /users/{user_id}/mfa`) or while single sign-on is not set up; a change needing a link is refused (409) when the link cannot be sent, naming what is missing (such as `mail_sender`).",
         "operationId": "set_method_admin_users__user_id__sign_in_method_post",
         "parameters": [
           {
@@ -8758,7 +8758,7 @@
             }
           },
           "409": {
-            "description": "The user holds security keys or passkeys.",
+            "description": "The user cannot take that method now.",
             "headers": {
               "cache-control": {
                 "description": "Always `no-store`.",
@@ -8773,6 +8773,31 @@
                   "message 1": {
                     "value": {
                       "detail": "the user holds security keys or passkeys; reset their second factors first"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WardenDetail"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The set-up link could not be delivered.",
+            "headers": {
+              "cache-control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "examples": {
+                  "message 1": {
+                    "value": {
+                      "detail": "the message could not be delivered"
                     }
                   }
                 },
@@ -8849,13 +8874,22 @@
                 "additionalProperties": false,
                 "properties": {
                   "sign_in_method": {
-                    "enum": [
-                      "password_and_sso",
-                      "sso_only",
-                      "passkey_only"
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "password",
+                          "password_and_sso",
+                          "sso_only",
+                          "passkey_only"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
                     ],
-                    "title": "Sign In Method",
-                    "type": "string"
+                    "description": "One of the four methods, or null to follow the instance default.",
+                    "title": "Sign In Method"
                   }
                 },
                 "required": [
@@ -10007,6 +10041,7 @@
                   "sign_in_method": {
                     "type": "string",
                     "enum": [
+                      "password",
                       "password_and_sso",
                       "sso_only",
                       "passkey_only"
@@ -13826,6 +13861,76 @@
         ],
         "title": "WardenPendingInvitation"
       },
+      "WardenPendingSignInMethod": {
+        "properties": {
+          "from": {
+            "type": "string",
+            "enum": [
+              "password",
+              "password_and_sso",
+              "sso_only",
+              "passkey_only"
+            ],
+            "title": "From",
+            "description": "The method in force until the change completes."
+          },
+          "to": {
+            "type": "string",
+            "enum": [
+              "password",
+              "password_and_sso",
+              "sso_only",
+              "passkey_only"
+            ],
+            "title": "To",
+            "description": "The method the change moves to."
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Requested At"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "passkey_registration",
+                  "set_password"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link",
+            "description": "The set-up link that completes the change; null for `sso_only`, which completes at the user's first single sign-on."
+          },
+          "link_sent_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link Sent At",
+            "description": "When the current link was mailed; null when none was."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "requested_at",
+          "link",
+          "link_sent_at"
+        ],
+        "title": "WardenPendingSignInMethod"
+      },
       "WardenPolicyName": {
         "properties": {
           "id": {
@@ -14097,6 +14202,9 @@
           "user": {
             "$ref": "#/components/schemas/WardenUser"
           },
+          "sign_in_method": {
+            "$ref": "#/components/schemas/WardenSignInMethodState"
+          },
           "has_passkey": {
             "anyOf": [
               {
@@ -14107,15 +14215,68 @@
               }
             ],
             "title": "Has Passkey",
-            "description": "Only when the method set is `passkey_only`: whether the user holds a passkey (a discoverable credential registered with user verification). When false, send them a registration link (`POST /users/{user_id}/passkey-registration`)."
+            "description": "Only when the method set (or followed) is `passkey_only`: whether the user holds a passkey (a discoverable credential registered with user verification). When false, the change is pending and a registration link has been mailed; resend one with `POST /users/{user_id}/passkey-registration`."
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "user"
+          "user",
+          "sign_in_method"
         ],
         "title": "WardenSignInMethodSet"
+      },
+      "WardenSignInMethodState": {
+        "properties": {
+          "setting": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "password",
+                  "password_and_sso",
+                  "sso_only",
+                  "passkey_only"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setting",
+            "description": "The user's own setting; null when they follow the instance default."
+          },
+          "effective": {
+            "type": "string",
+            "enum": [
+              "password",
+              "password_and_sso",
+              "sso_only",
+              "passkey_only"
+            ],
+            "title": "Effective",
+            "description": "The method in force."
+          },
+          "pending": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WardenPendingSignInMethod"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A change waiting for its credential; null when none is."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "setting",
+          "effective",
+          "pending"
+        ],
+        "title": "WardenSignInMethodState"
       },
       "WardenSignedIn": {
         "properties": {
@@ -14533,6 +14694,7 @@
           "sign_in_method": {
             "type": "string",
             "enum": [
+              "password",
               "password_and_sso",
               "sso_only",
               "passkey_only"

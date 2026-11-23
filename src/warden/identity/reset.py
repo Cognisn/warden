@@ -17,13 +17,17 @@ watch lists and history; not the minimum age, so a user who forgot their
 password can always reset it) once the link is known to be live, and
 before anything is written: a refused password leaves the link usable. A
 bad, used or expired link is refused uniformly whatever the password.
+
+The same link sets the first password of a user whose pending sign-in
+method change needs one (ruling CS18): such a user may reset even while the
+method in force has no password, and setting it completes the change.
 """
 
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from psycopg import AsyncConnection, sql
 
@@ -38,7 +42,17 @@ from warden.identity.password_enforcement import AcceptedPassword, PasswordEnfor
 from warden.identity.password_policy.rules import UserContext
 from warden.identity.single_use import Purpose, SingleUseTokens, well_formed
 from warden.identity.tokens import Sessions
-from warden.identity.users import SignInMethod, UserStatus, is_email
+from warden.identity.users import (
+    SignInMethod,
+    UserStatus,
+    allows_password,
+    effective_method_sql,
+    is_email,
+    pending_method_sql,
+)
+
+if TYPE_CHECKING:
+    from warden.identity.sign_in_settings import SignInMethods
 
 __all__ = ["RESET_ACTIONS", "PasswordResets", "register_actions"]
 
@@ -57,6 +71,9 @@ RESET_ACTIONS: tuple[tuple[str, Severity, str], ...] = (
 
 _USERS = table(schema.USERS)
 _MAX_IDENTIFIER = 320
+_ACCOUNT = sql.SQL("id, email, display_name, status, {}, {}").format(
+    effective_method_sql(), pending_method_sql()
+)
 
 
 def register_actions(registry: ActionRegistry) -> None:
@@ -71,17 +88,26 @@ class _Account:
     display_name: str | None
     status: str
     sign_in_method: str
+    """The method in force."""
+    pending: str | None
+    """The method a pending change moves to, if any."""
 
 
 def _refusal(account: _Account) -> str | None:
-    """Why this account cannot use a password reset now, or None."""
+    """Why this account cannot use a password reset now, or None.
+
+    A pending move to a password method admits the reset that sets its
+    first password (ruling CS18).
+    """
     if account.status != UserStatus.ACTIVE:
         return f"user_{account.status}"
+    if allows_password(account.sign_in_method):
+        return None
+    if account.pending is not None and allows_password(account.pending):
+        return None
     if account.sign_in_method == SignInMethod.PASSKEY_ONLY:
         return "passkey_only"  # ruling P5: no password to reset
-    if account.sign_in_method != SignInMethod.PASSWORD_AND_SSO:
-        return "sso_only"
-    return None
+    return "sso_only"
 
 
 class _Abort(Exception):
@@ -105,13 +131,18 @@ class PasswordResets:
         mailer: Mailer,
         passwords: PasswordEnforcement,
         sessions: Sessions,
+        *,
+        methods: SignInMethods | None = None,
     ) -> None:
+        """``methods`` completes a pending sign-in method change when a reset sets
+        its password."""
         self._config = config
         self._db = db
         self._tokens = tokens
         self._mailer = mailer
         self._passwords = passwords
         self._sessions = sessions
+        self._methods = methods
 
     async def request(
         self, email: object, *, actor: str | None = None, source_ip: SourceIp = None
@@ -229,6 +260,10 @@ class PasswordResets:
                     )
                     await self._tokens.revoke_live(tx, account.id, Purpose.PASSWORD_RESET)
                     await self._audit_reset(tx, account.id, source_ip, None, sessions_ended=ended)
+                    if self._methods is not None:
+                        await self._methods.credential_added(
+                            tx, account.id, actor=str(account.id), source_ip=source_ip
+                        )
         except _Abort:
             await self._refuse(reason or "unknown_token", account, source_ip)
         if reason is not None or account is None:
@@ -285,10 +320,7 @@ class PasswordResets:
         self, conn: AsyncConnection[Any], user_id: uuid.UUID
     ) -> _Account | None:
         cur = await conn.execute(
-            sql.SQL(
-                "SELECT id, email, display_name, status, sign_in_method FROM {} WHERE id = %s"
-            ).format(_USERS),
-            (user_id,),
+            sql.SQL("SELECT {} FROM {} WHERE id = %s").format(_ACCOUNT, _USERS), (user_id,)
         )
         row = await cur.fetchone()
         return None if row is None else _Account(*row)
@@ -308,9 +340,7 @@ class PasswordResets:
         else:
             where, value = sql.SQL("id = %s"), user_id
         cur = await tx.execute(
-            sql.SQL(
-                "SELECT id, email, display_name, status, sign_in_method FROM {} WHERE {} FOR UPDATE"
-            ).format(_USERS, where),
+            sql.SQL("SELECT {} FROM {} WHERE {} FOR UPDATE").format(_ACCOUNT, _USERS, where),
             (value,),
         )
         row = await cur.fetchone()

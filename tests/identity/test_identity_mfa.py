@@ -22,7 +22,6 @@ from warden.identity import (
     AuthenticationRefused,
     Identity,
     PermissionRegistry,
-    SignInMethod,
     TokenPair,
     User,
     UserStatus,
@@ -287,7 +286,12 @@ async def test_verify_issues_nothing_once_the_user_is_sso_only(
 ) -> None:
     user, secret = await _enrolled(identity, make_user)
     challenge = await _challenge(identity, user)
-    await identity.users.set_sign_in_method(user.id, SignInMethod.SSO_ONLY, actor="t")
+    # In force at once, behind the services' back: a move to sso_only now waits for
+    # the first single sign-on (ruling CS18).
+    async with identity.db.connection() as conn:
+        await conn.execute(
+            "UPDATE warden.users SET sign_in_method = 'sso_only' WHERE id = %s", (user.id,)
+        )
     with pytest.raises(AuthenticationRefused):
         await identity.verify_totp(challenge, await _fresh_code(secret))
 

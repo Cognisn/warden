@@ -142,7 +142,7 @@ __all__ = [
 ]
 
 
-SignInMethodName = Literal["password_and_sso", "sso_only", "passkey_only"]
+SignInMethodName = Literal["password", "password_and_sso", "sso_only", "passkey_only"]
 
 
 class _Doc(BaseModel):
@@ -465,14 +465,43 @@ class WardenUserEnvelope(_Doc):
     user: WardenUser
 
 
+class WardenPendingSignInMethod(_Doc):
+    from_: SignInMethodName = Field(
+        alias="from", description="The method in force until the change completes."
+    )
+    to: SignInMethodName = Field(description="The method the change moves to.")
+    requested_at: datetime
+    link: Literal["passkey_registration", "set_password"] | None = Field(
+        description=(
+            "The set-up link that completes the change; null for `sso_only`, which "
+            "completes at the user's first single sign-on."
+        )
+    )
+    link_sent_at: datetime | None = Field(
+        description="When the current link was mailed; null when none was."
+    )
+
+
+class WardenSignInMethodState(_Doc):
+    setting: SignInMethodName | None = Field(
+        description="The user's own setting; null when they follow the instance default."
+    )
+    effective: SignInMethodName = Field(description="The method in force.")
+    pending: WardenPendingSignInMethod | None = Field(
+        description="A change waiting for its credential; null when none is."
+    )
+
+
 class WardenSignInMethodSet(_Doc):
     user: WardenUser
+    sign_in_method: WardenSignInMethodState
     has_passkey: bool | None = Field(
         default=None,
         description=(
-            "Only when the method set is `passkey_only`: whether the user holds a passkey (a "
-            "discoverable credential registered with user verification). When false, send "
-            "them a registration link (`POST /users/{user_id}/passkey-registration`)."
+            "Only when the method set (or followed) is `passkey_only`: whether the user holds "
+            "a passkey (a discoverable credential registered with user verification). When "
+            "false, the change is pending and a registration link has been mailed; resend one "
+            "with `POST /users/{user_id}/passkey-registration`."
         ),
     )
 
@@ -819,7 +848,9 @@ class StatusBody(_Doc):
 
 
 class SignInMethodBody(_Doc):
-    sign_in_method: SignInMethodName
+    sign_in_method: SignInMethodName | None = Field(
+        description="One of the four methods, or null to follow the instance default."
+    )
 
 
 class RoleAssignBody(_Doc):

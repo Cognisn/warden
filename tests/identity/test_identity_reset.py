@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from identity_support import PASSWORD, RecordingSender, UserFactory, audit_rows, race
 
@@ -35,6 +37,17 @@ async def test_a_reset_link_is_mailed_to_an_active_password_user(
     assert await _reasons(db, "warden.identity.password.reset_requested") == [("success", None)]
 
 
+async def _force_method(db: Database, user_id: uuid.UUID, method: SignInMethod | None) -> None:
+    """Put a method in force at once, behind the services' back: since 0.2.0 a move to
+    ``sso_only`` waits for the first single sign-on (ruling CS18), and these tests are
+    about the reset's refusals, not the move."""
+    async with db.connection() as conn:
+        await conn.execute(
+            "UPDATE warden.users SET sign_in_method = %s WHERE id = %s",
+            (None if method is None else method.value, user_id),
+        )
+
+
 @pytest.mark.parametrize(
     ("setup", "reason"),
     [
@@ -53,7 +66,7 @@ async def test_no_link_is_sent_where_a_password_cannot_be_used(
 ) -> None:
     user = await make_user("blocked@example.com")
     if "method" in setup:
-        await identity.users.set_sign_in_method(user.id, SignInMethod.SSO_ONLY, actor="t")
+        await _force_method(db, user.id, SignInMethod.SSO_ONLY)
     if "status" in setup:
         status = setup["status"]
         assert isinstance(status, UserStatus)
@@ -167,14 +180,14 @@ async def test_a_link_is_refused_and_spent_if_the_account_changed_since(
     await identity.resets.request(user.email)
     token = mail.token()
     if change == "sso_only":
-        await identity.users.set_sign_in_method(user.id, SignInMethod.SSO_ONLY, actor="t")
+        await _force_method(db, user.id, SignInMethod.SSO_ONLY)
         expected = "sso_only"
     else:
         await identity.users.set_status(user.id, UserStatus.SUSPENDED, actor="t")
         expected = "user_suspended"
     with pytest.raises(AuthenticationRefused):
         await identity.resets.complete(token, NEW_PASSWORD)
-    await identity.users.set_sign_in_method(user.id, SignInMethod.PASSWORD_AND_SSO, actor="t")
+    await _force_method(db, user.id, None)
     await identity.users.set_status(user.id, UserStatus.ACTIVE, actor="t")
     with pytest.raises(AuthenticationRefused):
         await identity.resets.complete(token, NEW_PASSWORD)

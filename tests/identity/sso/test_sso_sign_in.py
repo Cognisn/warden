@@ -105,6 +105,16 @@ async def refusals(db: Database) -> list[str]:
     return [r["details"]["reason"] for r in await audit_rows(db, "warden.identity.sso.sign_in")]
 
 
+async def force_method(db: Database, user_id: uuid.UUID, method: SignInMethod) -> None:
+    """Put a method in force at once, behind the services' back: since 0.2.0 a move
+    without its credential waits for it (ruling CS18), and this test is about what
+    the method in force refuses, not the move."""
+    async with db.connection() as conn:
+        await conn.execute(
+            "UPDATE warden.users SET sign_in_method = %s WHERE id = %s", (method.value, user_id)
+        )
+
+
 async def sessions_of(db: Database, user_id: uuid.UUID) -> int:
     async with db.connection() as conn:
         cur = await conn.execute(
@@ -635,7 +645,7 @@ async def test_unpin_lets_the_user_pin_a_new_subject(
 async def test_a_passkey_only_user_cannot_sign_in_through_single_sign_on(
     client: httpx.AsyncClient, idp: FakeIdp, alice: User, identity: Identity, db: Database
 ) -> None:
-    await identity.users.set_sign_in_method(alice.id, SignInMethod.PASSKEY_ONLY, actor="test")
+    await force_method(db, alice.id, SignInMethod.PASSKEY_ONLY)
     response = await sign_in(client, idp, sub="s-alice", email=ALICE)
     assert response.status_code == 401
     assert (await refusals(db))[-1] == "passkey_only"
@@ -647,7 +657,7 @@ async def test_a_pinned_user_moved_to_passkey_only_gets_no_handoff(
     client: httpx.AsyncClient, idp: FakeIdp, alice: User, identity: Identity, db: Database
 ) -> None:
     await tokens(await sign_in(client, idp, sub="s-alice", email=ALICE))
-    await identity.users.set_sign_in_method(alice.id, SignInMethod.PASSKEY_ONLY, actor="test")
+    await force_method(db, alice.id, SignInMethod.PASSKEY_ONLY)
     started = await start(client)
     code = provider_code(idp, started, sub="s-alice", email=ALICE)
     assert completion(await callback(client, code, started.state)) == {"error": "sso_failed"}
@@ -663,7 +673,7 @@ async def test_a_user_moved_to_passkey_only_before_the_handoff_gets_nothing(
             client, provider_code(idp, started, sub="s-alice", email=ALICE), started.state
         )
     )
-    await identity.users.set_sign_in_method(alice.id, SignInMethod.PASSKEY_ONLY, actor="test")
+    await force_method(db, alice.id, SignInMethod.PASSKEY_ONLY)
     assert (await handoff(client, landed["code"])).status_code == 401
     assert (await refusals(db))[-1] == "passkey_only"
     assert await sessions_of(db, alice.id) == 0

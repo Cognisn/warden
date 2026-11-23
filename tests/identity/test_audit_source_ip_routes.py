@@ -153,7 +153,7 @@ async def test_a_sign_in_method_change_records_the_address(
         db,
         client.post(
             f"/admin/users/{user.id}/sign-in-method",
-            json={"sign_in_method": "sso_only"},
+            json={"sign_in_method": "password"},
             headers=headers,
         ),
         address,

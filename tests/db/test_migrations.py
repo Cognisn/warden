@@ -16,6 +16,7 @@ from warden.db import (
     LIFECYCLE_TABLES,
     PASSWORD_POLICY_TABLES,
     SCHEMA,
+    SIGN_IN_TABLES,
     SSO_TABLES,
     WEBAUTHN_TABLES,
     current_revision,
@@ -36,6 +37,7 @@ HEAD_TABLES = (
     | SSO_TABLES
     | WEBAUTHN_TABLES
     | PASSWORD_POLICY_TABLES
+    | SIGN_IN_TABLES
 )
 
 

@@ -3,6 +3,13 @@
 A user signs in with their email address, matched without regard to case.
 The password hash never leaves this module's queries: ``User`` says only
 whether one is set.
+
+Sign-in methods (rulings CS13 to CS18 of 23 November 2026): each user either
+follows the instance default (their own setting is null) or has one of the
+four methods as their own. ``effective_method_sql`` is the one resolution of
+the method in force, used by every query that decides how a user may sign
+in: a pending change's method in force, else the user's own setting, else
+the default.
 """
 
 from __future__ import annotations
@@ -22,11 +29,13 @@ from psycopg import AsyncConnection, sql
 from warden.audit import AuditEvent, record_audit
 from warden.db import Database, schema, table
 from warden.identity.http import SourceIp
+from warden.identity.method_sql import effective_method_sql, pending_method_sql
 from warden.identity.password_policy.rules import UserContext
 from warden.identity.roles import LastAdministratorError, Roles, lock_administrators
 
 if TYPE_CHECKING:
     from warden.identity.password_enforcement import PasswordEnforcement
+    from warden.identity.sign_in_settings import SignInMethods
 
 __all__ = [
     "SignInMethod",
@@ -35,6 +44,11 @@ __all__ = [
     "UserError",
     "UserStatus",
     "Users",
+    "allows_passkey_sign_in",
+    "allows_password",
+    "allows_sso",
+    "effective_method_sql",
+    "pending_method_sql",
 ]
 
 # Deliberately loose: one "@", no whitespace, a dot in the domain. Deliverability
@@ -47,10 +61,6 @@ _CURSOR = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 _USERS = table(schema.USERS)
 _CREDENTIALS = table(schema.WEBAUTHN_CREDENTIALS)
-_COLUMNS = sql.SQL(
-    "id, email, display_name, status, sign_in_method, password_hash IS NOT NULL,"
-    " created_at, updated_at"
-)
 
 
 class UserStatus(StrEnum):
@@ -61,10 +71,39 @@ class UserStatus(StrEnum):
 
 
 class SignInMethod(StrEnum):
+    PASSWORD = "password"  # noqa: S105 - a method name, not a password
+    """Password + MFA: a password and a second factor, never single sign-on (ruling CS13)."""
     PASSWORD_AND_SSO = "password_and_sso"  # noqa: S105 - a method name, not a password
+    """Password + MFA or SSO: either way in."""
     SSO_ONLY = "sso_only"
+    """Single sign-on alone: no password and no passkey."""
     PASSKEY_ONLY = "passkey_only"
     """Signs in with a passkey alone: no password sign-in, reset or change (ruling P5)."""
+
+
+def allows_password(method: SignInMethod | str) -> bool:
+    """Whether a method signs in (and so resets and changes) with a password."""
+    return method in (SignInMethod.PASSWORD, SignInMethod.PASSWORD_AND_SSO)
+
+
+def allows_sso(method: SignInMethod | str) -> bool:
+    """Whether a method signs in through single sign-on."""
+    return method in (SignInMethod.PASSWORD_AND_SSO, SignInMethod.SSO_ONLY)
+
+
+def allows_passkey_sign_in(method: SignInMethod | str) -> bool:
+    """Whether a method may sign in with a passkey alone: every one but ``sso_only``."""
+    return method in (
+        SignInMethod.PASSWORD,
+        SignInMethod.PASSWORD_AND_SSO,
+        SignInMethod.PASSKEY_ONLY,
+    )
+
+
+_COLUMNS = sql.SQL(
+    "id, email, display_name, status, {effective}, password_hash IS NOT NULL,"
+    " created_at, updated_at, sign_in_method, {pending}"
+).format(effective=effective_method_sql(), pending=pending_method_sql())
 
 
 class UserError(Exception):
@@ -82,9 +121,14 @@ class User:
     display_name: str | None
     status: UserStatus
     sign_in_method: SignInMethod
+    """The method in force: how the user signs in now (``effective_method_sql``)."""
     has_password: bool
     created_at: datetime
     updated_at: datetime
+    own_sign_in_method: SignInMethod | None = None
+    """The user's own setting; None when the user follows the instance default."""
+    pending_sign_in_method: SignInMethod | None = None
+    """The method a pending change moves the user to, once its credential exists."""
 
 
 def _row_to_user(row: tuple[Any, ...]) -> User:
@@ -97,6 +141,8 @@ def _row_to_user(row: tuple[Any, ...]) -> User:
         has_password=bool(row[5]),
         created_at=row[6],
         updated_at=row[7],
+        own_sign_in_method=None if row[8] is None else SignInMethod(row[8]),
+        pending_sign_in_method=None if row[9] is None else SignInMethod(row[9]),
     )
 
 
@@ -119,6 +165,19 @@ class Users:
         self._db = db
         self._roles = roles
         self._passwords = passwords
+        self._methods: SignInMethods | None = None
+
+    def use_sign_in_methods(self, methods: SignInMethods) -> None:
+        """Route sign-in method changes and password set points through ``methods``.
+
+        ``Identity`` calls this once, when it builds ``Identity.sign_in_methods``.
+        """
+        self._methods = methods
+
+    def _sign_in_methods(self) -> SignInMethods:
+        if self._methods is None:
+            raise UserError("sign-in methods are not available; build Users through Identity")
+        return self._methods
 
     async def create(
         self,
@@ -127,12 +186,16 @@ class Users:
         actor: str | None,
         display_name: str | None = None,
         status: UserStatus = UserStatus.ACTIVE,
-        sign_in_method: SignInMethod = SignInMethod.PASSWORD_AND_SSO,
+        sign_in_method: SignInMethod | None = None,
         password: str | None = None,
         source_ip: SourceIp = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> User:
         """Create a user. The email address must be unique, ignoring case.
+
+        ``sign_in_method`` is the user's own setting; None (the default) has
+        the user follow the instance default (ruling CS13). A new user's
+        method takes effect at once: there is nothing to change from.
 
         A password is checked against the default password policy (a new
         user holds no role and no pin yet); ``PasswordRejected``, a
@@ -161,7 +224,13 @@ class Users:
                         " (email, display_name, status, sign_in_method, password_hash)"
                         " VALUES (%s, %s, %s, %s, %s) RETURNING {}"
                     ).format(_USERS, _COLUMNS),
-                    (email, display_name, status.value, sign_in_method.value, password_hash),
+                    (
+                        email,
+                        display_name,
+                        status.value,
+                        None if sign_in_method is None else sign_in_method.value,
+                        password_hash,
+                    ),
                 )
                 row = await cur.fetchone()
                 if row is None:
@@ -175,7 +244,11 @@ class Users:
                         resource_type="user",
                         resource_id=str(user.id),
                         source_ip=source_ip,
-                        details={"status": status.value, "sign_in_method": sign_in_method.value},
+                        details={
+                            "status": status.value,
+                            "sign_in_method": user.sign_in_method.value,
+                            "follows_default": sign_in_method is None,
+                        },
                     ),
                     conn=tx,
                 )
@@ -327,66 +400,32 @@ class Users:
     async def set_sign_in_method(
         self,
         user_id: uuid.UUID,
-        method: SignInMethod,
+        method: SignInMethod | None,
         *,
         actor: str | None,
         source_ip: SourceIp = None,
         conn: AsyncConnection[Any] | None = None,
     ) -> User:
-        """Change how a user signs in.
+        """Set a user's own sign-in method; None has them follow the instance default.
+
+        The change takes effect at once when the user holds the credential
+        the new method needs; otherwise it is pending (ruling CS18): the
+        method in force keeps working, and the user is mailed a set-up link
+        (a passkey registration link, or a set-password link) where the new
+        method needs one. ``User.pending_sign_in_method`` says which. See
+        ``SignInMethods.set_user_method`` for every refusal.
 
         ``sso_only`` is refused with ``SignInMethodConflict`` while the user
         holds any security key or passkey (ruling P5, Skuld question 25): the
-        administrator's reset of second factors removes them first. The
-        user's row is locked, as a registration locks it, so a key cannot be
-        added between the check and the change. ``source_ip`` is the client
-        address the change was asked from, if any.
+        administrator's reset of second factors removes them first.
+        ``source_ip`` is the client address the change was asked from, if any.
         """
-        previous: str | None = None
-        try:
-            async with self._db.transaction(conn) as tx:
-                cur = await tx.execute(
-                    sql.SQL("SELECT sign_in_method FROM {} WHERE id = %s FOR UPDATE").format(
-                        _USERS
-                    ),
-                    (user_id,),
-                )
-                row = await cur.fetchone()
-                if row is None:
-                    raise UserError(f"user {user_id} does not exist")
-                previous = row[0]
-                if method is SignInMethod.SSO_ONLY and await self._holds_credentials(tx, user_id):
-                    raise SignInMethodConflict(f"user {user_id} holds WebAuthn credentials")
-                user = await self._update(tx, user_id, sql.SQL("sign_in_method = %s"), method.value)
-                await record_audit(
-                    AuditEvent(
-                        action="warden.identity.user.sign_in_method_changed",
-                        outcome="success",
-                        actor=actor,
-                        resource_type="user",
-                        resource_id=str(user_id),
-                        source_ip=source_ip,
-                        details={"from": previous, "to": method.value},
-                    ),
-                    conn=tx,
-                )
-        except SignInMethodConflict:
-            await record_audit(
-                AuditEvent(
-                    action="warden.identity.user.sign_in_method_changed",
-                    outcome="failure",
-                    actor=actor,
-                    resource_type="user",
-                    resource_id=str(user_id),
-                    source_ip=source_ip,
-                    details={
-                        "from": previous,
-                        "to": method.value,
-                        "reason": "webauthn_credentials",
-                    },
-                )
-            )
-            raise
+        await self._sign_in_methods().set_user_method(
+            user_id, method, actor=actor, source_ip=source_ip, conn=conn
+        )
+        user = await self.get(user_id, conn=conn)
+        if user is None:
+            raise UserError(f"user {user_id} does not exist")
         return user
 
     async def holds_passkey(
@@ -408,14 +447,6 @@ class Users:
             row = await cur.fetchone()
         return bool(row and row[0])
 
-    async def _holds_credentials(self, tx: AsyncConnection[Any], user_id: uuid.UUID) -> bool:
-        cur = await tx.execute(
-            sql.SQL("SELECT EXISTS (SELECT 1 FROM {} WHERE user_id = %s)").format(_CREDENTIALS),
-            (user_id,),
-        )
-        row = await cur.fetchone()
-        return bool(row and row[0])
-
     async def set_password(
         self,
         user_id: uuid.UUID,
@@ -432,6 +463,8 @@ class Users:
         the user's own changes. ``PasswordRejected`` (a ``UserError``) names
         every failure. Clears any required change. ``source_ip`` is the client
         address the change was asked from, if any.
+
+        A pending change to a password method completes with it (ruling CS18).
         """
         current = await self.get(user_id, conn=conn)
         if current is None:
@@ -463,6 +496,11 @@ class Users:
                 ),
                 conn=tx,
             )
+            if self._methods is not None and await self._methods.credential_added(
+                tx, user_id, actor=actor, source_ip=source_ip
+            ):
+                refreshed = await self.get(user_id, conn=tx)
+                user = user if refreshed is None else refreshed
         return user
 
     async def _update(

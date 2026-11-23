@@ -56,7 +56,17 @@ from warden.identity.password_enforcement import AcceptedPassword, PasswordEnfor
 from warden.identity.password_policy import PasswordPolicy, UserContext
 from warden.identity.roles import RoleError, Roles
 from warden.identity.single_use import Purpose, SingleUseTokens, well_formed
-from warden.identity.users import SignInMethod, User, UserError, Users, UserStatus, check_email
+from warden.identity.users import (
+    SignInMethod,
+    User,
+    UserError,
+    Users,
+    UserStatus,
+    allows_password,
+    allows_sso,
+    check_email,
+    effective_method_sql,
+)
 
 __all__ = [
     "INVITATION_ACTIONS",
@@ -100,10 +110,13 @@ INVITATION_ACTIONS: tuple[tuple[str, Severity, str], ...] = (
 
 _USERS = table(schema.USERS)
 _GRANTS = table(INVITATION_GRANTS)
+# The invitee's method in force: their own, or the instance default (ruling CS13).
+_METHOD = effective_method_sql()
 
 Method = Literal["password", "sso", "passkey"]
 
 _HOW_TO_ACCEPT = {
+    SignInMethod.PASSWORD: "this invitation must be accepted with a password",
     SignInMethod.PASSWORD_AND_SSO: "this invitation must be accepted with a password",
     SignInMethod.SSO_ONLY: "this invitation must be accepted through single sign-on",
     SignInMethod.PASSKEY_ONLY: "this invitation must be accepted by registering a passkey",
@@ -240,11 +253,15 @@ class Invitations:
         *,
         actor: str | None,
         display_name: str | None = None,
-        sign_in_method: SignInMethod = SignInMethod.PASSWORD_AND_SSO,
+        sign_in_method: SignInMethod | None = None,
         grants: Sequence[StagedGrant] = (),
         source_ip: SourceIp = None,
     ) -> Invitation:
         """Invite ``email``: an invited user, staged grants, and a mailed link.
+
+        ``sign_in_method`` is the invitee's own setting; None (the default)
+        has them follow the instance default (ruling CS13), and they accept
+        the invitation the way the method in force at acceptance says.
 
         Raises ``UserError`` for an invalid address, ``InvitationError`` if the
         address is taken, ``RoleError`` for a bad grant, ``MailError`` without
@@ -276,7 +293,8 @@ class Invitations:
                     user.id,
                     source_ip,
                     status=UserStatus.INVITED.value,
-                    sign_in_method=sign_in_method.value,
+                    sign_in_method=user.sign_in_method.value,
+                    follows_default=sign_in_method is None,
                 )
                 await self._audit_success(
                     tx,
@@ -430,7 +448,7 @@ class Invitations:
             )
 
         def check(invitee: _Invitee) -> str | None:
-            if invitee.sign_in_method != SignInMethod.PASSWORD_AND_SSO:
+            if not allows_password(invitee.sign_in_method):
                 return "method_mismatch"
             return None
 
@@ -468,7 +486,7 @@ class Invitations:
             invitee is None
             or user is None
             or invitee.status != UserStatus.INVITED
-            or invitee.sign_in_method != SignInMethod.PASSWORD_AND_SSO
+            or not allows_password(invitee.sign_in_method)
         ):
             return None
         policy = await self.password_policy(invitee.id, staged)
@@ -511,7 +529,7 @@ class Invitations:
         """
 
         def check(invitee: _Invitee) -> str | None:
-            if invitee.sign_in_method == SignInMethod.PASSKEY_ONLY:
+            if not allows_sso(invitee.sign_in_method):
                 return "method_mismatch"
             if verified.email.lower() != invitee.email.lower():
                 return "identity_mismatch"
@@ -695,7 +713,7 @@ class Invitations:
         tx: AsyncConnection[Any],
         email: str,
         display_name: str | None,
-        sign_in_method: SignInMethod,
+        sign_in_method: SignInMethod | None,
     ) -> User:
         try:
             async with tx.transaction():
@@ -704,7 +722,12 @@ class Invitations:
                         "INSERT INTO {} (email, display_name, status, sign_in_method)"
                         " VALUES (%s, %s, %s, %s) RETURNING id"
                     ).format(_USERS),
-                    (email, display_name, UserStatus.INVITED.value, sign_in_method.value),
+                    (
+                        email,
+                        display_name,
+                        UserStatus.INVITED.value,
+                        None if sign_in_method is None else sign_in_method.value,
+                    ),
                 )
                 row = await cur.fetchone()
         except psycopg.errors.UniqueViolation:
@@ -752,9 +775,9 @@ class Invitations:
 
     async def _lock_invitee(self, tx: AsyncConnection[Any], user_id: uuid.UUID) -> _Invitee | None:
         cur = await tx.execute(
-            sql.SQL(
-                "SELECT id, email, status, sign_in_method FROM {} WHERE id = %s FOR UPDATE"
-            ).format(_USERS),
+            sql.SQL("SELECT id, email, status, {} FROM {} WHERE id = %s FOR UPDATE").format(
+                _METHOD, _USERS
+            ),
             (user_id,),
         )
         row = await cur.fetchone()
@@ -762,9 +785,7 @@ class Invitations:
 
     async def _read_invitee(self, tx: AsyncConnection[Any], user_id: uuid.UUID) -> _Invitee | None:
         cur = await tx.execute(
-            sql.SQL("SELECT id, email, status, sign_in_method FROM {} WHERE id = %s").format(
-                _USERS
-            ),
+            sql.SQL("SELECT id, email, status, {} FROM {} WHERE id = %s").format(_METHOD, _USERS),
             (user_id,),
         )
         row = await cur.fetchone()

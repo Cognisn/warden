@@ -30,7 +30,7 @@ from soft_authenticator import SoftwareAuthenticator, other_key
 from webauthn_support import expire_challenges
 
 from warden.db import Database
-from warden.identity import Identity, SignInMethod, User, UserStatus
+from warden.identity import Identity, User, UserStatus
 from warden.identity.mail import MailKind
 
 pytestmark = pytest.mark.db
@@ -710,7 +710,12 @@ async def test_an_sso_only_user_cannot_register_a_key(
 ) -> None:
     user = await make_user()
     headers = await _bearer(http, user)
-    await identity.users.set_sign_in_method(user.id, SignInMethod.SSO_ONLY, actor="test")
+    # In force at once, behind the services' back: a move to sso_only now waits for
+    # the first single sign-on (ruling CS18).
+    async with db.connection() as conn:
+        await conn.execute(
+            "UPDATE warden.users SET sign_in_method = 'sso_only' WHERE id = %s", (user.id,)
+        )
     answer = await http.post("/auth/webauthn/registration", json={}, headers=headers)
     assert answer.status_code == 409
     assert answer.json() == {"detail": "security keys are not available to this user"}

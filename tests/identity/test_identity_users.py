@@ -28,7 +28,11 @@ async def test_create_and_look_up(identity: Identity, db: Database) -> None:
             "actor": "admin-1",
             "resource_type": "user",
             "resource_id": str(user.id),
-            "details": {"status": "active", "sign_in_method": "password_and_sso"},
+            "details": {
+                "status": "active",
+                "sign_in_method": "password_and_sso",
+                "follows_default": True,
+            },
         }
     ]
 
@@ -87,13 +91,24 @@ async def test_status_change_is_audited(
 async def test_sign_in_method_change_is_audited(
     identity: Identity, db: Database, make_user: UserFactory
 ) -> None:
+    # A user holding the new method's credential moves at once (ruling CS18).
     user = await make_user()
     updated = await identity.users.set_sign_in_method(
-        user.id, SignInMethod.SSO_ONLY, actor="admin-1"
+        user.id, SignInMethod.PASSWORD, actor="admin-1"
     )
-    assert updated.sign_in_method is SignInMethod.SSO_ONLY
+    assert updated.sign_in_method is SignInMethod.PASSWORD
     rows = await audit_rows(db, "warden.identity.user.sign_in_method_changed")
-    assert rows[-1]["details"] == {"from": "password_and_sso", "to": "sso_only"}
+    assert rows[-1]["details"] == {
+        "from": "password_and_sso",
+        "to": "password",
+        "cause": "setting",
+        "pending": False,
+        "setting_from": None,
+        "setting_to": "password",
+        "password_removed": False,
+        "webauthn_removed": 0,
+        "sessions_ended": 0,
+    }
 
 
 async def test_unknown_user_changes_are_refused(identity: Identity) -> None:

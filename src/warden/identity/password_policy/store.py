@@ -50,6 +50,7 @@ from warden.db import (
     table,
 )
 from warden.identity.http import SourceIp
+from warden.identity.method_sql import effective_method_sql
 from warden.identity.password_policy.errors import (
     PasswordPolicyConflict,
     PasswordPolicyError,
@@ -355,7 +356,8 @@ async def notify_policies(conn: AsyncConnection[Any]) -> None:
     await conn.execute("SELECT pg_notify(%s, %s)", (POLICY_CHANNEL, PASSWORD_POLICY_NOTIFY))
 
 
-# The effective policy id of every user who holds a password, in SQL: the pin,
+# The effective policy id of every user whose method in force signs in with a
+# password (``password`` or ``password_and_sso``), in SQL: the pin,
 # else the highest-priority policy mapped from a live, declared role, else the
 # default. Parameters: ``declared`` (text[]).
 EFFECTIVE_SQL = sql.SQL(
@@ -374,9 +376,10 @@ EFFECTIVE_SQL = sql.SQL(
     FROM {users} u
     LEFT JOIN {pins} pin ON pin.user_id = u.id
     LEFT JOIN mapped m ON m.user_id = u.id AND m.rank = 1
-    WHERE u.sign_in_method = 'password_and_sso'
+    WHERE {method} IN ('password', 'password_and_sso')
     """
 ).format(
+    method=effective_method_sql("u"),
     assignments=_ASSIGNMENTS,
     roles=_ROLES,
     policies=_POLICIES,

@@ -29,7 +29,7 @@ from psycopg import AsyncConnection, sql
 from warden.audit import AuditEvent, get_recorder, record_audit
 from warden.config import WardenConfig
 from warden.db import Database, schema, table
-from warden.identity import apikeys, invitations, prune, reset
+from warden.identity import apikeys, invitations, prune, reset, sign_in_settings
 from warden.identity.actions import register_actions
 from warden.identity.crypto import SecretBox, SecretStore
 from warden.identity.dependencies import APP_STATE_KEY, Principal, ResourceScopeHook
@@ -72,11 +72,28 @@ from warden.identity.password_policy.maintenance import PasswordMaintenance
 from warden.identity.passwords import PasswordHasher
 from warden.identity.policy import PolicyStore, SessionPolicy
 from warden.identity.roles import PermissionRegistry, Roles
+from warden.identity.sign_in_settings import (
+    UNSET,
+    SignInMethods,
+    SignInMethodState,
+    SignInSettings,
+    SignInSettingsChange,
+)
 from warden.identity.single_use import Purpose, SingleUseTokens, well_formed
 from warden.identity.sso.service import SingleSignOn
 from warden.identity.throttle import SignInThrottle
 from warden.identity.tokens import NewSession, Sessions, TokenPair
-from warden.identity.users import SignInMethod, UserError, Users, UserStatus, is_email
+from warden.identity.users import (
+    SignInMethod,
+    UserError,
+    Users,
+    UserStatus,
+    allows_passkey_sign_in,
+    allows_password,
+    effective_method_sql,
+    is_email,
+    pending_method_sql,
+)
 from warden.identity.webauthn import (
     WebAuthn,
     WebAuthnCredential,
@@ -104,6 +121,9 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 _USERS = table(schema.USERS)
+# The method in force and any pending one, for an unaliased warden.users row.
+_METHOD = effective_method_sql()
+_PENDING = pending_method_sql()
 # Longest identifier looked up; nothing longer can be an email address.
 _MAX_IDENTIFIER = 320
 # RFC 8176: a password and a hardware-bound key (ruling P7).
@@ -416,6 +436,19 @@ class Identity:
         self.api_keys = apikeys.ApiKeys(self.config.identity, self.db, self.roles)
         self.mailer = Mailer(self.config.mail, mail_sender)
         self.single_use = SingleUseTokens(self.db)
+        # Sign-in settings and method changes (rulings CS13 to CS18).
+        sign_in_settings.register_actions(get_recorder().registry)
+        self.sign_in_methods = SignInMethods(
+            self.config,
+            self.db,
+            mailer=self.mailer,
+            tokens=self.single_use,
+            sso_settings=self.sso.settings,
+            webauthn=self.webauthn is not None,
+            max_age=self.config.identity.policy_cache_seconds,
+        )
+        self.users.use_sign_in_methods(self.sign_in_methods)
+        self.sso.use_sign_in_methods(self.sign_in_methods)
         self.invitations = invitations.Invitations(
             self.config,
             self.db,
@@ -432,6 +465,7 @@ class Identity:
             self.mailer,
             self.password_enforcement,
             self.sessions,
+            methods=self.sign_in_methods,
         )
         self.pruner = prune.Pruner(
             self.db,
@@ -646,7 +680,7 @@ class Identity:
             await self._refuse_sign_in("unknown_user", None, email, source_ip)
         if verification is None or not verification.ok:
             await self._refuse_sign_in("wrong_password", account.id, email, source_ip)
-        if account.sign_in_method != SignInMethod.PASSWORD_AND_SSO:
+        if not allows_password(account.sign_in_method):
             # A passkey_only user is refused as a wrong password is (ruling P5).
             reason = (
                 "passkey_only"
@@ -686,7 +720,8 @@ class Identity:
             methods = await self.mfa.methods(account.id, conn=tx)
             if methods:
                 purpose = "verify"
-            elif policy.require_mfa:
+            elif policy.require_mfa or account.sign_in_method == SignInMethod.PASSWORD:
+                # Password + MFA takes a second factor whatever the policy (CS13).
                 purpose = "enrol"
             details: dict[str, Any] = {"rehashed": True} if rehashed else {}
             if purpose is not None:
@@ -912,13 +947,13 @@ class Identity:
     async def _passkey_refusal(self, conn: AsyncConnection[Any], user_id: uuid.UUID) -> str | None:
         """Why this user may not sign in with a passkey now, or None."""
         cur = await conn.execute(
-            sql.SQL("SELECT status, sign_in_method FROM {} WHERE id = %s").format(_USERS),
+            sql.SQL("SELECT status, {} FROM {} WHERE id = %s").format(_METHOD, _USERS),
             (user_id,),
         )
         row = await cur.fetchone()
         if row is None or row[0] != UserStatus.ACTIVE:
             return "inactive_user"
-        if row[1] == SignInMethod.SSO_ONLY:
+        if not allows_passkey_sign_in(row[1]):
             return "sso_only"
         return None
 
@@ -974,16 +1009,16 @@ class Identity:
             async with self.db.transaction() as tx:
                 cur = await tx.execute(
                     sql.SQL(
-                        "SELECT email, display_name, status, sign_in_method FROM {}"
+                        "SELECT email, display_name, status, {}, {} FROM {}"
                         " WHERE id = %s FOR UPDATE"
-                    ).format(_USERS),
+                    ).format(_METHOD, _PENDING, _USERS),
                     (user_id,),
                 )
                 row = await cur.fetchone()
                 if row is None:
                     raise UserError(f"user {user_id} does not exist")
-                email, display_name, status, method = row
-                refused = _link_refusal(status, method)
+                email, display_name, status, method, pending = row
+                refused = _link_refusal(status, method, pending)
                 if refused is not None:
                     raise PasskeyLinkRefused(refused)
                 revoked = await self.single_use.revoke_live(
@@ -1134,6 +1169,10 @@ class Identity:
                         credential_id=str(key.id),
                         first_factor=bool(codes),
                     )
+                    # A pending move to passkey_only completes with it (ruling CS18).
+                    await self.sign_in_methods.credential_added(
+                        tx, user_id, actor=str(user_id), source_ip=source_ip
+                    )
                     enrolled = WebAuthnEnrolled(key, codes)
         except _Rollback:
             await self._refuse_link(reason or "unknown_token", user_id, source_ip)
@@ -1152,14 +1191,14 @@ class Identity:
         self, conn: AsyncConnection[Any], user_id: uuid.UUID, *, lock: bool
     ) -> str | None:
         """Why this user may not register a passkey from a link now, or None."""
-        query = "SELECT status, sign_in_method FROM {} WHERE id = %s"
+        query = "SELECT status, {}, {} FROM {} WHERE id = %s"
         if lock:
             query += " FOR UPDATE"
-        cur = await conn.execute(sql.SQL(query).format(_USERS), (user_id,))
+        cur = await conn.execute(sql.SQL(query).format(_METHOD, _PENDING, _USERS), (user_id,))
         row = await cur.fetchone()
         if row is None:
             return "unknown_token"
-        return _link_refusal(row[0], row[1])
+        return _link_refusal(row[0], row[1], row[2])
 
     async def _audit_link(
         self,
@@ -1605,6 +1644,11 @@ class Identity:
             user_verified=key.user_verified,
             first_factor=bool(codes),
         )
+        if key.discoverable and key.user_verified:
+            # A passkey completes a pending move to passkey_only (ruling CS18).
+            await self.sign_in_methods.credential_added(
+                tx, key.user_id, actor=str(key.user_id), source_ip=source_ip
+            )
         return WebAuthnEnrolled(key, codes)
 
     async def _open_challenge(
@@ -1812,6 +1856,65 @@ class Identity:
             )
         return opened.user_id
 
+    # Sign-in settings and methods (rulings CS13 to CS18)
+
+    async def sign_in_settings(self) -> SignInSettings:
+        """The default sign-in method and the allowed second factors (cached briefly)."""
+        return await self.sign_in_methods.current()
+
+    async def update_sign_in_settings(
+        self,
+        *,
+        actor: str | None,
+        source_ip: SourceIp = None,
+        default_sign_in_method: object = UNSET,
+        allowed_second_factors: object = UNSET,
+    ) -> SignInSettingsChange:
+        """Change the default sign-in method, the allowed second factors, or both.
+
+        See ``SignInMethods.update_settings``: a new default moves every user
+        who follows it, at once or as a pending change with a set-up link.
+        """
+        return await self.sign_in_methods.update_settings(
+            actor=actor,
+            source_ip=source_ip,
+            default_sign_in_method=default_sign_in_method,
+            allowed_second_factors=allowed_second_factors,
+        )
+
+    async def sign_in_method(self, user_id: uuid.UUID) -> SignInMethodState:
+        """A user's own setting, the method in force, and any pending change."""
+        return await self.sign_in_methods.state(user_id)
+
+    async def set_sign_in_method(
+        self,
+        user_id: uuid.UUID,
+        method: SignInMethod | None,
+        *,
+        actor: str | None,
+        source_ip: SourceIp = None,
+    ) -> SignInMethodState:
+        """Set a user's own method; None has them follow the default.
+
+        At once when the user holds the new method's credential, else
+        pending with a set-up link (``SignInMethods.set_user_method``).
+        """
+        return await self.sign_in_methods.set_user_method(
+            user_id, method, actor=actor, source_ip=source_ip
+        )
+
+    async def resend_sign_in_method_link(
+        self, user_id: uuid.UUID, *, actor: str | None, source_ip: SourceIp = None
+    ) -> datetime:
+        """Mail a pending change's set-up link again; when the new link expires."""
+        return await self.sign_in_methods.resend(user_id, actor=actor, source_ip=source_ip)
+
+    async def cancel_sign_in_method_change(
+        self, user_id: uuid.UUID, *, actor: str | None, source_ip: SourceIp = None
+    ) -> SignInMethodState:
+        """Cancel a pending change; the user stays on the method in force."""
+        return await self.sign_in_methods.cancel(user_id, actor=actor, source_ip=source_ip)
+
     # Sessions
 
     async def refresh(self, refresh_token: object, *, source_ip: SourceIp = None) -> TokenPair:
@@ -1872,7 +1975,7 @@ class Identity:
             account is None
             or not isinstance(current, str)
             or not isinstance(new_password, str)
-            or account.sign_in_method != SignInMethod.PASSWORD_AND_SSO
+            or not allows_password(account.sign_in_method)
             or account.password_hash is None
         ):
             if isinstance(current, str):
@@ -2102,7 +2205,7 @@ class Identity:
             account = await self._account_by_id(principal.user_id)
             if (
                 account is not None
-                and account.sign_in_method == SignInMethod.PASSWORD_AND_SSO
+                and allows_password(account.sign_in_method)
                 and account.password_hash is not None
             ):
                 context = UserContext(account.email, account.display_name)
@@ -2138,9 +2241,9 @@ class Identity:
         async with self.db.connection() as conn:
             cur = await conn.execute(
                 sql.SQL(
-                    "SELECT id, email, status, sign_in_method, password_hash, display_name FROM {}"
+                    "SELECT id, email, status, {}, password_hash, display_name FROM {}"
                     " WHERE lower(email) = lower(%s)"
-                ).format(_USERS),
+                ).format(_METHOD, _USERS),
                 (email,),
             )
             row = await cur.fetchone()
@@ -2150,9 +2253,9 @@ class Identity:
         async with self.db.connection() as conn:
             cur = await conn.execute(
                 sql.SQL(
-                    "SELECT id, email, status, sign_in_method, password_hash, display_name"
+                    "SELECT id, email, status, {}, password_hash, display_name"
                     " FROM {} WHERE id = %s"
-                ).format(_USERS),
+                ).format(_METHOD, _USERS),
                 (user_id,),
             )
             row = await cur.fetchone()
@@ -2162,14 +2265,14 @@ class Identity:
         self, conn: AsyncConnection[Any], user_id: uuid.UUID, *, lock: bool = False
     ) -> str | None:
         """Why this user may not complete a password sign-in now, or None."""
-        query = "SELECT status, sign_in_method FROM {} WHERE id = %s"
+        query = "SELECT status, {} FROM {} WHERE id = %s"
         if lock:
             query += " FOR UPDATE"
-        cur = await conn.execute(sql.SQL(query).format(_USERS), (user_id,))
+        cur = await conn.execute(sql.SQL(query).format(_METHOD, _USERS), (user_id,))
         row = await cur.fetchone()
         if row is None or row[0] != UserStatus.ACTIVE:
             return "user_inactive"
-        if row[1] != SignInMethod.PASSWORD_AND_SSO:
+        if not allows_password(row[1]):
             return "sso_only"
         return None
 
@@ -2258,11 +2361,15 @@ class Identity:
             await self.throttle.clear(conn, row[0], source_ip)
 
 
-def _link_refusal(status: str, method: str) -> str | None:
-    """Why a user may not have a passkey registration link, or None (ruling P8)."""
+def _link_refusal(status: str, method: str, pending: str | None = None) -> str | None:
+    """Why a user may not have a passkey registration link, or None (ruling P8).
+
+    ``method`` is the method in force; a pending move to ``passkey_only``
+    (ruling CS18) admits the link even from ``sso_only``.
+    """
     if status != UserStatus.ACTIVE:
         return f"user_{status}"
-    if method == SignInMethod.SSO_ONLY:
+    if method == SignInMethod.SSO_ONLY and pending != SignInMethod.PASSKEY_ONLY:
         return "sso_only"
     return None
 

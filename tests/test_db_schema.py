@@ -135,7 +135,14 @@ def test_webauthn_names_are_importable_from_warden_db() -> None:
 
 
 def test_table_sets_are_disjoint() -> None:
-    sets = [db.IDENTITY_TABLES, db.LIFECYCLE_TABLES, db.SSO_TABLES, db.WEBAUTHN_TABLES]
+    sets = [
+        db.IDENTITY_TABLES,
+        db.LIFECYCLE_TABLES,
+        db.SSO_TABLES,
+        db.WEBAUTHN_TABLES,
+        db.PASSWORD_POLICY_TABLES,
+        db.SIGN_IN_TABLES,
+    ]
     assert sum(len(t) for t in sets) == len(frozenset().union(*sets))
 
 
@@ -227,3 +234,9 @@ def test_password_policy_names_are_importable_from_warden_db() -> None:
     # Ruling PW2: replicas invalidate over the existing identity policy channel.
     assert db.PASSWORD_POLICY_NOTIFY == "password_policy"
     assert db.POLICY_CHANNEL == "warden_identity_policy"
+
+
+def test_sign_in_names_are_importable_from_warden_db() -> None:
+    assert {"sign_in_settings", "sign_in_method_changes"} == db.SIGN_IN_TABLES
+    assert db.SIGN_IN_SETTINGS == "sign_in_settings"
+    assert db.SIGN_IN_METHOD_CHANGES == "sign_in_method_changes"

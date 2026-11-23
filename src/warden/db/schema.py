@@ -124,6 +124,14 @@ PASSWORD_POLICY_TABLES = frozenset(
     }
 )
 
+# Sign-in methods' tables (rulings CS13 to CS18 of 23 November 2026).
+# One row: the instance's default sign-in method and the allowed second factors.
+SIGN_IN_SETTINGS = "sign_in_settings"
+# A user's pending sign-in method change, waiting for its credential.
+SIGN_IN_METHOD_CHANGES = "sign_in_method_changes"
+
+SIGN_IN_TABLES = frozenset({SIGN_IN_SETTINGS, SIGN_IN_METHOD_CHANGES})
+
 # Transaction-scoped advisory lock taken by every migration run, so replicas
 # that start together apply the chain one at a time. ASCII "warden" + 0x0001.
 MIGRATION_LOCK_KEY = 0x7761_7264_656E_0001

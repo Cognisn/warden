@@ -79,6 +79,7 @@ from warden.identity.routers.contract import (
     no_store,
 )
 from warden.identity.service import PasskeyLinkNotConfigured, PasskeyLinkRefused
+from warden.identity.sign_in_settings import SignInMethodChangeRefused, SignInMethodState
 from warden.identity.users import (
     SignInMethod,
     SignInMethodConflict,
@@ -120,6 +121,23 @@ def _user(user: User) -> dict[str, Any]:
         "has_password": user.has_password,
         "created_at": _iso(user.created_at),
         "updated_at": _iso(user.updated_at),
+    }
+
+
+def _method_state(state: SignInMethodState) -> dict[str, Any]:
+    pending = state.pending
+    return {
+        "setting": None if state.setting is None else state.setting.value,
+        "effective": state.effective.value,
+        "pending": None
+        if pending is None
+        else {
+            "from": pending.from_method.value,
+            "to": pending.to_method.value,
+            "requested_at": _iso(pending.requested_at),
+            "link": None if pending.link is None else pending.link.value,
+            "link_sent_at": _iso(pending.link_sent_at),
+        },
     }
 
 
@@ -416,20 +434,31 @@ def build_admin_router(
         "/users/{user_id}/sign-in-method",
         summary="Set a user's sign-in method",
         description=(
-            "`password_and_sso`, `sso_only` or `passkey_only`. An `sso_only` or "
-            "`passkey_only` user cannot sign in with, reset or change a password; a "
-            "`passkey_only` user signs in with a passkey alone (`POST /passkey/sign-in` under "
-            "the auth prefix). Setting `passkey_only` also answers `has_passkey`: when false, "
-            "the user cannot sign in until they register a passkey from a link "
-            "(`POST /users/{user_id}/passkey-registration`). `sso_only` is refused (409) "
-            "while the user holds security keys or passkeys: reset their second factors "
-            "first (`DELETE /users/{user_id}/mfa`)."
+            "`password`, `password_and_sso`, `sso_only` or `passkey_only`, or null for the "
+            "instance default. A `password` user signs in with a password and a second "
+            "factor, never single sign-on. An `sso_only` or `passkey_only` user cannot sign "
+            "in with, reset or change a password; a `passkey_only` user signs in with a "
+            "passkey alone (`POST /passkey/sign-in` under the auth prefix). The change takes "
+            "effect at once when the user holds the new method's credential, and whatever "
+            "the new method does not allow is removed (a password, keys, sessions signed in "
+            "another way). Otherwise it is pending: the method in force keeps working and the "
+            "user is mailed a set-up link (a passkey registration link, or a set-password "
+            "link through the reset page); a move to `sso_only` completes at the user's first "
+            "single sign-on. `sign_in_method` in the answer reports the user's own setting, "
+            "the method in force and any pending change. Setting `passkey_only` also answers "
+            "`has_passkey`. `sso_only` is refused (409) while the user holds security keys or "
+            "passkeys (reset their second factors first, `DELETE /users/{user_id}/mfa`) or "
+            "while single sign-on is not set up; a change needing a link is refused (409) when "
+            "the link cannot be sent, naming what is missing (such as `mail_sender`)."
         ),
         responses={
             200: {"model": WardenSignInMethodSet, "description": "The updated user."},
             400: detail("The request is not valid.", "the request is not valid"),
             404: detail("No such user.", "not found"),
-            409: detail("The user holds security keys or passkeys.", _HOLDS_KEYS),
+            409: detail("The user cannot take that method now.", _HOLDS_KEYS),
+            502: detail(
+                "The set-up link could not be delivered.", "the message could not be delivered"
+            ),
             **REFUSED,
             **FORBIDDEN,
         },
@@ -442,22 +471,35 @@ def build_admin_router(
         if uid is None:
             return _not_found()
         body = await read_object(request) or {}
-        try:
-            method = SignInMethod(str(body.get("sign_in_method")))
-        except ValueError:
+        if "sign_in_method" not in body:
             return _invalid()
+        value = body["sign_in_method"]
+        method: SignInMethod | None = None
+        if value is not None:
+            try:
+                method = SignInMethod(str(value))
+            except ValueError:
+                return _invalid()
         try:
-            user = await identity.users.set_sign_in_method(
+            state = await identity.set_sign_in_method(
                 uid, method, actor=str(principal.user_id), source_ip=source(request)
             )
+        except SignInMethodChangeRefused as exc:
+            return _detail(str(exc), 409)
         except SignInMethodConflict:
             return _detail(_HOLDS_KEYS, 409)
+        except MailDeliveryError:
+            return _detail("the message could not be delivered", 502)
         except UserError:
             return _not_found()
-        if method is SignInMethod.PASSKEY_ONLY:
-            has_passkey = await identity.users.holds_passkey(user.id)
-            return json_response({"user": _user(user), "has_passkey": has_passkey})
-        return json_response({"user": _user(user)})
+        user = await identity.users.get(uid)
+        if user is None:
+            return _not_found()
+        answer: dict[str, Any] = {"user": _user(user), "sign_in_method": _method_state(state)}
+        target = state.effective if state.pending is None else state.pending.to_method
+        if target is SignInMethod.PASSKEY_ONLY:
+            answer["has_passkey"] = await identity.users.holds_passkey(user.id)
+        return json_response(answer)
 
     @router.post(
         "/users/{user_id}/password-reset",
