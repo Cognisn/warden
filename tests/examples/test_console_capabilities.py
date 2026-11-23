@@ -45,6 +45,8 @@ async def test_with_a_sender_everything_that_mails_is_available(
         "passkey_registration_link": True,
         "single_sign_on": False,
         "webauthn": True,
+        "allowed_second_factors": ["totp", "passkey"],
+        "default_sign_in_method": "password_and_sso",
     }
     invited = await client.post(
         "/admin/invitations", json={"email": "carol@example.org"}, headers=admin

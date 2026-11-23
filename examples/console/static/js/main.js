@@ -10,7 +10,7 @@ import { gap } from "./gaps.js";
 import { accountScreen, signInScreen, ssoLanding } from "./signin.js";
 import { acceptScreen, outboxScreen, passkeyRegistrationScreen, resetScreen } from "./lifecycle.js";
 import { notesScreen } from "./notes.js";
-import { apiKeysScreen, invitationsScreen, policyScreen, ssoScreen, usersScreen } from "./admin.js";
+import { apiKeysScreen, invitationsScreen, policyScreen, signInSettingsScreen, ssoScreen, usersScreen } from "./admin.js";
 import { devScreen } from "./dev.js";
 import { exposureScreen, policiesScreen, watchListsScreen } from "./passwords.js";
 import { anchorsScreen, auditScreen, keysScreen, syslogScreen } from "./audit.js";
@@ -27,6 +27,7 @@ const MENU = [
     ["#/users", "Users and roles", usersScreen, "users.manage"],
     ["#/invitations", "Invitations", invitationsScreen, "users.manage"],
     ["#/api-keys", "API keys", apiKeysScreen, "keys.manage"],
+    ["#/sign-in-settings", "Sign-in settings", signInSettingsScreen, "policy.manage"],
     ["#/policy", "Session policy", policyScreen, "policy.manage"],
     ["#/sso", "Single sign-on", ssoScreen, "sso.manage"],
   ]],

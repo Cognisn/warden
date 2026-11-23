@@ -59,6 +59,14 @@ class ConsoleBrowser(LiveBrowser):
 
         await self._run(run())
 
+    async def follow(self, name: str) -> None:
+        """Follow the link with this text, as a person clicks it (the page is not reloaded)."""
+
+        async def run() -> None:
+            await self._page.get_by_role("link", name=name, exact=True).click()
+
+        await self._run(run())
+
     async def fill(self, label: str, value: str) -> None:
         async def run() -> None:
             await self._page.get_by_label(label, exact=True).first.fill(value)
@@ -106,13 +114,7 @@ class ConsoleBrowser(LiveBrowser):
 
 @pytest.fixture
 async def required(make_console: Any) -> Any:
-    """A console that makes every account set up a second factor."""
-    return await make_console(http={"public_base_url": ORIGIN}, identity={"require_mfa": True})
-
-
-@pytest.fixture
-async def open_console(make_console: Any) -> Any:
-    """A console that does not."""
+    """A console, which makes every account set up a second factor (warden 0.2.0 always does)."""
     return await make_console(http={"public_base_url": ORIGIN})
 
 
@@ -130,9 +132,9 @@ async def forced(required: Any) -> AsyncIterator[ConsoleBrowser]:
 
 
 @pytest.fixture
-async def plain(open_console: Any) -> AsyncIterator[ConsoleBrowser]:
-    await make_user(open_console, "erin@example.com", "editor")
-    async with serve(open_console) as browser:
+async def plain(required: Any) -> AsyncIterator[ConsoleBrowser]:
+    await make_user(required, "erin@example.com", "editor")
+    async with serve(required) as browser:
         yield browser
 
 
@@ -165,6 +167,19 @@ async def enrol_authenticator(browser: ConsoleBrowser, begin: str) -> None:
     assert len(await browser.texts(".codes div")) > 0
 
 
+async def sign_in_to_account(browser: ConsoleBrowser, email: str) -> None:
+    """Reach the Account screen. A password alone no longer signs anyone in, so the
+    second factor is a security key registered at the forced enrolment (the account
+    then holds a key and no authenticator, which the authenticator tests need)."""
+    await browser.add_authenticator(SECURITY_KEY)
+    await sign_in(browser, email)
+    await browser.see("Set up a second factor")
+    await browser.press("Register a security key or passkey")
+    await browser.see("Registered the key.")
+    await browser.follow("Continue to your account")
+    await browser.see("Authenticator (TOTP)")
+
+
 async def test_forced_enrolment_with_an_authenticator_app(forced: ConsoleBrowser) -> None:
     await sign_in(forced, "dana@example.com")
     await forced.see("Set up a second factor")
@@ -185,13 +200,11 @@ async def test_forced_enrolment_with_a_security_key(forced: ConsoleBrowser) -> N
 
 
 async def test_the_account_screen_sets_up_an_authenticator(plain: ConsoleBrowser) -> None:
-    await sign_in(plain, "erin@example.com")
-    await plain.see("Authenticator (TOTP)")
+    await sign_in_to_account(plain, "erin@example.com")
     await enrol_authenticator(plain, "Set up an authenticator")
 
 
 async def test_the_account_screen_shows_no_stray_null(plain: ConsoleBrowser) -> None:
-    await sign_in(plain, "erin@example.com")
-    await plain.see("Authenticator (TOTP)")
+    await sign_in_to_account(plain, "erin@example.com")
     assert await plain.loose_text() == []
     assert (await plain.screen()).startswith("Account")

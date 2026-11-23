@@ -15,7 +15,7 @@ How a product integrates warden, using only warden's public surface (names a war
 | `product.py` | Declares the product's permissions and roles (`viewer`, `editor`, `notes-admin`, `auditor`, `administrator`) and its audit actions (`console.note.*`). |
 | `notes.py` | A product resource gated by `require_permission`, narrowed by a resource-scope hook (only a note's owner, or a holder of `notes.admin`, may change it), with an audit event per change. |
 | `outbox.py` | A `MailSender` that keeps messages in memory, so invitation and reset links can be followed. |
-| `console_routes.py` | The sample's own routes for what warden leaves to the product (see "Gaps"). |
+| `console_routes.py` | The sample's own routes for what warden leaves to the product (see "Gaps"). The instance sign-in settings and the session policy are warden's own routes, mounted by `app.py` with their own permission (`settings=`). |
 | `bootstrap.py` | Creates the first administrator: warden's CLI cannot, because the roles are the product's. |
 | `security.py` | A strict Content Security Policy on every answer: scripts and styles only from the app, no inline script or style. |
 | `devclock.py`, `data/` | The development clock (`serve --dev-clock`) and a small synthetic import file, both for walking password policies (see "Password policies"). |
@@ -63,11 +63,11 @@ On a workstation with the worktree recipe (`dev/worktree.json`), the sandbox's `
 
 Use `localhost` rather than `127.0.0.1` in the browser: the public base URL is `http://localhost:<port>`, and the single sign-on login cookie is `Secure`, which browsers accept over plain HTTP only for `localhost`.
 
-The example configuration requires MFA, so the first sign-in asks the administrator to set up a second factor: an authenticator app or a security key or passkey. For an authenticator app the console shows the `otpauth://` URI and the secret as text; it draws no QR code.
+warden requires a second factor for every password sign-in (there is no switch for it from 0.2.0), so the first sign-in asks the administrator to set up a second factor: an authenticator app or a security key or passkey. For an authenticator app the console shows the `otpauth://` URI and the secret as text; it draws no QR code.
 
 ### Resetting second factors
 
-An administrator who opens a user under Users has two resets. **Reset second factors** (warden's `DELETE <admin>/users/{user_id}/mfa`) removes the authenticator, every security key and passkey and every recovery code, and ends the user's sessions, so their next sign-in sets up a second factor again. **Reset TOTP** (`DELETE <admin>/users/{user_id}/totp`) removes only the authenticator and the recovery codes, and leaves keys in place. Recovery codes cannot yet be replaced by the user; that is planned for warden 0.2.0.
+An administrator who opens a user under Users has two resets. **Reset second factors** (warden's `DELETE <admin>/users/{user_id}/mfa`) removes the authenticator, every security key and passkey and every recovery code, and ends the user's sessions, so their next sign-in sets up a second factor again. **Reset TOTP** (`DELETE <admin>/users/{user_id}/totp`) removes only the authenticator and the recovery codes, and leaves keys in place. A user replaces their own recovery codes on **Account** (see "Sign-in settings and methods").
 
 ### Passkeys and security keys
 
@@ -133,6 +133,16 @@ python -m examples.console serve --config $sb/console.yaml --without-mail
 
 The sign-in screen then says reset links cannot be mailed instead of offering **Forgotten password**. Under **Users and roles**, **Send a password reset link** and **Send a passkey registration link** are disabled with a notice that mail is not configured; under **Invitations**, **Invite** and **Resend** are too. warden's own refusals have not changed: a call made anyway still gets its 503 `mail is not configured`, and the public reset request still answers 202 and sends nothing. Remove `passkey_registration_link` from `console.yaml` instead, and only the passkey registration link is disabled, with a notice naming the missing setting. The sign-in screen also hides single sign-on until it is enabled, and passkeys when there is no relying party (a base URL on an IP address).
 
+## Sign-in settings and methods
+
+The screens below use warden's routes only (client guide, chapter 19); the sample's own routes have nothing to do with them. The administration router is built with `settings=policy.manage`, so the instance sign-in settings and the session policy have a permission of their own, held by the `administrator` role.
+
+1. **Sign-in settings** (under Administration): the instance default method and the allowed second factors (`GET` and `PUT <admin>/sign-in-settings`). Save with TOTP unticked and see that nobody's enrolment is deleted; the users who held only an authenticator are asked to enrol an allowed factor at their next sign-in. Untick both: warden refuses, naming the field. With the default changed to a method some users do not yet hold the credential for, the answer counts who moved at once and who waits, and a failed link is named so it can be resent.
+2. **Users and roles**, **Manage**: **Sign-in method** shows the user's own setting, the method in force and any pending change (`GET <admin>/users/{user_id}/sign-in-method`). Choose a method (or "follow the instance default"); a move the user cannot make yet is pending and the set-up link is in the **Outbox**. **Resend the set-up link** and **Cancel the pending change** are warden's resend and cancel routes. A move to `sso_only` has no link, so resend is disabled for it.
+3. **Account**: **How you sign in** (`GET <auth>/sign-in-method`) says which method is in force, whether an administrator is moving you and which second factors are allowed. **Recovery codes**: **Replace my recovery codes** (`POST <auth>/recovery-codes/regenerate`) answers with new codes shown once. It needs a recent sign-in with an authenticator or key; after a recovery-code sign-in, or after the challenge window, warden answers 403 and the screen says to sign in again.
+4. **Single sign-on**: the numbered setup steps for the current provider preset appear under the settings, with this instance's callback URI filled in, and **Show the steps** fetches another preset's (`GET <admin>/sso/setup-guide`). With a user on `sso_only` (or the default `sso_only`), turning single sign-on off is refused with 409: the screen lists the users to move first.
+5. **Session policy**: the four lifetimes (`GET`, `PUT <admin>/session-policy` and the reset). The second-factor checkbox is gone: `require_mfa` is read-only and always on.
+
 ## Password policies
 
 The console shows warden's password policies and watch lists end to end: a live checklist wherever a password is set, the forced change at sign-in, and the administration of policies, role mapping, pins, watch lists and the exposure report. It uses warden's routes and public Python names only. The walk below is the one for the rc1 gate; each step says what you should see.
@@ -154,7 +164,7 @@ The administration routes are guarded by a permission the sample chose, `passwor
 Use a sandbox set up as under "Running it against a sandbox". Three things make the walk quicker:
 
 1. `init` writes `warden.passwords.fingerprint_key_secret` into `console.yaml` and seeds the key, so a policy can enable the sealed fingerprint (and the recheck has something to compare). Delete those two lines to see the notice the policy form shows when the key is not configured.
-2. The example configuration requires a second factor. For the walk set `warden.identity.require_mfa: false` in `$sb/console.yaml`, so each invited user can sign in with a password alone. (A forced change works the same after a second factor.)
+2. Every password sign-in needs a second factor, so each invited user enrols an authenticator app (or a key) at their first sign-in, and the forced change below follows it. Keep an authenticator open for the walk.
 3. Start the console with the development clock, so expiry can be walked without waiting. **This is for development only**: warden uses the clock for session lifetimes and password ages, and a product leaves it alone.
 
    ```
@@ -234,7 +244,6 @@ Restart the console and the policy form shows the new URL. The five-character pr
 
 These are things the console needed that warden's public surface does not provide. Each is recorded as a numbered question in warden 0.1.0's release tracking, and the screen that needs it says so. The sample works around none of them; where it builds its own route, it does so only from public names, as any product would have to.
 
-- No HTTP route for the session policy: the sample's own `/api/policy` uses `Identity.policy` (question 7).
 - No HTTP route to anchor the audit chain head or to check exported anchors: the sample's own `/api/audit/anchor` and `/api/audit/anchors/verify` use `warden.audit.anchor` and `verify_anchors` (question 8).
 - Syslog settings come only from start-up configuration; nothing changes them at run time (question 9).
 - No setting for the identity provider's CA: the sample sets `SSL_CERT_FILE` for its own process (httpx reads it) so warden trusts the stub provider (question 10).
@@ -243,4 +252,4 @@ These are things the console needed that warden's public surface does not provid
 
 ## Tests
 
-`tests/examples/` runs the browser's password rules against warden's test vectors under Node (`test_console_password_rules.py`; in CI a missing Node fails the run), and starts the console against a testcontainers Postgres: every router mounted, the Content Security Policy on every page and asset, a password sign-in round trip, an invitation followed from the outbox, and the notes refused without their permission and allowed with it. The passkey tests use the test suite's software authenticator in place of a browser and a key: every warden route a screen calls is mounted, a key registered, renamed and removed, the last second factor kept, a key as the second factor and in a forced enrolment, a passkey sign-in round trip, `passkey_only` with the registration link followed from the outbox, the administrator's reset, and a `passkey_only` invitation accepted with a passkey. The password policy tests check the permission the sample chose for the new routes, the development clock, the recheck and import helpers, a forced change round trip and expiry walked on the clock. The capability tests build the console with and without a mail sender, and without the passkey link setting, and check both capability routes, the unchanged 503 and the screens that read them. Type checking: `mypy --strict examples/console`.
+`tests/examples/` runs the browser's password rules against warden's test vectors under Node (`test_console_password_rules.py`; in CI a missing Node fails the run), and starts the console against a testcontainers Postgres: every router mounted, the Content Security Policy on every page and asset, a password sign-in round trip, an invitation followed from the outbox, and the notes refused without their permission and allowed with it. The passkey tests use the test suite's software authenticator in place of a browser and a key: every warden route a screen calls is mounted, a key registered, renamed and removed, the last second factor kept, a key as the second factor and in a forced enrolment, a passkey sign-in round trip, `passkey_only` with the registration link followed from the outbox, the administrator's reset, and a `passkey_only` invitation accepted with a passkey. The sign-in settings tests mount warden's settings routes under the console's own permission and check each screen's routes, the recovery-code replacement, the single sign-on guard and the setup steps. The password policy tests check the permission the sample chose for the new routes, the development clock, the recheck and import helpers, a forced change round trip and expiry walked on the clock. The capability tests build the console with and without a mail sender, and without the passkey link setting, and check both capability routes, the unchanged 503 and the screens that read them. Type checking: `mypy --strict examples/console`.

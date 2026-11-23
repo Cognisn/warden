@@ -59,12 +59,14 @@ async def test_changing_and_resetting_the_session_policy_record_the_address(
 ) -> None:
     await _recorded(
         console,
-        client.put("/api/policy", json={"require_mfa": True}, headers=headers),
+        client.put(
+            "/admin/session-policy", json={"refresh_reuse_grace_seconds": 5}, headers=headers
+        ),
         "warden.identity.policy.changed",
     )
     await _recorded(
         console,
-        client.post("/api/policy/reset", headers=headers),
+        client.post("/admin/session-policy/reset", headers=headers),
         "warden.identity.policy.changed",
     )
 
@@ -72,7 +74,9 @@ async def test_changing_and_resetting_the_session_policy_record_the_address(
 async def test_a_body_naming_source_ip_is_refused(
     client: httpx.AsyncClient, headers: dict[str, str]
 ) -> None:
-    response = await client.put("/api/policy", json={"source_ip": "198.51.100.1"}, headers=headers)
+    response = await client.put(
+        "/admin/session-policy", json={"source_ip": "198.51.100.1"}, headers=headers
+    )
     assert response.status_code == 400
 
 
