@@ -24,7 +24,7 @@ from typing import Any
 
 import httpx
 import pytest
-from identity_support import PASSWORD, RecordingSender, UserFactory, audit_rows
+from identity_support import PASSWORD, RecordingSender, UserFactory, audit_rows, http_sign_in
 from webauthn_live_support import (
     PASSKEY,
     SECURITY_KEY,
@@ -71,14 +71,16 @@ async def browser(server: LiveServer) -> AsyncIterator[LiveBrowser]:
 
 
 @pytest.fixture
-async def admin(server: LiveServer, make_user: UserFactory) -> AsyncIterator[httpx.AsyncClient]:
+async def admin(
+    server: LiveServer, identity: Identity, make_user: UserFactory
+) -> AsyncIterator[httpx.AsyncClient]:
     """The administrator's own client, signed in over the same live server."""
     user = await make_user("admin@example.com", roles=("admin",))
     async with httpx.AsyncClient(base_url=server.origin, timeout=10) as client:
-        answer = await client.post(
-            "/auth/sign-in", json={"email": user.email, "password": PASSWORD}
-        )
+        # A password always takes a second factor since 0.2.0 (ruling CS14): TOTP here.
+        answer = await http_sign_in(client, user.email, PASSWORD, identity=identity)
         assert answer.status_code == 200, answer.text
+        assert answer.json()["status"] == "signed_in", answer.text
         client.headers["authorization"] = f"Bearer {answer.json()['access_token']}"
         yield client
 
@@ -157,6 +159,25 @@ async def no_credential_material(db: Database, *secrets: str) -> None:
         assert secret not in trail
 
 
+async def enrol_key(browser: LiveBrowser, user: User, **fields: str) -> dict[str, Any]:
+    """A first password sign-in, finished by registering a key as a forced enrolment.
+
+    Since 0.2.0 a right password always takes a second factor (ruling CS14), so a
+    user holding none is asked to enrol an allowed one, and a key enrolled under
+    the challenge finishes the sign-in.
+    """
+    challenged = await browser.act("sign-in", email=user.email, password=PASSWORD)
+    body = last_step(challenged)["body"]
+    assert body["status"] == "mfa_enrolment_required", body
+    assert "webauthn" in body["methods"], body
+    added = await browser.act("enrol-key", **fields)
+    ok(added)
+    options, confirmed = added["steps"]
+    assert options["sent"] == ["challenge"]
+    assert confirmed["body"]["status"] == "signed_in", confirmed
+    return added
+
+
 # The flows.
 
 
@@ -170,12 +191,12 @@ async def test_password_then_a_security_key_as_second_factor(
     key = await browser.add_authenticator(SECURITY_KEY)
     await browser.open("/")
 
-    # Signed in with the password alone, Alice adds a security key.
-    signed_in = await browser.act("sign-in", email=alice.email, password=PASSWORD)
-    assert last_step(signed_in)["body"]["status"] == "signed_in"
-    added = await browser.act("register-key", nickname="Desk key")
-    ok(added)
+    # Alice's password is right and she holds no second factor, so she must enrol
+    # one (ruling CS14): she adds a security key, which finishes her sign-in.
+    added = await enrol_key(browser, alice, nickname="Desk key")
     options, confirmed = added["steps"]
+    enrolled = await identity.authenticate(confirmed["body"]["access_token"])
+    assert (enrolled.user_id, enrolled.amr) == (alice.id, ("pwd", "hwk"))
     assert options["body"]["public_key"]["authenticatorSelection"]["userVerification"] == (
         "preferred"
     )
@@ -210,7 +231,7 @@ async def test_password_then_a_security_key_as_second_factor(
     assert principal.user_id == alice.id
     assert principal.amr == ("pwd", "hwk")
 
-    assert await live_sessions(db, alice) == [["pwd"], ["pwd", "hwk"]]
+    assert await live_sessions(db, alice) == [["pwd", "hwk"], ["pwd", "hwk"]]
     events = await successes(db, SIGN_IN, alice)
     assert events[-1]["details"]["amr"] == ["pwd", "hwk"]
     # The second factor was answered first time: no refusal reached the trail.
@@ -229,9 +250,7 @@ async def test_a_registered_passkey_signs_in_with_no_email(
     bob = await make_user("bob@example.com")
     key = await browser.add_authenticator(PASSKEY)
     await browser.open("/")
-    await browser.act("sign-in", email=bob.email, password=PASSWORD)
-    added = await browser.act("register-key", nickname="Laptop")
-    ok(added)
+    added = await enrol_key(browser, bob, nickname="Laptop")
     assert last_step(added)["body"]["credential"]["discoverable"] is True
     (held,) = await credentials(db, bob)
     assert (held["discoverable"], held["user_verified"]) == (True, True)
@@ -267,8 +286,7 @@ async def test_passkey_sign_in_is_refused_when_the_authenticator_cannot_verify_t
     carol = await make_user("carol@example.com")
     key = await browser.add_authenticator(PASSKEY)
     await browser.open("/")
-    await browser.act("sign-in", email=carol.email, password=PASSWORD)
-    ok(await browser.act("register-key"))
+    await enrol_key(browser, carol)
     await browser.open("/")
     sessions_before = await live_sessions(db, carol)
     trail_before = len(await audit_rows(db, SIGN_IN))
@@ -376,8 +394,7 @@ async def test_the_administrators_reset_then_a_registration_link(
     erin = await make_user("erin@example.com", display_name="Erin Example")
     lost = await browser.add_authenticator(PASSKEY)
     await browser.open("/")
-    await browser.act("sign-in", email=erin.email, password=PASSWORD)
-    ok(await browser.act("register-key"))
+    await enrol_key(browser, erin)
     (old,) = await credentials(db, erin)
     moved = await admin.post(
         f"/admin/users/{erin.id}/sign-in-method", json={"sign_in_method": "passkey_only"}
