@@ -26,7 +26,7 @@ app.include_router(
 app.include_router(keys_router(keys=keys), prefix=http.keys_prefix)
 ```
 
-`audit_router` comes from `warden.audit.router`, `syslog_router` from `warden.audit.syslog` and `keys_router` from `warden.jwks`; none is exported from a package root, so importing `warden.audit` or `warden.keys` never loads FastAPI. The administration router's permission is one the product registered (warden hardcodes none); `roles=`, `invitations=` and `api_keys=` may name a different permission for each area. The `authorise` dependency of the audit, syslog and single sign-on administration routers is the product's: it refuses the caller by raising (its own 401 or 403) and otherwise returns the actor id recorded in the audit trail, for example a `require_permission(...)` the product chose.
+`audit_router` comes from `warden.audit.router`, `syslog_router` from `warden.audit.syslog` and `keys_router` from `warden.jwks`; none is exported from a package root, so importing `warden.audit` or `warden.keys` never loads FastAPI. The administration router's permission is one the product registered (warden hardcodes none); `roles=`, `invitations=`, `api_keys=`, `password_policies=` and `settings=` may name a different permission for each area (`settings=` guards the instance sign-in settings and the session policy, section 19; each defaults to the main permission). The `authorise` dependency of the audit, syslog and single sign-on administration routers is the product's: it refuses the caller by raising (its own 401 or 403) and otherwise returns the actor id recorded in the audit trail, for example a `require_permission(...)` the product chose.
 
 ## 2. Sign-in
 
@@ -38,6 +38,8 @@ app.include_router(keys_router(keys=keys), prefix=http.keys_prefix)
 | `mfa_required` | The password was right and the user has a second factor. The body carries a `challenge`, its `expires_in` and `methods`, the kinds the user holds (`"totp"`, `"webauthn"`). | For `totp`, ask for a code and send it to [`POST /auth/totp/verify`](../contract/openapi.json) as `{"challenge", "code"}`, or a recovery code to [`POST /auth/recovery-code`](../contract/openapi.json). For `webauthn`, complete it with a key (section 16.2). |
 | `password_change_required` | The password (and any second factor) was right, but the password must change before a session is issued. The body carries a `challenge`, its `expires_in` and a `reason`. | Complete the change at [`POST /auth/password-change`](../contract/openapi.json) (section 18.6). Wherever a session would be issued, this answer can take its place. |
 | `mfa_enrolment_required` | The password was right and the user holds no second factor the administrator allows. From 0.2.0 every password sign-in needs a second factor; `identity.require_mfa` is deprecated (true is accepted, false fails at start-up). The body carries a `challenge`, its `expires_in` and `methods`, the kinds the user may enrol. | Enrol one of `methods` under the challenge (section 5, or a key in section 16.2); confirming the enrolment signs the user in. |
+
+A right password never answers `signed_in` straight away: it always answers `mfa_required` or `mfa_enrolment_required` (section 19.5), each with `methods`. `signed_in` follows the second factor, and the `password_change_required` answer can take its place there.
 
 Every other outcome (an unknown address, a wrong password, an `sso_only` user, a user who is not `active`, a throttled attempt) is the uniform refusal (section 4). Do not tell the user which; you cannot know.
 
@@ -94,7 +96,9 @@ Request bodies are parsed by warden, not by FastAPI's validation, so a malformed
 
 **Replacing codes.** A signed-in user replaces their recovery codes with [`POST /auth/recovery-codes/regenerate`](../contract/openapi.json), bearer token and no body, from a session signed in with TOTP, a security key or a passkey within `identity.mfa_challenge_ttl_seconds`. The answer is `{"recovery_codes"}`, shown once; every earlier code stops working, and warden mails the user a notice if the product supplied a mail sender. Otherwise the answer is a 403 (`sign in again with a second factor to replace your recovery codes`): sign the user in again and retry. A user cannot remove their own TOTP enrolment: beginning an enrolment answers 409 while one is confirmed.
 
-**Lost both factors: the administrator's reset.** A user who has lost their authenticator and their recovery codes cannot complete a password sign-in, so an administrator resets their enrolment with [`DELETE /admin/users/{user_id}/totp`](../contract/openapi.json), behind the administration router's users permission. It answers 204 with no body, or 404 for no such user. In one transaction it removes the user's TOTP enrolment (confirmed or not) and every recovery code, ends every session of the user (as a password reset does), and records `warden.identity.mfa.reset` with the administrator as actor. The user's next password sign-in answers `mfa_enrolment_required` where the deployment requires a second factor (or `signed_in` where it does not), and they enrol again as above; their old codes are refused. A user with nothing enrolled gets a 204 too, still audited, so pressing the button twice is harmless. Confirm the user's identity some other way before resetting: the reset is what stands between a stolen password and the account. A product's server can call `Identity.reset_totp(user_id, actor=...)` directly.
+**Allowed factors.** Beginning or confirming a TOTP enrolment while TOTP is not an allowed second factor is a 409 (`TOTP is not allowed as a second factor`) for a signed-in user, and the uniform refusal under a challenge; `POST /auth/totp/verify` is refused while TOTP is not allowed. Confirming a TOTP enrolment removes the user's security keys and passkeys when those are no longer allowed (audited; recovery codes stay). Section 19.5 has the rule.
+
+**Lost both factors: the administrator's reset.** A user who has lost their authenticator and their recovery codes cannot complete a password sign-in, so an administrator resets their enrolment with [`DELETE /admin/users/{user_id}/totp`](../contract/openapi.json), behind the administration router's users permission. It answers 204 with no body, or 404 for no such user. In one transaction it removes the user's TOTP enrolment (confirmed or not) and every recovery code, ends every session of the user (as a password reset does), and records `warden.identity.mfa.reset` with the administrator as actor. The user's next password sign-in answers `mfa_enrolment_required` (never `signed_in`, since a second factor is always needed), and they enrol again as above; their old codes are refused. A user with nothing enrolled gets a 204 too, still audited, so pressing the button twice is harmless. Confirm the user's identity some other way before resetting: the reset is what stands between a stolen password and the account. A product's server can call `Identity.reset_totp(user_id, actor=...)` directly.
 
 **Security keys and passkeys.** A security key or passkey (WebAuthn) is a second factor beside TOTP, and `mfa_required` lists the kinds a user holds in `methods`. A passkey can also sign a user in alone. Section 16 covers both, with their routes.
 
@@ -110,9 +114,9 @@ Single sign-on is OIDC with one identity provider per deployment, for users an a
 
 No token, verifier or secret ever appears in a URL warden sends, and its redirects carry `Referrer-Policy: no-referrer`.
 
-The first single sign-on of a user matches a verified email (`email_verified` must be true), ignoring case, and pins the provider's subject to the user; later sign-ins match by subject. An administrator can remove a pin with [`DELETE /admin/sso/users/{user_id}/pin`](../contract/openapi.json), so the next sign-in matches by email again. Single sign-on never asks for a second factor; `identity.require_mfa` applies to password sign-in only. Password sign-in keeps working while the provider is down, for users whose method is `password_and_sso` (the break-glass path).
+The first single sign-on of a user matches a verified email (`email_verified` must be true), ignoring case, and pins the provider's subject to the user; later sign-ins match by subject. An administrator can remove a pin with [`DELETE /admin/sso/users/{user_id}/pin`](../contract/openapi.json), so the next sign-in matches by email again. Single sign-on never asks for a second factor; a password sign-in always does (section 19.5). Password sign-in keeps working while the provider is down, for users whose method is `password_and_sso` (the break-glass path).
 
-**Administration.** The settings routes, under the product's `authorise` dependency: [`GET /admin/sso/settings`](../contract/openapi.json), [`PUT /admin/sso/settings`](../contract/openapi.json) (only the fields given change; turning `enabled` off ends every session issued through single sign-on), [`POST /admin/sso/settings/reset`](../contract/openapi.json), [`PUT /admin/sso/client-secret`](../contract/openapi.json) (stored in konfig's secrets store, never returned) and [`POST /admin/sso/test`](../contract/openapi.json) (checks the configuration without signing anyone in).
+**Administration.** The settings routes, under the product's `authorise` dependency: [`GET /admin/sso/settings`](../contract/openapi.json), [`PUT /admin/sso/settings`](../contract/openapi.json) (only the fields given change; turning `enabled` off ends every session issued through single sign-on, and is a 409 while someone signs in with it alone, section 19.4), [`POST /admin/sso/settings/reset`](../contract/openapi.json), [`PUT /admin/sso/client-secret`](../contract/openapi.json) (stored in konfig's secrets store, never returned) and [`POST /admin/sso/test`](../contract/openapi.json) (checks the configuration without signing anyone in).
 
 **Setup guides.** Numbered setup steps for each provider, filled in with the instance's own values, come with [`GET /admin/sso/settings`](../contract/openapi.json) and [`GET /admin/sso/setup-guide`](../contract/openapi.json); the steps and their sources are in [sso-providers.md](sso-providers.md).
 
@@ -168,7 +172,8 @@ Every method of `Identity` and its services that records an audit event, and `wa
 
 The rest of the administration routes, each behind the permission the product named when it built the router, with the uniform refusal for a bad bearer and 403 for a missing permission:
 
-- users: [`GET /admin/users`](../contract/openapi.json) (oldest first, ties by id, optionally one `status`; every user unless `limit` or `after` is given, in which case the body also carries `next`, the cursor to pass as `after` for the following page, null on the last), [`GET /admin/users/{user_id}`](../contract/openapi.json), [`POST /admin/users/{user_id}/status`](../contract/openapi.json) and [`POST /admin/users/{user_id}/sign-in-method`](../contract/openapi.json);
+- users: [`GET /admin/users`](../contract/openapi.json) (oldest first, ties by id, optionally one `status`; every user unless `limit` or `after` is given, in which case the body also carries `next`, the cursor to pass as `after` for the following page, null on the last), [`GET /admin/users/{user_id}`](../contract/openapi.json), [`POST /admin/users/{user_id}/status`](../contract/openapi.json), [`POST /admin/users/{user_id}/sign-in-method`](../contract/openapi.json), [`GET /admin/users/{user_id}/sign-in-method`](../contract/openapi.json), [`POST /admin/users/{user_id}/sign-in-method/resend`](../contract/openapi.json) and [`POST /admin/users/{user_id}/sign-in-method/cancel`](../contract/openapi.json) (section 19);
+- settings: [`GET /admin/sign-in-settings`](../contract/openapi.json), [`PUT /admin/sign-in-settings`](../contract/openapi.json), [`GET /admin/session-policy`](../contract/openapi.json), [`PUT /admin/session-policy`](../contract/openapi.json) and [`POST /admin/session-policy/reset`](../contract/openapi.json) (section 19), behind the `settings=` permission;
 - roles: [`GET /admin/roles`](../contract/openapi.json), [`PUT /admin/users/{user_id}/roles/{role}`](../contract/openapi.json) (optionally until `expires_at`) and [`DELETE /admin/users/{user_id}/roles/{role}`](../contract/openapi.json).
 
 The last active administrator cannot be suspended, deactivated or lose their administrator role (409), even under concurrent requests. Times are ISO 8601 with a zone offset. Error bodies are fixed `detail` messages, listed in the contract for each route; none echoes the request.
@@ -193,19 +198,7 @@ Some capabilities are in warden's Python API or command line but have no warden 
 
 **The first administrator.** warden has no command that creates one. The product's own bootstrap command, run after `warden migrate` and `warden keys rotate`, creates the user with `Identity.users.create(email, actor=..., password=...)` and gives them an administrator role with `Identity.roles.assign(user_id, role, actor=...)`. The sample's `create-admin` command does this and is safe to run twice: it looks the user up with `Identity.users.get_by_email` and checks `Identity.roles.roles_of` first. A command has no client address; a first-run setup the product serves over HTTP instead passes the client address as `source_ip` to both calls (section 12).
 
-**The session policy.** The session policy (`access_token_ttl_seconds`, `refresh_token_ttl_seconds`, `session_lifespan_seconds`, `refresh_reuse_grace_seconds` and `require_mfa`) has no warden route. Read it with `Identity.policy.current()` (the configured values are `Identity.policy.defaults`), change fields with `Identity.policy.update(actor=..., source_ip=..., **fields)` (an unknown field or a bad value raises `PolicyError`) and return to the configured values with `Identity.policy.reset(actor=..., source_ip=...)`. Each change is audited as `warden.identity.policy.changed`, with the client address the route passes as `source_ip` (section 12). Other processes of the deployment pick it up through the listener `Identity.running()` starts, and in any case within `identity.policy_cache_seconds`. The sample console's policy routes pass the address:
-
-```python
-@router.put("/policy")
-async def change_policy(request: Request, principal: PolicyAdmin) -> JSONResponse:
-    body = await request.json()
-    policy = await identity.policy.update(
-        actor=str(principal.user_id),
-        source_ip=client_ip(request, identity.config.audit.trusted_proxies),
-        **body,
-    )
-    return JSONResponse({"policy": _policy(policy)})
-```
+**The session policy.** From 0.2.0 warden has routes for it (section 19.9): [`GET /admin/session-policy`](../contract/openapi.json), [`PUT /admin/session-policy`](../contract/openapi.json) and [`POST /admin/session-policy/reset`](../contract/openapi.json), audited with the client address. In Python, read it with `Identity.policy.current()` (the configured values are `Identity.policy.defaults`), change fields with `Identity.policy.update(actor=..., source_ip=..., **fields)` (an unknown field or a bad value raises `PolicyError`) and return to the configured values with `Identity.policy.reset(actor=..., source_ip=...)`. `require_mfa` stays readable and is always true: `Identity.policy.update(require_mfa=False)` raises `PolicyError`, and an override of it stored by 0.1.x is ignored. A product that wrote its own policy routes in 0.1.x can keep them or mount warden's; either way each change is audited as `warden.identity.policy.changed`, with the client address passed as `source_ip` (section 12). Other processes of the deployment pick a change up through the listener `Identity.running()` starts, and in any case within `identity.policy_cache_seconds`.
 
 **Audit anchors.** Anchoring is on the command line (`warden audit anchor`, and `warden audit verify --anchors FILE` to check) and in Python: `warden.audit.anchor(recorder, keys, actor=..., source_ip=...)` appends a signed attestation of the chain head (returning None, and writing nothing, for an empty trail or, with `min_rows`, when fewer rows than that have been appended since the last anchor), and `verify_anchors(db, keys, read_anchors(lines))` checks the chain against anchors read back from the SIEM, as NDJSON or syslog lines. A product that wants an anchoring screen writes its routes over these, passing the client address as `source_ip` (section 12).
 
@@ -244,13 +237,13 @@ Where the browser has no WebAuthn at all, do not offer the feature, and keep eve
 
 ### 16.2 A key as a second factor
 
-**Registering, signed in.** [`POST /auth/webauthn/registration`](../contract/openapi.json), with the access token as the bearer and no body, answers with the options for `navigator.credentials.create()`. Post the answer, with an optional `nickname` (1 to 64 characters), to [`POST /auth/webauthn/registration/confirm`](../contract/openapi.json). The answer is `{"credential", "recovery_codes"}`. `recovery_codes` holds fresh codes, shown once, only when the key is the user's first second factor; otherwise the list is empty. Section 5's advice for recovery codes applies: show them at once, because warden cannot show them again.
+**Registering, signed in.** [`POST /auth/webauthn/registration`](../contract/openapi.json), with the access token as the bearer and no body, answers with the options for `navigator.credentials.create()`. Post the answer, with an optional `nickname` (1 to 64 characters), to [`POST /auth/webauthn/registration/confirm`](../contract/openapi.json). The answer is `{"credential", "recovery_codes"}`. Registering a key is a 409 (`security keys and passkeys are not allowed as a second factor`) while keys are not an allowed second factor, except for a `passkey_only` user, and registering one removes the user's TOTP enrolment when TOTP is no longer allowed (section 19.5). `recovery_codes` holds fresh codes, shown once, only when the key is the user's first second factor; otherwise the list is empty. Section 5's advice for recovery codes applies: show them at once, because warden cannot show them again.
 
 **Registering, in a forced enrolment.** A user who was told `mfa_enrolment_required` may register a key instead of TOTP. Send `{"challenge"}` to the registration route and `{"challenge", "credential", "nickname"}` to the confirm route, with no bearer. Confirming signs the user in: the answer is the `signed_in` body (section 2) with `recovery_codes` and `credential` added, and `amr` `["pwd", "hwk"]`.
 
 The registration asks for a resident key and user verification as preferences, not requirements, so a plain security key works. A credential that comes out discoverable and verified the user is recorded as such and may also sign in alone (section 16.3). A user who signs in only through single sign-on cannot register one (409).
 
-**Completing a sign-in.** When [`POST /auth/sign-in`](../contract/openapi.json) answers `mfa_required`, read `methods`: `["totp"]`, `["webauthn"]` or both. Existing clients that ignore the field keep working, because the TOTP routes are unchanged. To use a key:
+**Completing a sign-in.** When [`POST /auth/sign-in`](../contract/openapi.json) answers `mfa_required`, read `methods`: `["totp"]`, `["webauthn"]` or both (only the kinds the administrator allows). Existing clients that ignore the field keep working, because the TOTP routes are unchanged. To use a key:
 
 1. Post `{"challenge"}` to [`POST /auth/webauthn/verify/options`](../contract/openapi.json). The options list only that user's own credentials.
 2. Call `navigator.credentials.get()` with them.
@@ -258,7 +251,7 @@ The registration asks for a resident key and user verification as preferences, n
 
 A refused answer counts against the challenge as a wrong code does (`identity.mfa_max_failures`), and every refusal is the uniform refusal (section 4). A signature counter that fails to increase is refused and audited as a suspected cloned key.
 
-**Managing keys.** [`GET /auth/webauthn/credentials`](../contract/openapi.json) lists the signed-in user's keys, oldest first: `id`, `nickname`, `created_at`, `last_used_at`, `aaguid`, `backup_eligible`, `backup_state`, `discoverable` and `passkey`. `passkey` is true exactly when the key is discoverable and was registered with user verification, the rule a passkey sign-in applies (section 16.3), so a client can label which keys sign in on their own without guessing; a discoverable key registered without user verification is listed with `passkey` false and cannot sign in alone. It never shows the public key. [`PATCH /auth/webauthn/credentials/{credential_id}`](../contract/openapi.json) renames one (`{"nickname"}`; null clears it) and [`DELETE /auth/webauthn/credentials/{credential_id}`](../contract/openapi.json) removes one. Removing a user's last second factor while the session policy requires one is a 409; where none is required, removing the last one also removes the recovery codes. An id that is not the user's own, or not a UUID, is a 404.
+**Managing keys.** [`GET /auth/webauthn/credentials`](../contract/openapi.json) lists the signed-in user's keys, oldest first: `id`, `nickname`, `created_at`, `last_used_at`, `aaguid`, `backup_eligible`, `backup_state`, `discoverable` and `passkey`. `passkey` is true exactly when the key is discoverable and was registered with user verification, the rule a passkey sign-in applies (section 16.3), so a client can label which keys sign in on their own without guessing; a discoverable key registered without user verification is listed with `passkey` false and cannot sign in alone. It never shows the public key. [`PATCH /auth/webauthn/credentials/{credential_id}`](../contract/openapi.json) renames one (`{"nickname"}`; null clears it) and [`DELETE /auth/webauthn/credentials/{credential_id}`](../contract/openapi.json) removes one. Removing a user's last second factor is always a 409, since a password sign-in always needs one. An id that is not the user's own, or not a UUID, is a 404.
 
 **Lost every factor.** [`DELETE /admin/users/{user_id}/mfa`](../contract/openapi.json) is the administrator's reset of every second factor: TOTP, recovery codes, keys and passkeys, and every session. It is 204 even for a user with nothing enrolled, and 404 for no such user. `DELETE /admin/users/{user_id}/totp` (section 5) resets TOTP only and leaves keys in place.
 
@@ -268,7 +261,7 @@ A passkey is a discoverable credential registered with user verification, so the
 
 1. Post nothing to [`POST /auth/passkey/options`](../contract/openapi.json). The options carry a fresh challenge, `userVerification: "required"` and no `allowCredentials`. They are the same for every caller and reveal nothing about any account.
 2. Call `navigator.credentials.get()` with them.
-3. Post `{"credential"}` to [`POST /auth/passkey/sign-in`](../contract/openapi.json). The answer is the `signed_in` body with `amr` `["hwk", "mfa"]`. That satisfies `identity.require_mfa`: there is no second step and no `mfa_required` challenge.
+3. Post `{"credential"}` to [`POST /auth/passkey/sign-in`](../contract/openapi.json). The answer is the `signed_in` body with `amr` `["hwk", "mfa"]`. The passkey counts as both factors: there is no second step and no `mfa_required` challenge.
 
 Offer it two ways, as a sign-in screen should:
 
@@ -283,7 +276,7 @@ The options route, [`POST /auth/passkey/options`](../contract/openapi.json), is 
 
 ### 16.4 `passkey_only` users, registration links and invitations
 
-An administrator sets a user's sign-in method with [`POST /admin/users/{user_id}/sign-in-method`](../contract/openapi.json). The method `passkey_only` means the user signs in with a passkey and nothing else. Password sign-in is refused exactly as a wrong password is (the uniform refusal), single sign-on is refused, and password reset and change of password are refused as for `sso_only`. The answer to setting `passkey_only` carries `has_passkey`; when it is false, the user cannot sign in until they register a passkey. Switching a user who holds keys to `sso_only` is a 409 until the administrator's reset removes them.
+An administrator sets a user's sign-in method with [`POST /admin/users/{user_id}/sign-in-method`](../contract/openapi.json) (section 19 covers all four methods, the instance default and pending changes). The method `passkey_only` means the user signs in with a passkey and nothing else. Password sign-in is refused exactly as a wrong password is (the uniform refusal), single sign-on is refused, and password reset and change of password are refused as for `sso_only`. The answer to setting `passkey_only` carries `has_passkey`; when it is false, the user cannot sign in until they register a passkey. Switching a user who holds keys to `sso_only` is a 409 until the administrator's reset removes them.
 
 **The registration link.** [`POST /admin/users/{user_id}/passkey-registration`](../contract/openapi.json) mails the user a single-use link built from `http.passkey_registration_link` (with `{token}` where the token goes) and answers 202 with `expires_at`. The link lasts `identity.reset_ttl_seconds` (1 hour by default); sending again stops the earlier link working. There is no self-service request. It is refused (409) for a user who is not `active` or is `sso_only`, and answers 503 where no mail sender or link template is configured. For a user who has lost every passkey, reset first (`DELETE /admin/users/{user_id}/mfa`), then send the link.
 
@@ -328,7 +321,7 @@ Every sign-in failure here is the uniform refusal (section 4): no key for the us
 
 ## 17. Capabilities: what a deployment can do
 
-Some features depend on how the product deployed warden: mail needs a `MailSender`, each emailed link needs its template, passkeys need a relying party, and single sign-on needs to be enabled. A client reads the capabilities to disable or hide those controls up front, and to say why, instead of finding out from a refusal after the click. Every value is a boolean; no address, provider, issuer, domain or other setting is ever returned.
+Some features depend on how the product deployed warden: mail needs a `MailSender`, each emailed link needs its template, passkeys need a relying party, and single sign-on needs to be enabled. A client reads the capabilities to disable or hide those controls up front, and to say why, instead of finding out from a refusal after the click. On the sign-in screen every value is a boolean and no address, provider, issuer, domain or other setting is ever returned; the administration answer adds the two sign-in settings an administrator manages anyway.
 
 **The sign-in screen.** [`GET /auth/capabilities`](../contract/openapi.json) is anonymous and answers every caller the same way (it reads no bearer and no account), with `Cache-Control: no-store`:
 
@@ -340,7 +333,7 @@ Some features depend on how the product deployed warden: mail needs a `MailSende
 
 Each of these is something the screen reveals anyway by showing or hiding the control, so the route tells an anonymous caller nothing new.
 
-**Administration.** [`GET /admin/capabilities`](../contract/openapi.json), behind the user administration permission, answers six booleans:
+**Administration.** [`GET /admin/capabilities`](../contract/openapi.json), behind the user administration permission, answers six booleans and the two run-time sign-in settings (`allowed_second_factors`, a list of `totp` and `passkey`, and `default_sign_in_method`), so an administration screen can lay out its choices without a second call:
 
 | Field | When true | Disable when false |
 |---|---|---|
@@ -351,7 +344,7 @@ Each of these is something the screen reveals anyway by showing or hiding the co
 | `single_sign_on` | Single sign-on is enabled, with an issuer and a client id. | Inviting `sso_only` users is still allowed; they cannot accept until it is enabled. |
 | `webauthn` | Passkeys and security keys work. | Registering keys and inviting a `passkey_only` user (otherwise 409 `WebAuthn is not configured`); a `passkey_only` user cannot sign in. |
 
-To explain a disabled passkey registration link: with `mail_sender` false, mail is not configured; with `webauthn` false, WebAuthn is not configured; otherwise the link setting `http.passkey_registration_link` is missing. In Python, `await Identity.capabilities()` returns the same six fields as `IdentityCapabilities`.
+To explain a disabled passkey registration link: with `mail_sender` false, mail is not configured; with `webauthn` false, WebAuthn is not configured; otherwise the link setting `http.passkey_registration_link` is missing. In Python, `await Identity.capabilities()` returns the six booleans as `IdentityCapabilities`, and `await Identity.sign_in_settings()` the two settings.
 
 **When it changes.** Mail, the link templates and the relying party are start-up configuration: those fields are fixed while the process runs, so read them once per page load. `single_sign_on` follows the run-time setting an administrator changes with [`PUT /admin/sso/settings`](../contract/openapi.json), through the same cache sign-in uses, so it can lag a change by up to `identity.policy_cache_seconds` on another process.
 
@@ -443,7 +436,7 @@ A client evaluates it like this, so that it agrees with the server:
 - A passphrase has at least `passphrase.min_length` code points and `passphrase.min_words` words, splitting on `separators`.
 - The tier is the first entry of `tiers` the password meets, or none.
 
-**Proving a client agrees.** [`docs/contract/password-rule-vectors.json`](../contract/password-rule-vectors.json) holds 59 test cases generated from the server's rule engine: named policies in the description's own shape, and cases of a password, a policy name, an optional `user` (`email`, `display_name`) and the `expected` answer (`code_points`, `ok`, `passphrase`, `tier` and each rule's `code`, `passed` and `waived`). They cover every rule both ways, passphrase boundaries, tiers, combining marks and characters outside the Basic Multilingual Plane. A product runs every case through its browser code in its own tests; warden's tests fail if the file and the engine ever disagree, and run every case through the check route too. The server is always the authority: the browser's evaluation is for showing a checklist, never for deciding.
+**Proving a client agrees.** [`docs/contract/password-rule-vectors.json`](../contract/password-rule-vectors.json) holds 63 test cases generated from the server's rule engine: named policies in the description's own shape, and cases of a password, a policy name, an optional `user` (`email`, `display_name`) and the `expected` answer (`code_points`, `ok`, `passphrase`, `tier` and each rule's `code`, `passed` and `waived`). They cover every rule both ways, passphrase boundaries, tiers, combining marks and characters outside the Basic Multilingual Plane. A product runs every case through its browser code in its own tests; warden's tests fail if the file and the engine ever disagree, and run every case through the check route too. The server is always the authority: the browser's evaluation is for showing a checklist, never for deciding.
 
 ### 18.4 Live feedback: the four places
 
@@ -606,7 +599,7 @@ NIST Special Publication 800-63B-4, *Digital Identity Guidelines: Authentication
 
 **What the default follows.**
 
-- **Length over composition.** The guidance asks for a minimum length (15 characters when a password is the only factor, and at least 8 when it is part of multi-factor authentication), a permitted maximum of at least 64, Unicode accepted, each code point counted as one character, and nothing truncated. warden counts NFC-normalised code points, allows up to 1,024, accepts any Unicode text and never truncates. The seeded default's minimum of 12 meets the multi-factor figure, which suits the default `identity.require_mfa`; a deployment that allows a password alone should raise `min_length` to 15.
+- **Length over composition.** The guidance asks for a minimum length (15 characters when a password is the only factor, and at least 8 when it is part of multi-factor authentication; in 0.2.0 a password sign-in always needs a second factor, so the lower figure is the one that applies), a permitted maximum of at least 64, Unicode accepted, each code point counted as one character, and nothing truncated. warden counts NFC-normalised code points, allows up to 1,024, accepts any Unicode text and never truncates. The seeded default's minimum of 12 meets the multi-factor figure, which suits the default `identity.require_mfa`; a deployment that allows a password alone should raise `min_length` to 15.
 - **A blocklist, with the reason given.** The guidance requires comparing a new password against a list of commonly used, expected or compromised passwords, requiring a different one when it matches, and telling the user why. The built-in list, local lists and the range API do this, and a refusal carries the list's own reason.
 - **Change on evidence of compromise.** The guidance says verifiers shall not require periodic change but shall force a change on evidence of compromise. A watch-list match (at a set point, at sign-in, or in recheck) forces a change with reason `watch_list`, and an administrator can force one.
 
@@ -654,3 +647,112 @@ for (const result of answer.results) show(ruleLabel(result.code, policy.rules), 
 ```
 
 How the checklist looks is yours: the script draws nothing, and `examples/console/static/js/checklist.js` is one way to draw it. The server stays the authority. The script's answer is feedback while the user types; the watch-list check, history and minimum age are known only to the server, and the submit route decides. Call the check route after a pause, as the sections above describe, and treat a refusal at submit as the final word.
+
+## 19. Sign-in methods, instance settings and set-up (0.2.0)
+
+From 0.2.0 an administrator decides how users sign in: one instance default, an optional override for each user, and which second factors are allowed. The routes are in the administration router (behind its users permission, and the `settings=` permission for the instance-wide ones) and the auth router. A product that mounts them has nothing to write over `Identity` for any of this.
+
+### 19.1 The four methods
+
+| Method | How the user signs in |
+|---|---|
+| `password` | A password and a second factor. Never single sign-on. |
+| `password_and_sso` | A password and a second factor, or single sign-on. The break-glass path while the provider is down. |
+| `sso_only` | Single sign-on only. No password, no key registration. |
+| `passkey_only` | A passkey alone (section 16.3). No password. |
+
+A user's method in force is the **effective** method. It is the user's own setting when they have one, else the instance default. Refusing a method the user does not have is the uniform refusal (section 4): a `password` user sent to single sign-on, or an `sso_only` user's password, tell an attacker nothing.
+
+### 19.2 The default and the overrides
+
+[`GET /admin/sign-in-settings`](../contract/openapi.json) answers `{"default_sign_in_method", "allowed_second_factors", "updated_at", "updated_by"}`. The default starts as `password_and_sso`. [`PUT /admin/sign-in-settings`](../contract/openapi.json) takes either or both fields (only the fields given change) and answers `{"settings", "changed", "pending", "links_failed"}`: the new settings, then the ids of the users the new default reached at once, the users whose change now waits for its credential, and the users whose set-up link did not go out (resend each with the route in section 19.3).
+
+A user's own setting is changed with [`POST /admin/users/{user_id}/sign-in-method`](../contract/openapi.json) (`{"sign_in_method"}`: one of the four methods, or `null` to follow the default) and read with [`GET /admin/users/{user_id}/sign-in-method`](../contract/openapi.json), which answers `{"user", "sign_in_method"}` where `sign_in_method` is `{"setting", "effective", "pending"}`. `setting` is the user's own setting (`null` when they follow the default), `effective` the method in force.
+
+Changing the default moves every user who follows it, as a change to each of their methods (section 19.3). Users with their own setting are not touched.
+
+A body with no known field, an unknown field, or a value that is not valid is a 400 (`{"detail"}`, naming the field and never the value). Every change carries the client address in the audit trail (`warden.identity.sign_in_settings_changed`, `warden.identity.user.sign_in_method_changed` and the pending-change events); a screen needs to send nothing for it, but a product that wraps the Python API passes `source_ip`.
+
+### 19.3 Pending changes and set-up links
+
+A move to a method the user cannot use yet does not lock them out. If the user already holds what the new method needs (a password for `password`, a passkey for `passkey_only`), the change is made at once, and whatever the new method does not allow is removed (a password, keys, sessions signed in another way). Otherwise it is **pending**: the method in force keeps working, and warden mails the user a set-up link. `sign_in_method.pending` is then:
+
+```json
+{"from": "password_and_sso", "to": "passkey_only", "requested_at": "...",
+ "link": "passkey_registration", "link_sent_at": "..."}
+```
+
+`link` says what completes the change: `passkey_registration` (the link of section 16.4), `set_password` (a link to the product's reset-password screen, `http.reset_password_link`, section 7), or `null` for `sso_only`, which completes at the user's first single sign-on. A user who is not yet active (an invitee) changes at once; an inactive user gets a pending change and no link.
+
+An administrator can act on a pending change:
+
+- [`POST /admin/users/{user_id}/sign-in-method/resend`](../contract/openapi.json) mails a fresh link and stops the earlier one working (202 `{"status": "sent", "expires_at"}`; 502 when the mail was not delivered).
+- [`POST /admin/users/{user_id}/sign-in-method/cancel`](../contract/openapi.json) cancels it: the user stays on the method in force, and the link stops working (200, the same body as the read).
+
+Every refusal of a sign-in change is a 409 with `{"detail", "reason"}`. `reason` is `sso_not_configured` (`sso_only` while single sign-on is not set up), `webauthn` (a passkey needed without WebAuthn), `mail_sender`, `passkey_registration_link` or `reset_password_link` (a set-up link is needed and cannot be sent: say which setting is missing), `not_pending` (resend or cancel with nothing pending), `no_link` (resend for a move to `sso_only`) or `user_inactive`. Nothing changes when a change is refused. A move to `sso_only` for a user who holds keys is a 409 with `detail` only, until the administrator's reset removes them (section 16.4). `detail` is a fixed sentence; show `reason` as the machine-readable code, and your own words for it.
+
+### 19.4 The single sign-on guard
+
+Single sign-on cannot be turned off or cleared while anyone would be locked out. [`PUT /admin/sso/settings`](../contract/openapi.json) and [`POST /admin/sso/settings/reset`](../contract/openapi.json) answer a 409 while the default is `sso_only`, or an active user's own, pending or in-force method is:
+
+```json
+{"detail": "single sign-on cannot be turned off or cleared while 2 active users sign in with sso_only",
+ "reason": "sso_still_required", "default_sso_only": false,
+ "users": [{"id": "...", "email": "..."}]}
+```
+
+Show `users` as the list to move first (section 19.3) and, when `default_sso_only` is true, say that the default must change as well. The refusal is audited; nothing changed. A 400 from the same route is still a setting that is not valid.
+
+### 19.5 The second factor is always required
+
+From 0.2.0 every password sign-in needs a second factor, whatever the user's method: a right password answers `mfa_required` (the user holds an allowed factor; `methods` lists the kinds they hold) or `mfa_enrolment_required` (they hold none; `methods` lists the kinds they may enrol), never `signed_in` (section 2). Single sign-on and a passkey sign-in ask for no further step; the identity provider or the passkey is the second factor.
+
+`identity.require_mfa` is deprecated. `true` is accepted and means nothing; `false` fails at start-up with a message to remove it. `SessionPolicy.require_mfa` is read-only and always true, a run-time change to `false` is a 400 (`Identity.policy.update(require_mfa=False)` raises `PolicyError`), and an override stored by 0.1.x is ignored.
+
+**Allowed factors.** `allowed_second_factors` is `["totp"]`, `["passkey"]` or both (the default), never empty (400, `invalid settings: allowed_second_factors`). `passkey` stands for security keys and passkeys together (a challenge's `methods` calls them `webauthn`). Passkeys alone, while WebAuthn is not configured, is a 409 with `reason` `webauthn`, since a user could not enrol a factor. Recovery codes are always accepted.
+
+- **Removing a kind deletes nobody's enrolment.** Users who hold only a kind that is no longer allowed are sent to enrol an allowed one at their next password sign-in (`mfa_enrolment_required`). When they enrol it, the old enrolment is removed in the same transaction (audited as `warden.identity.mfa.disallowed_removed`), and their recovery codes stay.
+- **What a client sees.** Enrolling a kind that is not allowed is a 409 for a signed-in user (`TOTP is not allowed as a second factor`, or `security keys and passkeys are not allowed as a second factor`) and the uniform refusal under a challenge. A challenge's `methods` never offers a kind that is not allowed, and verifying with one is refused.
+- **`passkey_only` users** are exempt: they may register passkeys whatever is allowed, and the rule never removes their keys.
+
+### 19.6 Recovery codes
+
+A signed-in user can replace their recovery codes with [`POST /auth/recovery-codes/regenerate`](../contract/openapi.json), no body, from a session signed in with TOTP, a security key or a passkey within `identity.mfa_challenge_ttl_seconds` (section 5). Give them a button where they manage their second factors, and on a 403 ask for a fresh sign-in. Show the codes once.
+
+### 19.7 Setting up single sign-on
+
+The numbered, filled-in steps for each provider come with the single sign-on settings (section 6), so an administration screen shows them beside the form: [`GET /admin/sso/setup-guide`](../contract/openapi.json) answers the steps for a preset (`?preset=entra`, `google`, `okta` or `generic`), each with its title, text, the values it uses and, for the steps that end with something to copy back, which warden setting it belongs in (`issuer_url`, `client_id` or `client_secret`). The steps, with the provider documentation they were written from, are in [sso-providers.md](sso-providers.md). A product only displays them. Microsoft Entra ID needs one extra step for the email address's verified claim; that guide says so.
+
+### 19.8 Live password feedback
+
+Section 18.4 has the four places a password is set and the routes that check a candidate as it is typed, and section 18.12 the packaged browser rules. A client that already drew the checklist for 0.1.x needs nothing new, except that `docs/contract/password-rule-vectors.json` holds 63 cases (section 18.3) and the rules file is now served from the package.
+
+### 19.9 The session policy
+
+[`GET /admin/session-policy`](../contract/openapi.json) answers `{"policy", "defaults"}`: the effective policy and the configuration's own, each `{"access_token_ttl_seconds", "refresh_token_ttl_seconds", "session_lifespan_seconds", "refresh_reuse_grace_seconds", "require_mfa"}` (seconds; `require_mfa` always true). [`PUT /admin/session-policy`](../contract/openapi.json) takes any of the four lifetimes (only the fields given change), validated as a whole by the rules configuration applies at start-up (a 400 names the field and the rule); shortening the session lifespan applies to existing sessions too. [`POST /admin/session-policy/reset`](../contract/openapi.json) drops the overrides. Each change is audited as `warden.identity.policy.changed` with the client address. The sample console's policy screen draws these.
+
+### 19.10 What a signed-in user can see of their own method
+
+[`GET /auth/sign-in-method`](../contract/openapi.json) needs an access token and answers `{"sign_in_method": {"setting", "effective", "pending"}, "allowed_second_factors"}`: the caller's own method, their pending change and its link, and the factors they may use. It takes no user id; it is never anyone else's data. A screen can use it to say "your administrator is moving you to passkeys; check your email" and to offer only the allowed factors.
+
+### 19.11 Mail
+
+Two new message kinds, each replaceable like the others (`mail.template_package`): `password_setup`, the set-password link of a pending move to `password` or `password_and_sso` (`$email`, `$display_name`, `$link`, `$expires_at`), and `recovery_codes_regenerated`, the notice after a replacement (`$email`, `$display_name`, `$regenerated_at`; never the codes). The passkey registration link reuses `passkey_registration`.
+
+### 19.12 A checklist for the product
+
+- Mount the administration router with `settings=` naming the permission you want to guard the instance settings and the session policy with (it defaults to the users permission).
+- Read `GET /admin/capabilities` once per page for the allowed factors and the default, and show each user's method with its pending state from `GET /admin/users/{user_id}/sign-in-method`.
+- Handle every 409 of section 19.3 by showing its `reason`, and the guard's `users` (section 19.4).
+- Treat `mfa_enrolment_required` as a normal answer to a right password.
+- Offer recovery-code replacement, and show the codes once.
+
+## 20. Upgrading from 0.1.x
+
+1. **Remove `identity.require_mfa: false`** from configuration before upgrading, or start-up fails. `true` still works and does nothing; remove it too.
+2. **Run `warden migrate`.** It adds the instance sign-in settings and the pending-change tables, and sets users on `password_and_sso` to follow the default (which starts as `password_and_sso`, so nobody's sign-in changes). `sso_only` and `passkey_only` users keep their method.
+3. **Expect enrolment.** Users who signed in with a password alone are sent to enrol a second factor at their next sign-in. A client that handled `mfa_enrolment_required` for a forced enrolment already handles this; one that assumed `signed_in` straight from a password does not. Read `methods` on both challenge answers.
+4. **Mount the new routes.** `identity.admin_router(...)` now serves the instance settings, the per-user method read, resend and cancel, and the session policy; `identity.auth_router()` serves the own-method read. Drop any session policy routes your product wrote, or keep them (section 15).
+5. **Read the new answers.** `GET /admin/capabilities` carries two more fields, and a refusal of a method change carries `reason`; `PUT /admin/sso/settings` can answer 409 (section 19.4), where a 0.2.0 pre-release answered 400.
+6. **Mail.** Add templates for `password_setup` and `recovery_codes_regenerated` if you replace warden's.
+7. **The vectors file** holds 63 cases, and `warden/static/passwordrules.js` ships in the package (section 18.12).

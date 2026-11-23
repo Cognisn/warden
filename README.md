@@ -2,7 +2,7 @@
 
 Identity and audit for Python web applications: users, sign-in, invitations, OpenID Connect single sign-on, roles and permissions, API keys, and a tamper-evident audit trail with syslog forwarding.
 
-> **Status: 0.1.0, the first release.** Before 1.0 a minor version may break the public API, and every break is named in the [changelog](https://github.com/Cognisn/warden/blob/main/CHANGELOG.md) with an upgrade note.
+> **Status: 0.2.0.** The sign-in standard: four sign-in methods with an instance default and per-user overrides, a second factor always required for a password sign-in, the allowed second factors, set-up guides for single sign-on, and routes for all of it. [Upgrading from 0.1.x](https://github.com/Cognisn/warden/blob/main/docs/guide/clients.md#20-upgrading-from-01x) needs a configuration change first. Before 1.0 a minor version may break the public API, and every break is named in the [changelog](https://github.com/Cognisn/warden/blob/main/CHANGELOG.md) with an upgrade note.
 
 warden is built by [Cognisn](https://github.com/Cognisn) as the shared identity and audit foundation for its products. It is an embedded library, not a service: an application installs it, passes in its database connection pool and configuration, and mounts warden's FastAPI routers wherever it chooses. warden has no user interface; each application builds its own screens against warden's documented HTTP contract.
 
@@ -11,12 +11,14 @@ warden is built by [Cognisn](https://github.com/Cognisn) as the shared identity 
 **Identity**
 
 - User lifecycle: invite, activate, suspend and deactivate.
-- Password sign-in with TOTP and recovery codes, with Argon2id hashing.
+- Four sign-in methods (`password`, `password_and_sso`, `sso_only`, `passkey_only`), an instance default and an override for each user. A change a user cannot make yet is pending until they hold the credential, with a set-up link mailed, resent or cancelled by an administrator, and single sign-on cannot be turned off while anyone needs it.
+- Password sign-in with Argon2id hashing, and a second factor always required: an authenticator app (TOTP), a security key or a passkey, as the administrator allows, with recovery codes the user can replace.
+- Administration and self-service routes over all of it: the instance sign-in settings, a user's method and pending change, the signed-in user's own method, and the session policy, each audited with the client address.
 - Password policies chosen by role or pinned per user: length, character class and passphrase rules, change-period tiers, history and a minimum age; watch lists of passwords that must not be used (a built-in common-password list, local lists, Have I Been Pwned imports and an optional range lookup), an optional recheck of passwords in use, and a forced change after sign-in when a password is expired or listed.
-- Live password feedback: a policy description a browser can evaluate, a check route for each place a password is set, and a file of rule test cases that proves a client agrees with the server.
+- Live password feedback: a policy description a browser can evaluate, the evaluator itself shipped in the package as one script, a check route for each place a password is set, and a file of rule test cases that proves a client agrees with the server.
 - Passkeys and security keys (WebAuthn): as a second factor beside TOTP, or a passkey on its own, with a `passkey_only` sign-in method, an emailed registration link and passkey invitations.
 - Invitations and password reset by single-use, expiring emailed links.
-- OpenID Connect single sign-on: authorisation code with PKCE, pre-provisioned accounts only, and local password sign-in kept as the break-glass path.
+- OpenID Connect single sign-on: authorisation code with PKCE, pre-provisioned accounts only, numbered set-up steps for Microsoft Entra ID, Google, Okta and any other provider, and local password sign-in kept as the break-glass path.
 - Access tokens and rotating refresh tokens, with reuse detection and an absolute session lifespan.
 - API keys scoped to a subset of permissions.
 - Roles defined by the application as named sets of its own permissions, with FastAPI dependencies to enforce them.
@@ -61,7 +63,7 @@ An application loads its `WardenConfig` through konfig, runs `warden migrate` ag
 
 ## Sample console
 
-[`examples/console`](https://github.com/Cognisn/warden/blob/main/examples/console/README.md) is a small sample product that mounts warden's routers in FastAPI and exercises them from a plain HTML and JavaScript console: sign-in with TOTP, single sign-on, invitations and password reset (with an in-memory outbox), administration, API keys, and the audit trail with export, verification, anchors and syslog. It shows how a product integrates warden, using only warden's public surface. It is for local development only, not a deployment template, and it is not part of the published package.
+[`examples/console`](https://github.com/Cognisn/warden/blob/main/examples/console/README.md) is a small sample product that mounts warden's routers in FastAPI and exercises them from a plain HTML and JavaScript console: sign-in with a second factor, single sign-on with its set-up steps, the sign-in settings and each user's method, invitations and password reset (with an in-memory outbox), administration, API keys, and the audit trail with export, verification, anchors and syslog. It shows how a product integrates warden, using only warden's public surface. It is for local development only, not a deployment template, and it is not part of the published package.
 
 ## Licence
 
