@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0a3] - 2026-11-23
+
+Wave 2: the browser password rules published in the package (feat/0.2.0-password-evaluator).
+
 ### Added
 
 - The browser password rules are published in the package (ruling CS23): `warden/static/passwordrules.js`, one classic script with no DOM and no network that evaluates the policy description the policy routes return, defining the global `WardenPasswordRules` (it also loads as a side-effect import and under Node `require`). `warden.static.path("passwordrules.js")` returns its location so a product serves it from its own static route; warden serves no file itself. The script ships in the wheel and the sdist. The clients guide has a section on serving and calling it, and on the server staying authoritative (18.12).
