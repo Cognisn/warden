@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0a4] - 2026-11-23
+
+Wave 2: single sign-on setup guides for each provider preset (feat/0.2.0-sso-setup-guides).
+
 ### Added
 
 - Single sign-on setup guides (ruling CS15): each provider preset (Microsoft Entra ID, Google, Okta, other OpenID Connect) now carries numbered, ordered steps for that provider's admin console, with typed placeholders (`callback_uri`, `scopes`, `issuer`, `display_name`) and the settings to copy values back into (`issuer_url`, `client_id`, `client_secret`). `warden.identity.sso.presets.setup_guide` returns a preset's steps filled in from the instance's settings and the product's callback URI, and an unknown preset gets the generic guide. `GET <admin>/sso/settings` gains `setup_guide` for the current preset, and the new `GET <admin>/sso/setup-guide` (optional `?preset=`) answers for any preset, behind the same authorisation. `PresetGuide` keeps `label`, `issuer_hint` and `notes` and gains `steps`; the `presets` list in the settings answer is unchanged. The HTTP contract is regenerated. `docs/guide/sso-providers.md` gives the four guides in prose with the sources each was checked against, and records that Microsoft Entra ID publishes no `email_verified` claim, which warden requires on first sign-in.
