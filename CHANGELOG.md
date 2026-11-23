@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0a5] - 2026-11-23
+
+Wave 2: MFA always required for password sign-in, the allowed second factors enforced, and self-service recovery-code replacement (feat/0.2.0-mfa-factors).
+
 ### Added
 
 - The allowed second factors are enforced (ruling CS14): the `mfa_required` challenge names and accepts only the allowed kinds a user holds (a recovery code is always accepted); a user holding no allowed factor, never enrolled or holding only a kind since removed, is sent to forced enrolment of an allowed one after the password, by TOTP or by a security key or passkey; enrolling a kind that is not allowed is refused, signed in (409 `TOTP is not allowed as a second factor`, or `security keys and passkeys are not allowed as a second factor`, with the new `WebAuthnRefusal.FACTOR_NOT_ALLOWED`) or under a challenge (the uniform refusal). Removing a kind deletes nobody's enrolment; once a user enrols an allowed factor, the enrolments no longer allowed are removed and audited as the new action `warden.identity.mfa.disallowed_removed`. A `passkey_only` user's passkeys are their sign-in credential and are not affected.
