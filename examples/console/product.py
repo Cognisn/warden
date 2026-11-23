@@ -32,7 +32,7 @@ PERMISSIONS = {
     USERS_MANAGE: "Manage users, roles and invitations",
     KEYS_MANAGE: "Manage API keys",
     SSO_MANAGE: "Manage single sign-on",
-    POLICY_MANAGE: "Manage the session policy",
+    POLICY_MANAGE: "Manage the instance sign-in settings and the session policy",
     PASSWORDS_MANAGE: "Manage password policies, watch lists and the exposure report",
     AUDIT_READ: "Read and verify the audit trail",
     AUDIT_EXPORT: "Export the audit trail",

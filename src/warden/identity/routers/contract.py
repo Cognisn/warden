@@ -49,18 +49,22 @@ __all__ = [
     "ResetCompleteBody",
     "ResetRequestBody",
     "RoleAssignBody",
+    "SessionPolicyBody",
     "SignInBody",
     "SignInMethodBody",
+    "SignInSettingsBody",
     "SsoClientSecretBody",
     "SsoInvitationBody",
     "StagedGrantBody",
     "StatusBody",
+    "WardenAffectedSsoUser",
     "WardenAffectedUsers",
     "WardenAffectedUsersProposal",
     "WardenApiKey",
     "WardenApiKeyList",
     "WardenCapabilities",
     "WardenChallengeIssued",
+    "WardenChangeRefused",
     "WardenChangeRequired",
     "WardenDetail",
     "WardenEnrolmentConfirmed",
@@ -71,7 +75,9 @@ __all__ = [
     "WardenInvitationAccepted",
     "WardenInvitationIssued",
     "WardenInvitationList",
+    "WardenLinkResent",
     "WardenNewApiKeyIssued",
+    "WardenOwnSignInMethod",
     "WardenPasskeyInvitationAccepted",
     "WardenPasskeyLinkSent",
     "WardenPasskeyRegistered",
@@ -103,13 +109,18 @@ __all__ = [
     "WardenRoleAssignment",
     "WardenRoleList",
     "WardenSecondFactorAnswer",
+    "WardenSessionPolicy",
+    "WardenSessionPolicyFields",
     "WardenSignInAnswer",
     "WardenSignInCapabilities",
     "WardenSignInMethodSet",
+    "WardenSignInSettings",
+    "WardenSignInSettingsChanged",
     "WardenSignedIn",
     "WardenSignedInAfterEnrolment",
     "WardenSsoCheck",
     "WardenSsoReport",
+    "WardenSsoStillRequired",
     "WardenStagedGrant",
     "WardenTotpEnrolment",
     "WardenUser",
@@ -143,6 +154,7 @@ __all__ = [
 
 
 SignInMethodName = Literal["password", "password_and_sso", "sso_only", "passkey_only"]
+SecondFactorName = Literal["totp", "passkey"]
 
 
 class _Doc(BaseModel):
@@ -434,6 +446,15 @@ class WardenCapabilities(_Doc):
     )
     webauthn: bool = Field(
         description="Passkeys and security keys work: a relying party id is known."
+    )
+    allowed_second_factors: list[SecondFactorName] = Field(
+        description=(
+            "The second factors the administrator allows, never empty: the run-time setting "
+            "`GET /sign-in-settings` reads."
+        )
+    )
+    default_sign_in_method: SignInMethodName = Field(
+        description="The method every user without one of their own follows."
     )
 
 
@@ -1177,6 +1198,115 @@ WardenUserDetail.model_rebuild()
 # Response fragments.
 
 _NO_STORE_HEADER = {"description": "Always `no-store`.", "schema": {"type": "string"}}
+
+
+class WardenSignInSettings(_Doc):
+    default_sign_in_method: SignInMethodName = Field(
+        description="The method every user without one of their own follows."
+    )
+    allowed_second_factors: list[SecondFactorName] = Field(
+        description=(
+            "The second factors users may enrol and be challenged with, never empty. "
+            "Recovery codes are always the backup."
+        )
+    )
+    updated_at: datetime
+    updated_by: str | None = Field(description="The actor who last changed the settings.")
+
+
+class WardenSignInSettingsChanged(_Doc):
+    settings: WardenSignInSettings
+    changed: list[str] = Field(
+        description="User ids whose method in force changed at once (UUIDs)."
+    )
+    pending: list[str] = Field(
+        description="User ids whose change waits for its credential (UUIDs)."
+    )
+    links_failed: list[str] = Field(
+        description="User ids whose set-up link was not delivered (UUIDs); resend each."
+    )
+
+
+class WardenChangeRefused(_Doc):
+    detail: str = Field(description="A fixed message; never a setting's value.")
+    reason: str = Field(
+        description=(
+            "Why the change cannot be made: `sso_not_configured`, `webauthn`, `mail_sender`, "
+            "`passkey_registration_link`, `reset_password_link`, `not_pending`, `no_link`, "
+            "`user_inactive`, or a refusal the route names."
+        )
+    )
+
+
+class WardenLinkResent(_Doc):
+    status: Literal["sent"]
+    expires_at: datetime = Field(description="When the new link stops working.")
+
+
+class WardenOwnSignInMethod(_Doc):
+    sign_in_method: WardenSignInMethodState
+    allowed_second_factors: list[SecondFactorName] = Field(
+        description="The second factors the administrator allows."
+    )
+
+
+class WardenSessionPolicyFields(_Doc):
+    access_token_ttl_seconds: int
+    refresh_token_ttl_seconds: int
+    session_lifespan_seconds: int
+    refresh_reuse_grace_seconds: int
+    require_mfa: Literal[True] = Field(
+        description="Deprecated and always true: a password sign-in always needs a second factor."
+    )
+
+
+class WardenSessionPolicy(_Doc):
+    policy: WardenSessionPolicyFields = Field(description="The effective policy.")
+    defaults: WardenSessionPolicyFields = Field(
+        description="The configuration's policy, which a reset returns to."
+    )
+
+
+class WardenAffectedSsoUser(_Doc):
+    id: str = Field(description="UUID.")
+    email: str
+
+
+class WardenSsoStillRequired(_Doc):
+    detail: str
+    reason: Literal["sso_still_required"]
+    default_sso_only: bool = Field(description="Whether the instance default is `sso_only`.")
+    users: list[WardenAffectedSsoUser] = Field(
+        description="Each active user whose own, pending or in-force method is `sso_only`."
+    )
+
+
+class SignInSettingsBody(_Doc):
+    """At least one field; only the fields given change."""
+
+    default_sign_in_method: SignInMethodName | None = Field(
+        default=None,
+        description=(
+            "The new instance default. Moves every user who follows it: at once for those "
+            "holding its credential, otherwise pending with a set-up link."
+        ),
+    )
+    allowed_second_factors: list[SecondFactorName] | None = Field(
+        default=None, description="`totp`, `passkey` or both; never empty."
+    )
+
+
+class SessionPolicyBody(_Doc):
+    """At least one field; only the fields given change."""
+
+    access_token_ttl_seconds: int | None = Field(default=None, description="60 to 3600.")
+    refresh_token_ttl_seconds: int | None = Field(
+        default=None, description="At least 300 and longer than the access token lifetime."
+    )
+    session_lifespan_seconds: int | None = Field(
+        default=None, description="At least 300 and not shorter than the refresh token lifetime."
+    )
+    refresh_reuse_grace_seconds: int | None = Field(default=None, description="0 to 120.")
 
 
 def no_store() -> dict[str, Any]:

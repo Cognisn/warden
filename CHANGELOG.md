@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+Wave 3: routes over everything in 0.2.0, the client guide and the sample console (feat/0.2.0-settings-routes).
+
+### Added
+
+- Administration routes for the instance sign-in settings (ruling CS22): `GET` and `PUT <admin>/sign-in-settings` read and change the default sign-in method and the allowed second factors, and answer who the change moved at once (`changed`), who waits for a credential (`pending`) and whose set-up link was not delivered (`links_failed`). Each refusal answers `{"detail", "reason"}`: `sso_not_configured`, `webauthn`, `mail_sender` and the others.
+- `GET <admin>/users/{user_id}/sign-in-method` (a user's own setting, the method in force and any pending change), `POST <admin>/users/{user_id}/sign-in-method/resend` (a fresh set-up link) and `POST <admin>/users/{user_id}/sign-in-method/cancel` (drop a pending change). The existing `POST <admin>/users/{user_id}/sign-in-method` now names its refusal `reason` too.
+- `GET <auth>/sign-in-method`: the signed-in user's own method, pending change and the allowed second factors, never anyone else's.
+- A router for the session policy (0.2.0 backlog item 2): `GET` and `PUT <admin>/session-policy` and `POST <admin>/session-policy/reset`, audited with the client address. `require_mfa` is read-only and always true.
+- `Identity.admin_router(settings=...)` names the permission that guards the instance sign-in settings and the session policy; it defaults to the users permission, so existing products see no change.
+- `GET <admin>/capabilities` adds `allowed_second_factors` and `default_sign_in_method`. The anonymous `GET <auth>/capabilities` is unchanged and answers every caller identically.
+- Client guide: passkey sign-in refused while passkey is not allowed, `factor_not_allowed` among the audited reasons, `WebAuthn.finish_authentication`'s `decide` callback, and the Entra `xms_edov` rule (also in the 0.1.x upgrade steps).
+- Client guide chapters 19 (sign-in methods, the instance settings, pending changes and set-up links, the single sign-on guard, allowed factors and the always-on second factor, recovery codes, set-up steps, the session policy) and 20 (upgrading from 0.1.x).
+- Sample console: screens for the instance sign-in settings and the allowed factors, each user's method with its pending state (resend, cancel), recovery-code replacement, the single sign-on setup steps and the session policy.
+
+### Changed
+
+- `PUT` and `POST /sso/settings/reset` under the single sign-on administration routes answer 409 `{"detail", "reason": "sso_still_required", "default_sso_only", "users"}` (the users to move first) where they answered 400 for the single sign-on guard.
+- The client guide's stale statements are corrected: the password rules vectors file holds 63 cases, a password is always part of multi-factor authentication, `require_mfa` is deprecated, and the session policy has routes.
+- The sample console no longer offers to switch `require_mfa` off (README walk and policy screen), and its browser check completes the second factor at sign-in.
+- The HTTP contract is regenerated.
+
 ## [0.2.0a6] - 2026-11-24
 
 Wave 3: passkey sign-in follows the allowed second factors with equal work on every refusal, and Entra's xms_edov accepted as a verified email (fix/0.2.0-sign-in-follow-ups).

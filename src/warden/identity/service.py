@@ -553,13 +553,15 @@ class Identity:
         invitations: str | None = None,
         api_keys: str | None = None,
         password_policies: str | None = None,
+        settings: str | None = None,
     ) -> APIRouter:
         """Administration routes; mount under ``config.http.admin_prefix``.
 
         ``permission`` guards the user routes, and the role, invitation, API
-        key and password policy routes unless they are given their own
-        permission (``password_policies`` also guards the watch list and
-        exposure routes).
+        key, password policy and settings routes unless they are given their
+        own permission (``password_policies`` also guards the watch list and
+        exposure routes; ``settings`` guards the instance sign-in settings and
+        the session policy).
         """
         from warden.identity.routers.admin import build_admin_router
 
@@ -570,6 +572,7 @@ class Identity:
             invitations=invitations,
             api_keys=api_keys,
             password_policies=password_policies,
+            settings=settings,
         )
 
     @property

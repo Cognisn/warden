@@ -11,7 +11,7 @@ GAPS = Path(__file__).resolve().parents[2] / "examples" / "console" / "static" /
 def test_every_gap_names_its_question() -> None:
     source = GAPS.read_text(encoding="utf-8")
     entries = re.findall(r"^  (\w+): \{\n    question: \"([^\"]*)\"", source, re.MULTILINE)
-    assert len(entries) >= 5
+    assert len(entries) >= 4
     for name, question in entries:
         assert re.fullmatch(r"Q[1-9][0-9]*", question), (name, question)
 
@@ -69,3 +69,16 @@ def test_forbid_user_details_is_no_longer_a_gap() -> None:
 def test_the_users_screen_resets_totp_through_wardens_route() -> None:
     admin = (GAPS.parent / "admin.js").read_text(encoding="utf-8")
     assert 'call("DELETE", `${admin}/users/${id}/totp`)' in admin
+
+
+def test_the_session_policy_is_no_longer_a_gap() -> None:
+    """Question 7 was answered with warden's own routes in 0.2.0 (ruling CS22)."""
+    source = GAPS.read_text(encoding="utf-8")
+    assert '"Q7"' not in source
+    assert "policyRoute" not in source
+    readme = README.read_text(encoding="utf-8")
+    gaps = readme.split("## Gaps", 1)[1].split("\n## ", 1)[0]
+    assert "question 7" not in gaps
+    admin = (GAPS.parent / "admin.js").read_text(encoding="utf-8")
+    assert "${admin}/session-policy" in admin
+    assert "/api/policy" not in admin

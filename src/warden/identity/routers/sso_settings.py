@@ -5,8 +5,8 @@
 |---|---|---|
 | ``GET /sso/settings`` | | the effective settings, the callback URI, presets, the setup guide |
 | ``GET /sso/setup-guide`` | ``?preset=`` | numbered setup steps for a provider, filled in |
-| ``PUT /sso/settings`` | fields to change | the effective settings |
-| ``POST /sso/settings/reset`` | | the configuration's settings |
+| ``PUT /sso/settings`` | fields to change | the effective settings; 409 under the guard |
+| ``POST /sso/settings/reset`` | | the configuration's settings; 409 as above |
 | ``PUT /sso/client-secret`` | ``client_secret`` | 204; the secret is never returned |
 | ``POST /sso/test`` | | a configuration report; nobody is signed in |
 | ``DELETE /sso/users/{user_id}/pin`` | | 204, or 404 if there was no pin |
@@ -32,12 +32,13 @@ from warden.identity.routers.contract import (
     PRODUCT_AUTHORISATION,
     SsoClientSecretBody,
     WardenSsoReport,
+    WardenSsoStillRequired,
     detail,
     json_body,
     no_store,
 )
 from warden.identity.sso.presets import PRESETS, SetupGuide, setup_guide
-from warden.identity.sso.settings import SsoSettings, SsoSettingsError
+from warden.identity.sso.settings import SsoSettings, SsoSettingsError, SsoStillRequired
 
 if TYPE_CHECKING:
     from warden.identity.service import Identity
@@ -126,6 +127,31 @@ class SsoSettingsBody(BaseModel):
 
 _VIEW = {"model": WardenSsoSettingsView, "description": "The effective settings."}
 _GUIDE = {"model": WardenSetupGuide, "description": "The filled-in setup steps."}
+
+
+def _still_required(exc: SsoStillRequired) -> Response:
+    """The SSO guard (ruling CS17): the reason and the users to move first."""
+    return json_response(
+        {
+            "detail": str(exc),
+            "reason": "sso_still_required",
+            "default_sso_only": exc.default_sso_only,
+            "users": [{"id": str(uid), "email": email} for uid, email in exc.users],
+        },
+        409,
+    )
+
+
+_STILL_REQUIRED = {
+    "model": WardenSsoStillRequired,
+    "description": (
+        "Single sign-on cannot be turned off or cleared while the default sign-in method or "
+        "an active user's own, pending or in-force method is `sso_only`. `users` lists them "
+        "to move first (`POST /users/{user_id}/sign-in-method`); `default_sso_only` says "
+        "whether the default is the cause. Nothing changed."
+    ),
+    "headers": no_store(),
+}
 
 
 def build_sso_settings_router(identity: "Identity", *, authorise: Callable[..., Any]) -> APIRouter:
@@ -227,6 +253,7 @@ def build_sso_settings_router(identity: "Identity", *, authorise: Callable[..., 
                 "the body must be a JSON object",
                 "invalid settings: issuer_url",
             ),
+            409: _STILL_REQUIRED,
             **PRODUCT_AUTHORISATION,
         },
         openapi_extra=json_body(SsoSettingsBody),
@@ -243,6 +270,8 @@ def build_sso_settings_router(identity: "Identity", *, authorise: Callable[..., 
             settings = await identity.sso.settings.update(
                 actor=actor_id(actor), source_ip=source(request), **body
             )
+        except SsoStillRequired as exc:
+            return _still_required(exc)
         except SsoSettingsError as exc:
             return json_response({"detail": str(exc)}, 400)
         return view(settings)
@@ -251,12 +280,16 @@ def build_sso_settings_router(identity: "Identity", *, authorise: Callable[..., 
         "/sso/settings/reset",
         summary="Drop the run-time overrides",
         description="Back to the configuration's settings.",
-        responses={200: _VIEW, **PRODUCT_AUTHORISATION},
+        responses={200: _VIEW, 409: _STILL_REQUIRED, **PRODUCT_AUTHORISATION},
     )
     async def reset_settings(request: Request, actor: Actor) -> Response:
-        return view(
-            await identity.sso.settings.reset(actor=actor_id(actor), source_ip=source(request))
-        )
+        try:
+            settings = await identity.sso.settings.reset(
+                actor=actor_id(actor), source_ip=source(request)
+            )
+        except SsoStillRequired as exc:
+            return _still_required(exc)
+        return view(settings)
 
     @router.put(
         "/sso/client-secret",

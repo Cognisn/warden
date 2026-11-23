@@ -1,5 +1,5 @@
-// Administration: users and roles, invitations, API keys, the session policy and
-// single sign-on, all through warden's administration routes except the policy.
+// Administration: users and roles, invitations, API keys, the sign-in settings, the
+// session policy and single sign-on, all through warden's administration routes.
 
 import { call, me, prefixes } from "./api.js";
 import { action, card, field, form, h, input, json, outcome, select, status, table, when, zoned } from "./dom.js";
@@ -7,7 +7,24 @@ import { gap } from "./gaps.js";
 import { userPasswordCard } from "./passwords.js";
 
 const STATUSES = ["active", "suspended", "deactivated", "invited"];
-const METHODS = ["password_and_sso", "sso_only", "passkey_only"];
+const METHODS = ["password", "password_and_sso", "sso_only", "passkey_only"];
+const FACTORS = [
+  ["totp", "An authenticator app (TOTP)"],
+  ["passkey", "A security key or passkey"],
+];
+
+// A pending change as a sentence: what it moves to, what completes it and when the link went.
+function pendingText(pending) {
+  if (!pending) return "None.";
+  const how =
+    pending.link === "passkey_registration"
+      ? "waiting for the user to register a passkey from the mailed link"
+      : pending.link === "set_password"
+        ? "waiting for the user to choose a password from the mailed link"
+        : "completes at the user's first single sign-on";
+  const sent = pending.link_sent_at ? `; link mailed ${when(pending.link_sent_at)}` : "";
+  return `${pending.from} to ${pending.to}, requested ${when(pending.requested_at)}: ${how}${sent}.`;
+}
 
 function chosen(el, value) {
   el.value = value;
@@ -20,7 +37,7 @@ function chosen(el, value) {
 async function capabilities(admin) {
   const answer = await call("GET", `${admin}/capabilities`);
   if (answer.ok) return answer.data;
-  return { mail_sender: true, invitations: true, password_reset: true, passkey_registration_link: true, single_sign_on: true, webauthn: true };
+  return { mail_sender: true, invitations: true, password_reset: true, passkey_registration_link: true, single_sign_on: true, webauthn: true, allowed_second_factors: ["totp", "passkey"], default_sign_in_method: "password_and_sso" };
 }
 
 // Why an action that mails cannot be used, from the booleans alone.
@@ -86,6 +103,8 @@ export async function usersScreen(main) {
       return;
     }
     const { user, roles, webauthn_credentials: keys } = answer.data;
+    const methodAnswer = await call("GET", `${admin}/users/${id}/sign-in-method`);
+    const method = methodAnswer.ok ? methodAnswer.data.sign_in_method : { setting: user.sign_in_method, effective: user.sign_in_method, pending: null };
     // The password policy routes have their own permission (passwords.manage).
     const passwordCard = managesPasswords ? userPasswordCard(admin, id) : null;
     const out = h("div", {});
@@ -101,18 +120,53 @@ export async function usersScreen(main) {
           [field("Status", chosen(select("status", STATUSES.map((s) => [s])), user.status)), h("button", {}, "Set status")],
           async ({ status: value }) => after(await call("POST", `${admin}/users/${id}/status`, { body: { status: value } }), "status set"),
         ),
+        h("h4", {}, "Sign-in method"),
+        h(
+          "p",
+          {},
+          `Own setting: ${method.setting ?? "none (follows the instance default)"}. In force: ${method.effective}. Pending: ${pendingText(method.pending)}`,
+        ),
         form(
           "inline",
-          [field("Sign-in method", chosen(select("sign_in_method", METHODS.map((m) => [m])), user.sign_in_method)), h("button", {}, "Set method")],
-          async (values) => {
-            const result = await call("POST", `${admin}/users/${id}/sign-in-method`, { body: values });
-            await after(result, "method set");
+          [
+            field(
+              "Set method",
+              chosen(select("sign_in_method", [["", "follow the instance default"], ...METHODS.map((m) => [m])]), method.setting ?? ""),
+            ),
+            h("button", {}, "Set method"),
+          ],
+          async ({ sign_in_method: value }) => {
+            const result = await call("POST", `${admin}/users/${id}/sign-in-method`, { body: { sign_in_method: value || null } });
+            await after(result, "method set (pending until the user holds its credential)");
             if (result.ok && result.data.has_passkey === false) {
               out.prepend(status("info", "This user holds no passkey, so they cannot sign in yet: send them a passkey registration link."));
             }
             return null;
           },
         ),
+        method.pending
+          ? h(
+              "p",
+              {},
+              unavailable(
+                action("Resend the set-up link", async () => {
+                  const result = await call("POST", `${admin}/users/${id}/sign-in-method/resend`);
+                  await show(id);
+                  detail.prepend(outcome(result, "sent; see the outbox"));
+                  return null;
+                }, out, "quiet"),
+                method.pending.link !== null,
+                "A move to sso_only has no link: it completes at the user's first single sign-on.",
+              ),
+              " ",
+              action("Cancel the pending change", async () => {
+                const result = await call("POST", `${admin}/users/${id}/sign-in-method/cancel`);
+                await show(id);
+                detail.prepend(outcome(result, "cancelled; the user stays on the method in force"));
+                return null;
+              }, out, "danger"),
+            )
+          : null,
         h("p", { class: "muted" }, `Security keys and passkeys held: ${keys}.`),
         h(
           "p",
@@ -388,17 +442,56 @@ export async function apiKeysScreen(main) {
   listArea.replaceChildren(await load());
 }
 
-// Session policy (the sample's own routes over Identity.policy)
+// Sign-in settings: the instance default method and the allowed second factors
+// (warden's GET and PUT <admin>/sign-in-settings)
+
+export async function signInSettingsScreen(main) {
+  const { admin } = await prefixes();
+  const area = h("div", {});
+  const render = (answer) => {
+    if (!answer.ok) return outcome(answer);
+    const { default_sign_in_method: method, allowed_second_factors: allowed } = answer.data;
+    return h(
+      "div",
+      {},
+      form(
+        "stack",
+        [
+          field("Default sign-in method", chosen(select("default_sign_in_method", METHODS.map((m) => [m])), method)),
+          h("fieldset", {}, h("legend", {}, "Allowed second factors"), FACTORS.map(([value, label]) => h("label", { class: "check" }, h("input", { type: "checkbox", name: `factor:${value}`, checked: allowed.includes(value) }), label))),
+          h("button", {}, "Save sign-in settings"),
+        ],
+        async (values) => {
+          const factors = FACTORS.map(([value]) => value).filter((value) => `factor:${value}` in values);
+          const result = await call("PUT", `${admin}/sign-in-settings`, { body: { default_sign_in_method: values.default_sign_in_method, allowed_second_factors: factors } });
+          const lines = [];
+          if (result.ok) {
+            lines.push(`${result.data.changed.length} users moved at once, ${result.data.pending.length} waiting for a credential.`);
+            if (result.data.links_failed.length > 0) lines.push(`The set-up link did not go out for ${result.data.links_failed.length} users: resend each from Users and roles.`);
+          } else if (result.data && result.data.reason) {
+            lines.push(`Refused (${result.data.reason}): ${result.data.detail}`);
+          }
+          return h("div", {}, lines.map((line) => status(result.ok ? "ok" : "error", line)), outcome(result, "saved"));
+        },
+      ),
+      h("p", { class: "muted" }, "A new default moves every user who follows it: at once for those who hold its credential, otherwise as a pending change with a set-up link. Removing a second factor deletes nobody's enrolment: users are asked to enrol an allowed one at their next sign-in. A second factor is always required for a password sign-in; there is no switch for it."),
+    );
+  };
+  main.replaceChildren(h("h2", {}, "Sign-in settings"), card("Instance settings", area));
+  area.replaceChildren(render(await call("GET", `${admin}/sign-in-settings`)));
+}
+
+// Session policy (warden's GET and PUT <admin>/session-policy)
 
 const POLICY_FIELDS = [
-  ["access_token_ttl_seconds", "number"],
-  ["refresh_token_ttl_seconds", "number"],
-  ["session_lifespan_seconds", "number"],
-  ["refresh_reuse_grace_seconds", "number"],
-  ["require_mfa", "checkbox"],
+  "access_token_ttl_seconds",
+  "refresh_token_ttl_seconds",
+  "session_lifespan_seconds",
+  "refresh_reuse_grace_seconds",
 ];
 
 export async function policyScreen(main) {
+  const { admin } = await prefixes();
   const area = h("div", {});
   const render = (answer) => {
     if (!answer.ok) return outcome(answer);
@@ -409,33 +502,61 @@ export async function policyScreen(main) {
       form(
         "stack",
         [
-          POLICY_FIELDS.map(([name, type]) =>
-            field(
-              `${name} (configured ${defaults ? defaults[name] : "?"})`,
-              type === "checkbox"
-                ? h("input", { type: "checkbox", name, checked: policy[name] })
-                : input(name, { type: "number", value: policy[name], min: 0 }),
-            ),
-          ),
+          POLICY_FIELDS.map((name) => field(`${name} (configured ${defaults ? defaults[name] : "?"})`, input(name, { type: "number", value: policy[name], min: 0 }))),
+          h("p", { class: "muted" }, "A second factor is always required for a password sign-in: require_mfa is read-only and always on."),
           h("button", {}, "Save policy"),
         ],
         async (values) => {
           const body = {};
-          for (const [name, type] of POLICY_FIELDS) {
-            body[name] = type === "checkbox" ? name in values : Number(values[name]);
-          }
-          const result = await call("PUT", "/api/policy", { body });
+          for (const name of POLICY_FIELDS) body[name] = Number(values[name]);
+          const result = await call("PUT", `${admin}/session-policy`, { body });
           return outcome(result, "saved; shortening the lifespan cuts existing sessions off");
         },
       ),
-      h("div", {}, action("Return to the configuration", async () => outcome(await call("POST", "/api/policy/reset"), "reset"), area, "quiet")),
+      h("div", {}, action("Return to the configuration", async () => outcome(await call("POST", `${admin}/session-policy/reset`), "reset"), area, "quiet")),
     );
   };
-  main.replaceChildren(h("h2", {}, "Session policy"), gap("policyRoute"), card("Policy", area));
-  area.replaceChildren(render(await call("GET", "/api/policy")));
+  main.replaceChildren(h("h2", {}, "Session policy"), card("Policy", area));
+  area.replaceChildren(render(await call("GET", `${admin}/session-policy`)));
 }
 
 // Single sign-on settings and the configuration test
+
+// The numbered steps for a provider, with this instance's values already filled in.
+function setupGuide(guide) {
+  return h(
+    "div",
+    { class: "guide" },
+    h("h4", {}, `Set up ${guide.label}`),
+    h("p", { class: "muted" }, guide.notes),
+    h(
+      "ol",
+      {},
+      guide.steps.map((step) =>
+        h(
+          "li",
+          {},
+          h("strong", {}, step.title),
+          h("div", {}, step.text),
+          step.copy_back.length > 0 ? h("div", { class: "muted" }, `Copy back into warden: ${step.copy_back.map((c) => c.label).join(", ")}.`) : null,
+        ),
+      ),
+    ),
+  );
+}
+
+// The 409 warden answers when single sign-on cannot be turned off: who to move first.
+function stillRequired(result) {
+  if (result.ok || result.status !== 409 || !result.data || result.data.reason !== "sso_still_required") return null;
+  const { default_sso_only: byDefault, users } = result.data;
+  return h(
+    "div",
+    {},
+    status("error", "Single sign-on is still needed: move these users to another sign-in method first (Users and roles)."),
+    byDefault ? status("error", "The instance default is sso_only: change it under Sign-in settings.") : null,
+    h("ul", {}, users.map((u) => h("li", {}, u.email))),
+  );
+}
 
 export async function ssoScreen(main) {
   const { admin } = await prefixes();
@@ -471,12 +592,26 @@ export async function ssoScreen(main) {
             provider_preset: values.provider_preset,
           };
           const result = await call("PUT", `${admin}/sso/settings`, { body });
-          return outcome(result, "saved; turning single sign-on off ends every session it issued");
+          return h("div", {}, stillRequired(result), outcome(result, "saved; turning single sign-on off ends every session it issued"));
         },
       ),
       h("details", {}, h("summary", {}, "Presets"), json(s.presets)),
+      setupGuide(s.setup_guide),
+      h(
+        "p",
+        {},
+        h("label", {}, "Steps for another provider ", select("preset", s.presets.map((p) => [p.preset, p.label]), { id: "guide-preset" })),
+        " ",
+        action("Show the steps", async () => {
+          const chosenPreset = document.getElementById("guide-preset").value;
+          const other = await call("GET", `${admin}/sso/setup-guide?preset=${encodeURIComponent(chosenPreset)}`);
+          return other.ok ? setupGuide(other.data) : outcome(other);
+        }, guideArea, "quiet"),
+      ),
+      guideArea,
     );
   };
+  const guideArea = h("div", {});
   const secret = form(
     "inline",
     [field("Client secret", input("client_secret", { type: "password", autocomplete: "off", required: true })), h("button", {}, "Store secret")],
@@ -495,7 +630,10 @@ export async function ssoScreen(main) {
       h("p", { class: "muted" }, "Runs discovery, fetches the provider's keys and checks the client secret; nobody is signed in."),
       action("Test the configuration", async () => outcome(await call("POST", `${admin}/sso/test`), "report"), out),
       " ",
-      action("Return to the configuration file's settings", async () => outcome(await call("POST", `${admin}/sso/settings/reset`), "reset"), out, "quiet"),
+      action("Return to the configuration file's settings", async () => {
+        const result = await call("POST", `${admin}/sso/settings/reset`);
+        return h("div", {}, stillRequired(result), outcome(result, "reset"));
+      }, out, "quiet"),
       out,
     ),
     card("Client secret", secret),

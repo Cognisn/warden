@@ -161,6 +161,7 @@ def build_console(
             permission=product.USERS_MANAGE,
             api_keys=product.KEYS_MANAGE,
             password_policies=product.PASSWORDS_MANAGE,
+            settings=product.POLICY_MANAGE,
         ),
         prefix=http.admin_prefix,
     )
