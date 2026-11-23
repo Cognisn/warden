@@ -3,7 +3,8 @@
 
 | Route | Body | Answer |
 |---|---|---|
-| ``GET /sso/settings`` | | the effective settings, the callback URI, presets |
+| ``GET /sso/settings`` | | the effective settings, the callback URI, presets, the setup guide |
+| ``GET /sso/setup-guide`` | ``?preset=`` | numbered setup steps for a provider, filled in |
 | ``PUT /sso/settings`` | fields to change | the effective settings |
 | ``POST /sso/settings/reset`` | | the configuration's settings |
 | ``PUT /sso/client-secret`` | ``client_secret`` | 204; the secret is never returned |
@@ -20,6 +21,7 @@ import dataclasses
 import uuid
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Annotated, Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
@@ -34,7 +36,7 @@ from warden.identity.routers.contract import (
     json_body,
     no_store,
 )
-from warden.identity.sso.presets import PRESETS
+from warden.identity.sso.presets import PRESETS, SetupGuide, setup_guide
 from warden.identity.sso.settings import SsoSettings, SsoSettingsError
 
 if TYPE_CHECKING:
@@ -58,6 +60,38 @@ class WardenPresetGuide(BaseModel):
     notes: str
 
 
+class WardenCopyBack(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    setting: str = Field(
+        description="The warden setting to paste into: `issuer_url`, `client_id`, `client_secret`."
+    )
+    label: str
+
+
+class WardenSetupStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    number: int
+    title: str
+    text: str = Field(description="Plain text with the instance's own values already filled in.")
+    values: dict[str, str] = Field(
+        description="The filled placeholders this step uses: `callback_uri`, `scopes`, "
+        "`issuer` or `display_name`."
+    )
+    copy_back: list[WardenCopyBack]
+
+
+class WardenSetupGuide(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preset: str = Field(description="The preset the steps are for; `generic` if none matches.")
+    label: str
+    issuer_hint: str
+    notes: str
+    steps: list[WardenSetupStep]
+
+
 class WardenSsoSettingsView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -69,7 +103,10 @@ class WardenSsoSettingsView(BaseModel):
     provider_preset: str | None
     callback_url: str = Field(description="The redirect URI to register with the provider.")
     client_secret_set: bool
-    presets: list[WardenPresetGuide] = Field(description="Setup guidance; labels only.")
+    presets: list[WardenPresetGuide] = Field(description="The presets, with a one-line note each.")
+    setup_guide: WardenSetupGuide = Field(
+        description="Numbered setup steps for the current provider preset, filled in."
+    )
 
 
 class SsoSettingsBody(BaseModel):
@@ -88,6 +125,7 @@ class SsoSettingsBody(BaseModel):
 
 
 _VIEW = {"model": WardenSsoSettingsView, "description": "The effective settings."}
+_GUIDE = {"model": WardenSetupGuide, "description": "The filled-in setup steps."}
 
 
 def build_sso_settings_router(identity: "Identity", *, authorise: Callable[..., Any]) -> APIRouter:
@@ -101,6 +139,23 @@ def build_sso_settings_router(identity: "Identity", *, authorise: Callable[..., 
     def actor_id(actor: Any) -> str | None:
         return None if actor is None else str(actor)
 
+    def display_name() -> str:
+        # What the product calls this instance: the name authenticator apps show,
+        # else the host of the public base URL.
+        configured = identity.config.identity.totp_issuer
+        if configured:
+            return configured
+        return urlsplit(identity.config.http.public_base_url).hostname or "this application"
+
+    def guide(preset: str, settings: SsoSettings) -> dict[str, Any]:
+        found: SetupGuide = setup_guide(
+            preset,
+            settings=settings,
+            callback_uri=identity.sso.callback_url,
+            display_name=display_name(),
+        )
+        return dataclasses.asdict(found)
+
     def view(settings: SsoSettings) -> Response:
         body: dict[str, Any] = {
             "enabled": settings.enabled,
@@ -111,7 +166,16 @@ def build_sso_settings_router(identity: "Identity", *, authorise: Callable[..., 
             "provider_preset": settings.provider_preset,
             "callback_url": identity.sso.callback_url,
             "client_secret_set": identity.sso.client_secret_set(),
-            "presets": [dataclasses.asdict(p) for p in PRESETS],
+            "presets": [
+                {
+                    "preset": p.preset,
+                    "label": p.label,
+                    "issuer_hint": p.issuer_hint,
+                    "notes": p.notes,
+                }
+                for p in PRESETS
+            ],
+            "setup_guide": guide(settings.provider_preset, settings),
         }
         return json_response(body)
 
@@ -127,6 +191,26 @@ def build_sso_settings_router(identity: "Identity", *, authorise: Callable[..., 
     )
     async def get_settings(actor: Actor) -> Response:
         return view(await identity.sso.settings.current())
+
+    @router.get(
+        "/sso/setup-guide",
+        summary="Show the setup steps for a provider",
+        description=(
+            "Numbered steps for the provider's admin console, with this instance's callback "
+            "URI, scopes, issuer and name filled in, and which warden setting each value to "
+            "copy back belongs in. `preset` is one of `presets[].preset`, defaulting to the "
+            "current setting; an unknown one gets the generic guide. Guidance only: it changes "
+            "nothing and sign-in never reads it."
+        ),
+        responses={200: _GUIDE, **PRODUCT_AUTHORISATION},
+    )
+    async def get_setup_guide(
+        request: Request, actor: Actor, preset: str | None = None
+    ) -> Response:
+        settings = await identity.sso.settings.current()
+        return json_response(
+            guide(settings.provider_preset if preset is None else preset, settings)
+        )
 
     @router.put(
         "/sso/settings",

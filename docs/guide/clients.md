@@ -114,6 +114,8 @@ The first single sign-on of a user matches a verified email (`email_verified` mu
 
 **Administration.** The settings routes, under the product's `authorise` dependency: [`GET /admin/sso/settings`](../contract/openapi.json), [`PUT /admin/sso/settings`](../contract/openapi.json) (only the fields given change; turning `enabled` off ends every session issued through single sign-on), [`POST /admin/sso/settings/reset`](../contract/openapi.json), [`PUT /admin/sso/client-secret`](../contract/openapi.json) (stored in konfig's secrets store, never returned) and [`POST /admin/sso/test`](../contract/openapi.json) (checks the configuration without signing anyone in).
 
+**Setup guides.** Numbered setup steps for each provider, filled in with the instance's own values, come with [`GET /admin/sso/settings`](../contract/openapi.json) and [`GET /admin/sso/setup-guide`](../contract/openapi.json); the steps and their sources are in [sso-providers.md](sso-providers.md).
+
 ## 7. Invitations and password reset links
 
 warden mails links built from the product's templates, `http.accept_invitation_link` and `http.reset_password_link`, each with `{token}` where the token goes (for example `https://app.example.com/accept-invitation?t={token}`). The product's screen at that address reads the token from its URL and posts it. Advice: remove the token from the address bar once read, and serve those screens with `Referrer-Policy: no-referrer`.
