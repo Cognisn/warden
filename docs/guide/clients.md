@@ -626,3 +626,29 @@ The settings exist because some deployments must meet other requirements. warden
 - Handle the 400 `failures` list at submit, including `history` and `min_age`, which the check cannot see.
 - Treat a throttled or failed check as unknown, not as a refusal of the password.
 - Run `warden passwords recheck` on a schedule if any policy keeps fingerprints, and surface the exposure report to administrators.
+
+### 18.12 Serving warden's browser rules
+
+You do not have to write the evaluator. warden ships it as one classic script, `warden/static/passwordrules.js`, in the wheel and the sdist. It has no DOM and makes no request; it evaluates the `rules` object the policy routes return, exactly as the server counts, and every case of the vectors file is run through this very file in warden's CI under Node.
+
+warden serves no file itself. `warden.static.path("passwordrules.js")` returns its location (a `pathlib.Path`; any other name raises `FileNotFoundError`), and your product serves it from its own static route:
+
+```python
+import warden.static
+from fastapi.responses import FileResponse
+
+
+@app.get("/static/warden/passwordrules.js")
+async def password_rules() -> FileResponse:
+    return FileResponse(warden.static.path("passwordrules.js"), media_type="text/javascript")
+```
+
+Serve it from your own origin so a strict `script-src 'self'` policy allows it. The file defines one global, `WardenPasswordRules`, and loads three ways with the same result: a `<script src>` tag, a side-effect `import "/static/warden/passwordrules.js"` in a module (then read `globalThis.WardenPasswordRules`; the file has no `export`, so a named import does not work), or `require()` under Node. Its members are `evaluate(password, rules, user)`, which returns `ok`, `code_points`, `passphrase`, `tier`, `words`, `classes` and each rule's `code`, `passed` and `waived`, and the wording helpers `ruleLabel`, `passphraseLine`, `tierLine` and `periodText`; `normalise` and `countWords` are there for tests. `user` is `{email, display_name}` and may be omitted.
+
+```js
+const { evaluate, ruleLabel } = WardenPasswordRules;
+const answer = evaluate(input.value, policy.rules, { email, display_name });
+for (const result of answer.results) show(ruleLabel(result.code, policy.rules), result.passed);
+```
+
+How the checklist looks is yours: the script draws nothing, and `examples/console/static/js/checklist.js` is one way to draw it. The server stays the authority. The script's answer is feedback while the user types; the watch-list check, history and minimum age are known only to the server, and the submit route decides. Call the check route after a pause, as the sections above describe, and treat a refusal at submit as the final word.
