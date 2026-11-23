@@ -67,7 +67,12 @@ from psycopg import AsyncConnection, sql
 
 from warden.config import ConfigError, WardenConfig
 from warden.db import Database, schema, table
-from warden.identity.users import SignInMethod, UserStatus
+from warden.identity.users import (
+    SignInMethod,
+    UserStatus,
+    effective_method_sql,
+    pending_method_sql,
+)
 from warden.identity.webauthn.attestation import AttestationNotTrusted, TrustedRoots
 from warden.identity.webauthn.challenges import Ceremony, Challenges
 from warden.identity.webauthn.errors import WebAuthnError, WebAuthnRefusal
@@ -96,6 +101,8 @@ _MAX_CREDENTIAL_ID = 1023
 _USER_HANDLE_BYTES = 64
 
 _USERS = table(schema.USERS)
+# The method in force and any pending one (ruling CS18).
+_METHOD = sql.SQL("{}, {}").format(effective_method_sql(), pending_method_sql())
 _CREDENTIALS = table(schema.WEBAUTHN_CREDENTIALS)
 _HANDLES = table(schema.WEBAUTHN_USER_HANDLES)
 
@@ -485,18 +492,24 @@ class WebAuthn:
         ``lock`` holds the user's row until the transaction ends, so two
         registrations for one user count their credentials one at a time.
         ``for_invitation`` requires the user to be invited instead of active.
+        SSO-only is the method in force, unless a change to ``passkey_only``
+        is pending (registering its passkey completes it), or a pending change
+        to ``sso_only``, which allows no key (ruling CS18, Skuld question 25).
         """
-        query = "SELECT email, display_name, status, sign_in_method FROM {} WHERE id = %s"
+        query = "SELECT email, display_name, status, {} FROM {} WHERE id = %s"
         if lock:
             query += " FOR NO KEY UPDATE"
-        cur = await conn.execute(sql.SQL(query).format(_USERS), (user_id,))
+        cur = await conn.execute(sql.SQL(query).format(_METHOD, _USERS), (user_id,))
         row = await cur.fetchone()
         if row is None:
             raise WebAuthnError(R.UNKNOWN_USER, user_id=user_id)
         wanted = UserStatus.INVITED if for_invitation else UserStatus.ACTIVE
         if row[2] != wanted.value:
             raise WebAuthnError(R.INACTIVE_USER, user_id=user_id)
-        if row[3] == SignInMethod.SSO_ONLY.value:
+        moving_to_passkey = row[4] == SignInMethod.PASSKEY_ONLY.value
+        if (row[3] == SignInMethod.SSO_ONLY.value and not moving_to_passkey) or (
+            row[4] == SignInMethod.SSO_ONLY.value
+        ):
             raise WebAuthnError(R.SSO_ONLY, user_id=user_id)
         return row[0], row[1]
 

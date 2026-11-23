@@ -233,9 +233,9 @@ async def test_change_status_and_method(
     method = await client.post(
         f"/admin/users/{other.id}/sign-in-method",
         headers=headers,
-        json={"sign_in_method": "sso_only"},
+        json={"sign_in_method": "password"},
     )
-    assert method.json()["user"]["sign_in_method"] == "sso_only"
+    assert method.json()["user"]["sign_in_method"] == "password"
     bad = await client.post(
         f"/admin/users/{other.id}/status", headers=headers, json={"status": "deleted"}
     )

@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Sign-in methods (rulings CS13 to CS18): a fourth method, `password` (Password + MFA, never single sign-on, a second factor always asked for), beside `password_and_sso`, `sso_only` and `passkey_only`; an instance default sign-in method, initially `password_and_sso`, that every user follows unless they have one of their own; and the allowed second factors (`totp`, `passkey`, both by default), stored for wave 2 to enforce. Both live in the new `warden.sign_in_settings` table, changed at run time and audited.
+- Pending sign-in method changes: a change needing a credential the user lacks keeps the method in force working and mails a set-up link (the passkey registration link, or a new `password_setup` message with a set-password link through `http.reset_password_link`); a move to `sso_only` completes at the first single sign-on. On completion warden removes what the new method does not allow (the password hash, keys, sessions signed in another way). A change that needs a link and cannot send one is refused naming what is missing, such as `mail_sender`.
+- `Identity.sign_in_settings`, `update_sign_in_settings`, `sign_in_method`, `set_sign_in_method`, `resend_sign_in_method_link` and `cancel_sign_in_method_change`, with `Identity.sign_in_methods` (`warden.identity.sign_in_settings.SignInMethods`); `User.own_sign_in_method` and `User.pending_sign_in_method`.
+- Audit actions `warden.identity.sign_in_settings_changed`, `warden.identity.user.sign_in_method_pending`, `warden.identity.user.sign_in_method_pending_cancelled` and `warden.identity.user.sign_in_method_link_sent`, each with the client address.
+- Turning single sign-on off, or clearing its run-time settings so it no longer works, is refused with `SsoStillRequired` (a `SsoSettingsError`, so the existing route answers 400) while the default, or any active user's own, pending or in-force method, is `sso_only`. The refusal lists those users and is audited.
+
+### Changed
+
+- Migration `f1c7d24e8b93`: a user's own sign-in method is nullable, null meaning they follow the default. Every `password_and_sso` user follows the default, which starts as `password_and_sso`, so nobody signs in differently after upgrading. The downgrade restores the 0.1.x shape.
+- `User.sign_in_method` is the method in force: while a change is pending, the method it moves from. `Users.create`, `Users.set_sign_in_method` and `Invitations.create` take `None` (now their default) to follow the instance default; existing calls keep working.
+- `Users.set_sign_in_method` follows the pending-change rules above instead of switching at once, and refuses `sso_only` while single sign-on is not set up.
+- `POST <admin>/users/{user_id}/sign-in-method` accepts `password` and null (the default), answers `sign_in_method` with the user's own setting, the method in force and any pending change, and answers 409 when the change cannot be made (naming what is missing) and 502 when its set-up link was not delivered. The HTTP contract is regenerated for these fields.
+- Registering a security key or passkey is refused, as for an `sso_only` user, while a move to `sso_only` is pending; a pending move to `passkey_only` admits the registration that completes it, even from `sso_only`.
+- Upgrade note: a product that set `sso_only` or `passkey_only` on a user who lacks the credential now sees the change pending until the user sets it up; give the user the credential first (or let warden mail the link) where the switch must be immediate.
+
 ## [0.2.0a1] - 2026-11-23
 
 First alpha of 0.2.0, opened from the 0.1.1 release. No library change yet; the HTTP contract's version now reads 0.2.

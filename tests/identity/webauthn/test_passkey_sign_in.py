@@ -40,7 +40,7 @@ from passkey_support import (
 )
 from soft_authenticator import SoftwareAuthenticator, other_key
 
-from warden.config import WardenConfig
+from warden.config import WardenConfig, parse_config
 from warden.db import Database
 from warden.identity import Identity, PermissionRegistry, SignInMethod, User
 from warden.identity.webauthn import WebAuthnPurpose
@@ -469,7 +469,10 @@ async def test_a_passkey_sign_in_clears_the_count_for_its_address_and_credential
 async def test_password_sign_in_for_a_passkey_only_user_is_byte_identical_to_a_wrong_password(
     http: httpx.AsyncClient, identity: Identity, db: Database, make_user: UserFactory
 ) -> None:
-    passkey_only, _ = await _passkey_user(identity, make_user, SignInMethod.PASSKEY_ONLY)
+    # A passkey_only user who still holds a password hash, as one moved in 0.1.x
+    # may: moving with warden 0.2.0 removes it (ruling CS18), so set it behind the back.
+    passkey_only, _ = await _passkey_user(identity, make_user)
+    await set_method(db, passkey_only.id, SignInMethod.PASSKEY_ONLY)
     other = await make_user()
     wrong = await http.post(
         "/auth/sign-in", json={"email": other.email, "password": "wrong " + PASSWORD}
@@ -527,6 +530,8 @@ async def test_a_reset_link_issued_before_the_switch_is_refused_and_spent(
     user = await make_user()
     assert await identity.resets.request(user.email) is None
     token = mail.token()
+    # Holding a passkey, the switch takes effect at once (ruling CS18).
+    await give_passkey(identity, user)
     await identity.users.set_sign_in_method(user.id, SignInMethod.PASSKEY_ONLY, actor="test")
     answer = await http.post(
         "/auth/password-reset/complete",
@@ -557,7 +562,11 @@ async def test_an_administrator_switches_a_user_to_passkey_only_and_is_told_of_n
         headers=bearer,
     )
     assert answer.status_code == 200, answer.text
-    assert answer.json()["user"]["sign_in_method"] == "passkey_only"
+    # Without a passkey the switch waits for one, and a registration link is mailed
+    # (ruling CS18); the method in force stays meanwhile.
+    assert answer.json()["user"]["sign_in_method"] == "password_and_sso"
+    assert answer.json()["sign_in_method"]["pending"]["to"] == "passkey_only"
+    assert answer.json()["sign_in_method"]["pending"]["link"] == "passkey_registration"
     assert answer.json()["has_passkey"] is False
 
 
@@ -601,11 +610,11 @@ async def test_other_switches_answer_as_before(
     user = await make_user()
     answer = await http.post(
         f"/admin/users/{user.id}/sign-in-method",
-        json={"sign_in_method": "sso_only"},
+        json={"sign_in_method": "password"},
         headers=bearer,
     )
     assert answer.status_code == 200
-    assert set(answer.json()) == {"user"}
+    assert set(answer.json()) == {"user", "sign_in_method"}
 
 
 async def test_switching_a_user_holding_keys_to_sso_only_is_refused_until_reset(
@@ -628,17 +637,39 @@ async def test_switching_a_user_holding_keys_to_sso_only_is_refused_until_reset(
         "reason": "webauthn_credentials",
     }
     assert (await http.delete(f"/admin/users/{user.id}/mfa", headers=bearer)).status_code == 204
+    # The keys no longer stand in the way; single sign-on, not set up here, now does
+    # (sso_only needs single sign-on set up since 0.2.0, ruling CS13).
     answer = await http.post(path, json={"sign_in_method": "sso_only"}, headers=bearer)
-    assert answer.status_code == 200
+    assert answer.status_code == 409
+    assert "single sign-on" in answer.json()["detail"]
 
 
 async def test_a_key_registered_while_switching_to_sso_only_never_leaves_both(
-    identity: Identity, make_user: UserFactory
+    db: Database, keys: KeyStore, permissions: PermissionRegistry, secrets: MemorySecrets
 ) -> None:
     """The switch and a registration race: either the key or sso_only, never both."""
+    # Single sign-on set up, since sso_only needs it (ruling CS13). The switch is
+    # pending until the first single sign-on; it stays refused while a key is held.
+    config = parse_config(
+        {
+            "http": {
+                "public_base_url": "https://app.example.com",
+                "accept_invitation_link": "https://app.example.com/accept?t={token}",
+                "reset_password_link": "https://app.example.com/reset?t={token}",
+                "sso_completion_link": "https://app.example.com/signed-in",
+            },
+            "identity": {"require_mfa": False},
+            "sso": {
+                "enabled": True,
+                "issuer_url": "https://idp.example.com/tenant",
+                "client_id": "warden-client",
+            },
+        }
+    )
+    identity = Identity(config, db, keys, permissions, secrets=secrets, hasher=FAST_HASHER)
     assert identity.webauthn is not None
-    for _ in range(4):
-        user = await make_user()
+    for index in range(4):
+        user = await identity.users.create(f"racer-{index}@example.com", actor="test")
         key = passkey_authenticator()
         options = await identity.webauthn.begin_registration(user.id, WebAuthnPurpose.PASSKEY)
         response = key.register(options.public_key)
@@ -654,11 +685,14 @@ async def test_a_key_registered_while_switching_to_sso_only_never_leaves_both(
                 user.id, SignInMethod.SSO_ONLY, actor="test"
             )
 
-        await race(register, switch)
+        outcomes = await race(register, switch)
+        # Exactly one of them goes through.
+        assert sum(not isinstance(o, BaseException) for o in outcomes) == 1, outcomes
         final = await identity.users.get(user.id)
         assert final is not None
         keys = await identity.webauthn_credentials.list(user.id)
-        assert not (final.sign_in_method is SignInMethod.SSO_ONLY and keys), (final, keys)
+        moving = SignInMethod.SSO_ONLY in (final.sign_in_method, final.pending_sign_in_method)
+        assert not (moving and keys), (final, keys)
 
 
 async def test_a_counterless_passkey_replayed_concurrently_gives_one_session(

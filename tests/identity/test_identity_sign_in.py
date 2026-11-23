@@ -186,11 +186,11 @@ async def test_sign_in_timing_does_not_reveal_a_username(
         password=PASSWORD,
         sign_in_method=SignInMethod.SSO_ONLY,
     )
-    await identity.users.create("sso-no-password@example.com", actor="t", password=None)
-    await identity.users.set_sign_in_method(
-        (await identity.users.get_by_email("sso-no-password@example.com")).id,  # type: ignore[union-attr]
-        SignInMethod.SSO_ONLY,
+    await identity.users.create(
+        "sso-no-password@example.com",
         actor="t",
+        password=None,
+        sign_in_method=SignInMethod.SSO_ONLY,
     )
     cases = {
         "unknown": ("nobody-here@example.com", PASSWORD),

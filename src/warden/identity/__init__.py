@@ -103,6 +103,17 @@ from warden.identity.service import (
     SignInResult,
     WebAuthnEnrolled,
 )
+from warden.identity.sign_in_settings import (
+    PendingSignInMethod,
+    SecondFactorKind,
+    SetupLink,
+    SignInMethodChangeRefused,
+    SignInMethods,
+    SignInMethodState,
+    SignInSettings,
+    SignInSettingsChange,
+    SignInSettingsError,
+)
 from warden.identity.sso.errors import SsoError
 from warden.identity.sso.service import (
     SSO_FAILURE_MESSAGE,
@@ -112,7 +123,12 @@ from warden.identity.sso.service import (
     LoginStart,
     SingleSignOn,
 )
-from warden.identity.sso.settings import SsoSettings, SsoSettingsError, SsoSettingsStore
+from warden.identity.sso.settings import (
+    SsoSettings,
+    SsoSettingsError,
+    SsoSettingsStore,
+    SsoStillRequired,
+)
 from warden.identity.tokens import TokenPair
 from warden.identity.users import (
     SignInMethod,
@@ -195,6 +211,7 @@ __all__ = [
     "PasswordStates",
     "PasswordTokenPair",
     "PendingInvitation",
+    "PendingSignInMethod",
     "PermissionRegistry",
     "PolicyError",
     "PolicySettings",
@@ -208,16 +225,25 @@ __all__ = [
     "RoleAssignment",
     "RoleError",
     "Roles",
+    "SecondFactorKind",
     "SecretKeyError",
     "SessionPolicy",
+    "SetupLink",
     "SignInMethod",
+    "SignInMethodChangeRefused",
     "SignInMethodConflict",
+    "SignInMethodState",
+    "SignInMethods",
     "SignInResult",
+    "SignInSettings",
+    "SignInSettingsChange",
+    "SignInSettingsError",
     "SingleSignOn",
     "SsoError",
     "SsoSettings",
     "SsoSettingsError",
     "SsoSettingsStore",
+    "SsoStillRequired",
     "StagedGrant",
     "SubjectPin",
     "TokenPair",

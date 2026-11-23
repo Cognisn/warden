@@ -351,5 +351,7 @@ def test_downgrade_removes_the_tables_and_upgrade_restores_them(migrated_dsn: st
     assert current_revision(migrated_dsn) == parent
     assert not (_tables(migrated_dsn) & PASSWORD_POLICY_TABLES)
     migrate(migrated_dsn)
-    assert current_revision(migrated_dsn) == revision
+    # Later migrations sit above this one since 0.2.0; the upgrade reaches the head.
+    assert current_revision(migrated_dsn) == heads()[0] != parent
+    assert revision != parent
     assert _tables(migrated_dsn) >= PASSWORD_POLICY_TABLES

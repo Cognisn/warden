@@ -16,6 +16,13 @@ that transaction, so turning single sign-on off and ending its sessions
 (``revoke_sso_sessions``) cannot miss a session being issued at the same
 moment. Each replica caches the settings for ``identity.policy_cache_seconds``
 for the earlier sign-in steps, which only lead to that check.
+
+No lock-out by single sign-on (ruling CS17): a change that leaves single
+sign-on unusable (off, or without an issuer or client id) is refused with
+``SsoStillRequired`` while it was usable and the instance default, or any
+active user's own, pending or in-force method, is ``sso_only``. Changing
+any of those to ``sso_only`` takes the same lock shared, so the check
+cannot miss one. The refusal is audited.
 """
 
 from __future__ import annotations
@@ -23,6 +30,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
@@ -36,8 +44,17 @@ from warden.config import SsoConfig, WardenConfig
 from warden.db import SETTINGS, Database, schema, table
 from warden.identity.http import SourceIp
 from warden.identity.sso.schema import SSO_SETTING, SSO_SETTINGS_LOCK_KEY
+from warden.identity.users import effective_method_sql, pending_method_sql
 
-__all__ = ["SSO_AMR", "SsoSettings", "SsoSettingsError", "SsoSettingsStore", "revoke_sso_sessions"]
+__all__ = [
+    "SSO_AMR",
+    "SsoSettings",
+    "SsoSettingsError",
+    "SsoSettingsStore",
+    "SsoStillRequired",
+    "revoke_sso_sessions",
+    "usable",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +63,35 @@ SSO_AMR = "sso"
 
 _SETTINGS = table(SETTINGS)
 _SESSIONS = table(schema.SESSIONS)
+_USERS = table(schema.USERS)
+_SIGN_IN_SETTINGS = table(schema.SIGN_IN_SETTINGS)
+_SSO_ONLY = "sso_only"
 
 
 class SsoSettingsError(ValueError):
     """A settings change was refused. The message names fields, never values."""
+
+
+class SsoStillRequired(SsoSettingsError):
+    """Single sign-on cannot be turned off or cleared: someone signs in with it alone.
+
+    ``default_sso_only`` says whether the instance default is ``sso_only``;
+    ``users`` lists each active user whose own, pending or in-force method
+    is ``sso_only``, as (id, email), for the administrator to move first
+    (ruling CS17). The message carries counts only.
+    """
+
+    def __init__(self, *, default_sso_only: bool, users: tuple[tuple[uuid.UUID, str], ...]) -> None:
+        parts = []
+        if default_sso_only:
+            parts.append("the default sign-in method is sso_only")
+        if users:
+            parts.append(f"{len(users)} active users sign in with sso_only")
+        super().__init__(
+            "single sign-on cannot be turned off or cleared while " + " and ".join(parts)
+        )
+        self.default_sso_only = default_sso_only
+        self.users = users
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +110,32 @@ _FIELDS = frozenset(f.name for f in dataclasses.fields(SsoSettings))
 
 def _from_config(sso: SsoConfig) -> SsoSettings:
     return SsoSettings(**{name: getattr(sso, name) for name in _FIELDS})
+
+
+def usable(settings: SsoSettings) -> bool:
+    """Whether single sign-on works: enabled, with an issuer and a client id."""
+    return settings.enabled and settings.issuer_url is not None and settings.client_id is not None
+
+
+async def _sso_dependants(conn: AsyncConnection[Any]) -> SsoStillRequired | None:
+    """Who would be locked out without single sign-on, as the refusal; None if nobody."""
+    cur = await conn.execute(
+        sql.SQL("SELECT default_sign_in_method = %s FROM {}").format(_SIGN_IN_SETTINGS),
+        (_SSO_ONLY,),
+    )
+    row = await cur.fetchone()
+    default_sso_only = bool(row and row[0])
+    cur = await conn.execute(
+        sql.SQL(
+            "SELECT u.id, u.email FROM {} u WHERE u.status = 'active'"
+            " AND %(sso)s IN (u.sign_in_method, {}, {}) ORDER BY lower(u.email), u.id"
+        ).format(_USERS, effective_method_sql("u"), pending_method_sql("u")),
+        {"sso": _SSO_ONLY},
+    )
+    users = tuple((r[0], str(r[1])) for r in await cur.fetchall())
+    if not default_sso_only and not users:
+        return None
+    return SsoStillRequired(default_sso_only=default_sso_only, users=users)
 
 
 async def revoke_sso_sessions(conn: AsyncConnection[Any], reason: str) -> int:
@@ -140,19 +208,25 @@ class SsoSettingsStore:
         wrong = sorted(name for name, value in changes.items() if not _typed(name, value))
         if wrong:
             raise SsoSettingsError(f"invalid settings: {', '.join(wrong)}")
-        async with self._db.transaction() as tx:
-            await tx.execute("SELECT pg_advisory_xact_lock(%s)", (SSO_SETTINGS_LOCK_KEY,))
-            before = await self.read(tx)
-            overrides = {**await self._overrides(tx), **_plain(changes)}
-            settings = self._effective(overrides)
-            await tx.execute(
-                sql.SQL(
-                    "INSERT INTO {} (key, value, updated_at) VALUES (%s, %s, now())"
-                    " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"
-                ).format(_SETTINGS),
-                (SSO_SETTING, Jsonb(cast(Any, overrides))),
-            )
-            await self._record_change(tx, actor, source_ip, before, settings, sorted(changes))
+        try:
+            async with self._db.transaction() as tx:
+                await tx.execute("SELECT pg_advisory_xact_lock(%s)", (SSO_SETTINGS_LOCK_KEY,))
+                before = await self.read(tx)
+                overrides = {**await self._overrides(tx), **_plain(changes)}
+                settings = self._effective(overrides)
+                await self._guard(tx, before, settings)
+                await tx.execute(
+                    sql.SQL(
+                        "INSERT INTO {} (key, value, updated_at) VALUES (%s, %s, now())"
+                        " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value,"
+                        " updated_at = now()"
+                    ).format(_SETTINGS),
+                    (SSO_SETTING, Jsonb(cast(Any, overrides))),
+                )
+                await self._record_change(tx, actor, source_ip, before, settings, sorted(changes))
+        except SsoStillRequired as exc:
+            await self._record_refusal(actor, source_ip, exc, sorted(changes))
+            raise
         self.invalidate()
         return settings
 
@@ -161,15 +235,52 @@ class SsoSettingsStore:
 
         ``source_ip`` is the client address the reset was asked from, if any.
         """
-        async with self._db.transaction() as tx:
-            await tx.execute("SELECT pg_advisory_xact_lock(%s)", (SSO_SETTINGS_LOCK_KEY,))
-            before = await self.read(tx)
-            await tx.execute(
-                sql.SQL("DELETE FROM {} WHERE key = %s").format(_SETTINGS), (SSO_SETTING,)
-            )
-            await self._record_change(tx, actor, source_ip, before, self._defaults, ["reset"])
+        try:
+            async with self._db.transaction() as tx:
+                await tx.execute("SELECT pg_advisory_xact_lock(%s)", (SSO_SETTINGS_LOCK_KEY,))
+                before = await self.read(tx)
+                await self._guard(tx, before, self._defaults)
+                await tx.execute(
+                    sql.SQL("DELETE FROM {} WHERE key = %s").format(_SETTINGS), (SSO_SETTING,)
+                )
+                await self._record_change(tx, actor, source_ip, before, self._defaults, ["reset"])
+        except SsoStillRequired as exc:
+            await self._record_refusal(actor, source_ip, exc, ["reset"])
+            raise
         self.invalidate()
         return self._defaults
+
+    async def _guard(
+        self, tx: AsyncConnection[Any], before: SsoSettings, after: SsoSettings
+    ) -> None:
+        """Refuse leaving single sign-on unusable while anyone signs in with it alone."""
+        if usable(before) and not usable(after):
+            refusal = await _sso_dependants(tx)
+            if refusal is not None:
+                raise refusal
+
+    async def _record_refusal(
+        self,
+        actor: str | None,
+        source_ip: SourceIp,
+        refusal: SsoStillRequired,
+        changed: list[str],
+    ) -> None:
+        await record_audit(
+            AuditEvent(
+                action="warden.identity.sso.settings_changed",
+                outcome="failure",
+                actor=actor,
+                resource_type="sso_settings",
+                source_ip=source_ip,
+                details={
+                    "changed": list[Any](changed),
+                    "reason": "sso_still_required",
+                    "default_sso_only": refusal.default_sso_only,
+                    "user_ids": [str(user_id) for user_id, _ in refusal.users],
+                },
+            )
+        )
 
     async def _record_change(
         self,
