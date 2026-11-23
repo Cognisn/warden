@@ -68,6 +68,7 @@ ADMIN = {"x-admin": "yes"}
     ("method", "path"),
     [
         ("GET", "/admin/sso/settings"),
+        ("GET", "/admin/sso/setup-guide"),
         ("PUT", "/admin/sso/settings"),
         ("POST", "/admin/sso/settings/reset"),
         ("PUT", "/admin/sso/client-secret"),
@@ -96,6 +97,55 @@ async def test_settings_show_the_derived_callback_and_never_the_secret(
     assert {p["preset"] for p in body["presets"]} == {"entra", "google", "okta", "generic"}
     assert CLIENT_SECRET not in response.text
     assert response.headers["cache-control"] == "no-store"
+
+
+async def test_settings_carry_the_setup_guide_for_the_current_preset(
+    client: httpx.AsyncClient, secrets: Any
+) -> None:
+    secrets.set(CLIENT_SECRET_NAME, CLIENT_SECRET)
+    body = (await client.get("/admin/sso/settings", headers=ADMIN)).json()
+    guide = body["setup_guide"]
+    assert guide["preset"] == "generic"
+    assert [s["number"] for s in guide["steps"]] == list(range(1, len(guide["steps"]) + 1))
+    text = " ".join(s["text"] for s in guide["steps"])
+    assert "https://app.example.com/auth/sso/callback" in text
+    assert "{" not in text
+    assert CLIENT_SECRET not in text
+    assert {c["setting"] for s in guide["steps"] for c in s["copy_back"]} == {
+        "issuer_url",
+        "client_id",
+        "client_secret",
+    }
+    # The listing keeps the one-line notes only; the steps come as the guide.
+    assert set(body["presets"][0]) == {"preset", "label", "issuer_hint", "notes"}
+
+
+async def test_the_setup_guide_route_answers_for_any_preset(client: httpx.AsyncClient) -> None:
+    current = await client.get("/admin/sso/setup-guide", headers=ADMIN)
+    assert current.status_code == 200
+    assert current.headers["cache-control"] == "no-store"
+    assert current.json()["preset"] == "generic"
+    entra = await client.get("/admin/sso/setup-guide?preset=entra", headers=ADMIN)
+    assert entra.json()["preset"] == "entra"
+    assert entra.json()["label"] == "Microsoft Entra ID"
+    text = " ".join(s["text"] for s in entra.json()["steps"])
+    assert "https://app.example.com/auth/sso/callback" in text
+    # The saved issuer is filled in, not the hint.
+    assert "https://idp.example.com/tenant" in text
+
+
+async def test_an_unknown_preset_gets_the_generic_guide(client: httpx.AsyncClient) -> None:
+    generic = (await client.get("/admin/sso/setup-guide?preset=generic", headers=ADMIN)).json()
+    unknown = await client.get("/admin/sso/setup-guide?preset=ping", headers=ADMIN)
+    assert unknown.status_code == 200
+    assert unknown.json() == generic
+
+
+async def test_the_guide_follows_a_changed_preset(client: httpx.AsyncClient) -> None:
+    await client.put("/admin/sso/settings", headers=ADMIN, json={"provider_preset": "okta"})
+    body = (await client.get("/admin/sso/setup-guide", headers=ADMIN)).json()
+    assert body["preset"] == "okta"
+    await client.post("/admin/sso/settings/reset", headers=ADMIN)
 
 
 async def test_settings_can_be_changed_and_reset(client: httpx.AsyncClient) -> None:

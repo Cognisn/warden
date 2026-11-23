@@ -11162,6 +11162,62 @@
         }
       }
     },
+    "/admin/sso/setup-guide": {
+      "get": {
+        "tags": [
+          "warden: single sign-on administration"
+        ],
+        "summary": "Show the setup steps for a provider",
+        "description": "Numbered steps for the provider's admin console, with this instance's callback URI, scopes, issuer and name filled in, and which warden setting each value to copy back belongs in. `preset` is one of `presets[].preset`, defaulting to the current setting; an unknown one gets the generic guide. Guidance only: it changes nothing and sign-in never reads it.",
+        "operationId": "get_setup_guide_admin_sso_setup_guide_get",
+        "parameters": [
+          {
+            "name": "preset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Preset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The filled-in setup steps.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WardenSetupGuide"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          },
+          "403": {
+            "description": "Refused by the product's `authorise` dependency; the body is the product's."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/sso/settings/reset": {
       "post": {
         "tags": [
@@ -12714,6 +12770,26 @@
         ],
         "title": "WardenChangeRequired"
       },
+      "WardenCopyBack": {
+        "properties": {
+          "setting": {
+            "type": "string",
+            "title": "Setting",
+            "description": "The warden setting to paste into: `issuer_url`, `client_id`, `client_secret`."
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "setting",
+          "label"
+        ],
+        "title": "WardenCopyBack"
+      },
       "WardenDetail": {
         "properties": {
           "detail": {
@@ -14154,6 +14230,86 @@
         "title": "WardenSecondFactorAnswer",
         "description": "A completed second factor: a session, or a forced password change first."
       },
+      "WardenSetupGuide": {
+        "properties": {
+          "preset": {
+            "type": "string",
+            "title": "Preset",
+            "description": "The preset the steps are for; `generic` if none matches."
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "issuer_hint": {
+            "type": "string",
+            "title": "Issuer Hint"
+          },
+          "notes": {
+            "type": "string",
+            "title": "Notes"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/WardenSetupStep"
+            },
+            "type": "array",
+            "title": "Steps"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "preset",
+          "label",
+          "issuer_hint",
+          "notes",
+          "steps"
+        ],
+        "title": "WardenSetupGuide"
+      },
+      "WardenSetupStep": {
+        "properties": {
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "description": "Plain text with the instance's own values already filled in."
+          },
+          "values": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Values",
+            "description": "The filled placeholders this step uses: `callback_uri`, `scopes`, `issuer` or `display_name`."
+          },
+          "copy_back": {
+            "items": {
+              "$ref": "#/components/schemas/WardenCopyBack"
+            },
+            "type": "array",
+            "title": "Copy Back"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "number",
+          "title",
+          "text",
+          "values",
+          "copy_back"
+        ],
+        "title": "WardenSetupStep"
+      },
       "WardenSignInAnswer": {
         "anyOf": [
           {
@@ -14593,7 +14749,11 @@
             },
             "type": "array",
             "title": "Presets",
-            "description": "Setup guidance; labels only."
+            "description": "The presets, with a one-line note each."
+          },
+          "setup_guide": {
+            "$ref": "#/components/schemas/WardenSetupGuide",
+            "description": "Numbered setup steps for the current provider preset, filled in."
           }
         },
         "additionalProperties": false,
@@ -14607,7 +14767,8 @@
           "provider_preset",
           "callback_url",
           "client_secret_set",
-          "presets"
+          "presets",
+          "setup_guide"
         ],
         "title": "WardenSsoSettingsView"
       },
