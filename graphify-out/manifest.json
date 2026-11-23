@@ -12,9 +12,9 @@
     "semantic_hash": "d8f3b1524e254b923f4cd57d02f85abe"
   },
   ".github/workflows/ci.yml": {
-    "mtime": 1795030447.5777025,
-    "seen": 1795422988.5350678,
-    "ast_hash": "952bd7c0823b18b03a5f4f2306331086",
+    "mtime": 1795424882.0786192,
+    "seen": 1795461823.9563427,
+    "ast_hash": "b0edd6af591ebf591d5ea0c12f9dff01",
     "semantic_hash": ""
   },
   ".github/workflows/publish.yml": {
@@ -36,9 +36,9 @@
     "semantic_hash": "6145dedca2d2d6820c2f14ca0fe2b9ef"
   },
   "docs/contract/openapi.json": {
-    "mtime": 1795407944.2968347,
-    "seen": 1795422988.5350678,
-    "ast_hash": "20d0464075e4da6a7fde75e23d3a2e2f",
+    "mtime": 1795434260.359462,
+    "seen": 1795461823.9558446,
+    "ast_hash": "3f0360c910630d605c8a00e80b0ef48b",
     "semantic_hash": ""
   },
   "examples/__init__.py": {
@@ -84,9 +84,9 @@
     "semantic_hash": ""
   },
   "examples/console/console_routes.py": {
-    "mtime": 1795030447.5879784,
-    "seen": 1795422988.5350678,
-    "ast_hash": "f552f85708b7a4aa0ebc46ed62315d46",
+    "mtime": 1795424882.084015,
+    "seen": 1795461823.9558446,
+    "ast_hash": "4384386d4b2d28685d853d336a5bcb57",
     "semantic_hash": ""
   },
   "examples/console/notes.py": {
@@ -198,9 +198,9 @@
     "semantic_hash": ""
   },
   "src/warden/__init__.py": {
-    "mtime": 1795407935.3402739,
-    "seen": 1795422988.5350678,
-    "ast_hash": "3cce76948c1ad8ee18063be8b82eec69",
+    "mtime": 1795434252.9927888,
+    "seen": 1795461823.9558446,
+    "ast_hash": "d869ac43f1ba66d44bd34425137fd4d3",
     "semantic_hash": ""
   },
   "src/warden/audit/__init__.py": {
@@ -348,9 +348,9 @@
     "semantic_hash": ""
   },
   "src/warden/config.py": {
-    "mtime": 1795030447.623058,
-    "seen": 1795422988.5350678,
-    "ast_hash": "1baeea969759b946c35cd71b6a4dd40b",
+    "mtime": 1795433026.4983501,
+    "seen": 1795461823.9558446,
+    "ast_hash": "b132da3bcd0ba7c8bcda6309cdae0973",
     "semantic_hash": ""
   },
   "src/warden/db/__init__.py": {
@@ -438,15 +438,15 @@
     "semantic_hash": ""
   },
   "src/warden/identity/__init__.py": {
-    "mtime": 1795405835.776445,
-    "seen": 1795422988.5350678,
-    "ast_hash": "802191d806326a055ad738f8822bd22e",
+    "mtime": 1795433026.4983501,
+    "seen": 1795461823.9558446,
+    "ast_hash": "4aa0ce0d0e8c0978e8b281b81ff18244",
     "semantic_hash": ""
   },
   "src/warden/identity/actions.py": {
-    "mtime": 1794527931.005263,
-    "seen": 1794783908.9846542,
-    "ast_hash": "0cb5f236324ea855350e89b4b85bff4d",
+    "mtime": 1795433026.4994428,
+    "seen": 1795461823.9558446,
+    "ast_hash": "095d8fd4ca4506a09983029ac019f986",
     "semantic_hash": ""
   },
   "src/warden/identity/apikeys.py": {
@@ -486,15 +486,15 @@
     "semantic_hash": ""
   },
   "src/warden/identity/mail.py": {
-    "mtime": 1795405835.7782829,
-    "seen": 1795422988.5350678,
-    "ast_hash": "cdae3c89d8da34242f5445d2277a4c40",
+    "mtime": 1795433026.4994428,
+    "seen": 1795461823.9558446,
+    "ast_hash": "5565fff67273e29f5f05d9633993ce24",
     "semantic_hash": ""
   },
   "src/warden/identity/mfa.py": {
-    "mtime": 1795030447.6267314,
-    "seen": 1795422988.5350678,
-    "ast_hash": "bd8f17a7446922d4a2cc0553e19b2f66",
+    "mtime": 1795433026.5012257,
+    "seen": 1795461823.9558446,
+    "ast_hash": "de4f5438e32e534e977ec6c3130b4061",
     "semantic_hash": ""
   },
   "src/warden/identity/passwords.py": {
@@ -504,9 +504,9 @@
     "semantic_hash": "3fe2071f53e26d32efdd5ebb548f301c"
   },
   "src/warden/identity/policy.py": {
-    "mtime": 1795030447.6315007,
-    "seen": 1795422988.5350678,
-    "ast_hash": "8ae9fe2017c654072d2864d0e5918f82",
+    "mtime": 1795433026.5012257,
+    "seen": 1795461823.9558446,
+    "ast_hash": "f3aa0a29927225ac88cf0e7b437b82ee",
     "semantic_hash": ""
   },
   "src/warden/identity/prune.py": {
@@ -540,15 +540,15 @@
     "semantic_hash": ""
   },
   "src/warden/identity/routers/auth.py": {
-    "mtime": 1794527931.0254614,
-    "seen": 1794783908.9846542,
-    "ast_hash": "b3d4b3743c040b9ee63558446a27ce03",
+    "mtime": 1795433026.502771,
+    "seen": 1795461823.9558446,
+    "ast_hash": "9928259851f09a2980ca8c78ee146977",
     "semantic_hash": ""
   },
   "src/warden/identity/routers/contract.py": {
-    "mtime": 1795405835.782828,
-    "seen": 1795422988.5350678,
-    "ast_hash": "f6115c9efd3ca05daa9575e51afaf2a6",
+    "mtime": 1795433026.502771,
+    "seen": 1795461823.9558446,
+    "ast_hash": "25f1cbd18a4ba745c7204f9ffc9c3bba",
     "semantic_hash": ""
   },
   "src/warden/identity/routers/lifecycle.py": {
@@ -564,9 +564,9 @@
     "semantic_hash": "367be8e089464216a30489d681ba79bf"
   },
   "src/warden/identity/routers/sso_settings.py": {
-    "mtime": 1795030447.6368973,
-    "seen": 1795422988.5350678,
-    "ast_hash": "7702cca120737166d37f29c047d2c8d5",
+    "mtime": 1795428980.8894916,
+    "seen": 1795461823.9558446,
+    "ast_hash": "6115dd9725ad4c0826eed4714afe10b2",
     "semantic_hash": ""
   },
   "src/warden/identity/routers/tokens.py": {
@@ -576,9 +576,9 @@
     "semantic_hash": ""
   },
   "src/warden/identity/routers/webauthn.py": {
-    "mtime": 1794527931.02953,
-    "seen": 1794783908.9846542,
-    "ast_hash": "456bc76465d9ad1e1c5a2ab71ba11d47",
+    "mtime": 1795433026.502771,
+    "seen": 1795461823.9558446,
+    "ast_hash": "56813861b2619f7a813f0b1f75ee8bc7",
     "semantic_hash": ""
   },
   "src/warden/identity/schema.py": {
@@ -588,9 +588,9 @@
     "semantic_hash": "87e5f7fb2f7bc2c0a5195b8eae53eca6"
   },
   "src/warden/identity/service.py": {
-    "mtime": 1795405835.7855163,
-    "seen": 1795422988.5350678,
-    "ast_hash": "0a908f6221314cd7680ae8f294cebd6c",
+    "mtime": 1795433026.5045474,
+    "seen": 1795461823.9558446,
+    "ast_hash": "d5a5dc903906ee99faa57b7919689c25",
     "semantic_hash": ""
   },
   "src/warden/identity/single_use.py": {
@@ -618,10 +618,10 @@
     "semantic_hash": "df7d22ffa8ff5b538efc3d7298dfacb3"
   },
   "src/warden/identity/sso/presets.py": {
-    "mtime": 1794527931.0330708,
-    "seen": 1794783908.9846542,
-    "ast_hash": "3e68b96c8010717cc339bd40d6f2acff",
-    "semantic_hash": "3e68b96c8010717cc339bd40d6f2acff"
+    "mtime": 1795428980.8899212,
+    "seen": 1795461823.9558446,
+    "ast_hash": "ea0023961b9d92e39df587dc0f1d8b72",
+    "semantic_hash": ""
   },
   "src/warden/identity/sso/provider.py": {
     "mtime": 1794527931.0351925,
@@ -702,10 +702,10 @@
     "semantic_hash": "1f8939f97653572949476df95f99c47a"
   },
   "src/warden/identity/webauthn/errors.py": {
-    "mtime": 1794527931.0417407,
-    "seen": 1794783908.9846542,
-    "ast_hash": "eb59cc0edc2127eb614f42d1bfced1b0",
-    "semantic_hash": "eb59cc0edc2127eb614f42d1bfced1b0"
+    "mtime": 1795433026.5065844,
+    "seen": 1795461823.9558446,
+    "ast_hash": "b42cc3259621bf7cd39d2195761a2475",
+    "semantic_hash": ""
   },
   "src/warden/identity/webauthn/service.py": {
     "mtime": 1795405835.7973456,
@@ -900,15 +900,15 @@
     "semantic_hash": ""
   },
   "tests/examples/console_support.py": {
-    "mtime": 1794527931.0557926,
-    "seen": 1794783908.9846542,
-    "ast_hash": "e759c1cc53a82a4877c66df73e535fe2",
+    "mtime": 1795433026.5065844,
+    "seen": 1795461823.9563427,
+    "ast_hash": "5ffa9afaa6700d902d898d0e619a883f",
     "semantic_hash": ""
   },
   "tests/examples/test_console_app.py": {
-    "mtime": 1794527931.0557926,
-    "seen": 1794783908.9846542,
-    "ast_hash": "b729a6f755934091e6859ea2b35f836f",
+    "mtime": 1795433026.5065844,
+    "seen": 1795461823.9563427,
+    "ast_hash": "8bcd287b8f9c113f02082d03efdb2169",
     "semantic_hash": ""
   },
   "tests/examples/test_console_gaps.py": {
@@ -936,10 +936,10 @@
     "semantic_hash": "6d541f15ca47f57536cc4f966f0e07da"
   },
   "tests/identity/identity_support.py": {
-    "mtime": 1794527931.0605145,
-    "seen": 1794783908.9846542,
-    "ast_hash": "728a1b4e8320ad597f2ecadd555ed64d",
-    "semantic_hash": "728a1b4e8320ad597f2ecadd555ed64d"
+    "mtime": 1795433026.5101757,
+    "seen": 1795461823.9563427,
+    "ast_hash": "3b239ec6ccfb5ffdd45f81c331f10cec",
+    "semantic_hash": ""
   },
   "tests/identity/mail_overrides.py": {
     "mtime": 1794527931.0611994,
@@ -966,16 +966,16 @@
     "semantic_hash": "06d5e12b575cd0e0789fb6e170eded08"
   },
   "tests/identity/sso/sso_support.py": {
-    "mtime": 1794527931.0716121,
-    "seen": 1794783908.9846542,
-    "ast_hash": "f0be310c227550bdf4de00306f676ceb",
-    "semantic_hash": "f0be310c227550bdf4de00306f676ceb"
+    "mtime": 1795433026.5144606,
+    "seen": 1795461823.9563427,
+    "ast_hash": "c9dbb51c5dbb8f5ef73b06b9eb14585e",
+    "semantic_hash": ""
   },
   "tests/identity/sso/test_sso_admin_routes.py": {
-    "mtime": 1794527931.0716121,
-    "seen": 1794783908.9846542,
-    "ast_hash": "785e7404356b8f411428396b9f56bc92",
-    "semantic_hash": "785e7404356b8f411428396b9f56bc92"
+    "mtime": 1795428980.8919551,
+    "seen": 1795461823.9563427,
+    "ast_hash": "a337b1dc30b8878ca719fc391f145092",
+    "semantic_hash": ""
   },
   "tests/identity/sso/test_sso_break_glass_live.py": {
     "mtime": 1794527931.072961,
@@ -1026,28 +1026,28 @@
     "semantic_hash": "419688938591cd3d4123f1c461d1c1f3"
   },
   "tests/identity/sso/test_sso_sign_in.py": {
-    "mtime": 1795405835.8027053,
-    "seen": 1795422988.5350678,
-    "ast_hash": "866d45c6842da7e439cb4e9103dda89b",
+    "mtime": 1795433026.5144606,
+    "seen": 1795461823.9563427,
+    "ast_hash": "e336650a644232e5e0317e49164cf861",
     "semantic_hash": ""
   },
   "tests/identity/test_identity_admin_routes.py": {
-    "mtime": 1795405835.804539,
-    "seen": 1795422988.5350678,
-    "ast_hash": "2c01269d115b7e3b0e5b197e983ea937",
+    "mtime": 1795433026.5163088,
+    "seen": 1795461823.9563427,
+    "ast_hash": "f591d628309d13178d41c7e00719480d",
     "semantic_hash": ""
   },
   "tests/identity/test_identity_apikeys.py": {
-    "mtime": 1794527931.0791147,
-    "seen": 1794783908.9846542,
-    "ast_hash": "8bd55be75cca1b4881bb6c241314ca06",
-    "semantic_hash": "8bd55be75cca1b4881bb6c241314ca06"
+    "mtime": 1795433026.5163088,
+    "seen": 1795461823.9563427,
+    "ast_hash": "cddcfb8acf18cd14e520107ffb61f612",
+    "semantic_hash": ""
   },
   "tests/identity/test_identity_client_address.py": {
-    "mtime": 1794527931.0797398,
-    "seen": 1794783908.9846542,
-    "ast_hash": "2fa318e6b146b53efd150981038627e0",
-    "semantic_hash": "2fa318e6b146b53efd150981038627e0"
+    "mtime": 1795433026.5182664,
+    "seen": 1795461823.9563427,
+    "ast_hash": "0938a8c7d99041dd93b8410a241d648c",
+    "semantic_hash": ""
   },
   "tests/identity/test_identity_config.py": {
     "mtime": 1794527931.080254,
@@ -1062,22 +1062,22 @@
     "semantic_hash": "b6e75bc69db7d46902200de425d2ec5d"
   },
   "tests/identity/test_identity_dependencies.py": {
-    "mtime": 1794527931.080254,
-    "seen": 1794783908.9846542,
-    "ast_hash": "62de7f430430fc7ea70de1bdb8021e52",
-    "semantic_hash": "62de7f430430fc7ea70de1bdb8021e52"
+    "mtime": 1795433026.5182664,
+    "seen": 1795461823.9563427,
+    "ast_hash": "ff241053b8bdabe6f074c75936829cb4",
+    "semantic_hash": ""
   },
   "tests/identity/test_identity_invitations.py": {
-    "mtime": 1794527931.080254,
-    "seen": 1794783908.9850838,
-    "ast_hash": "5c5c4aa9bcd51720fe505e9771270b81",
-    "semantic_hash": "5c5c4aa9bcd51720fe505e9771270b81"
+    "mtime": 1795433026.5202992,
+    "seen": 1795461823.9563427,
+    "ast_hash": "0f2efb78ff20d2dd5e21a0abb48cc01d",
+    "semantic_hash": ""
   },
   "tests/identity/test_identity_key_publication.py": {
-    "mtime": 1794527931.0820248,
-    "seen": 1794783908.9850838,
-    "ast_hash": "0b3d649cf412f4ad405cbb677c0a86f5",
-    "semantic_hash": "0b3d649cf412f4ad405cbb677c0a86f5"
+    "mtime": 1795433026.5202992,
+    "seen": 1795461823.9563427,
+    "ast_hash": "c1584e4e25cfa35a31ccb0e4a846e1b4",
+    "semantic_hash": ""
   },
   "tests/identity/test_identity_lifecycle_routes.py": {
     "mtime": 1794527931.0823498,
@@ -1092,16 +1092,16 @@
     "semantic_hash": "cf608694294c6f71121c1a8b092d3948"
   },
   "tests/identity/test_identity_mfa.py": {
-    "mtime": 1795405835.8051724,
-    "seen": 1795422988.5350678,
-    "ast_hash": "c77c74d3789e91b382f276d0f420ef66",
+    "mtime": 1795433026.5202992,
+    "seen": 1795461823.9563427,
+    "ast_hash": "60961573b89ed64ab24905a3bcda3104",
     "semantic_hash": ""
   },
   "tests/identity/test_identity_mfa_mail.py": {
-    "mtime": 1794527931.0823498,
-    "seen": 1794783908.9850838,
-    "ast_hash": "19826239d5f828ab48d8d779535b127d",
-    "semantic_hash": "19826239d5f828ab48d8d779535b127d"
+    "mtime": 1795433026.5202992,
+    "seen": 1795461823.9563427,
+    "ast_hash": "72acaa5d28b157f0acc99113fdd2ccad",
+    "semantic_hash": ""
   },
   "tests/identity/test_identity_passwords.py": {
     "mtime": 1794527931.0840757,
@@ -1110,21 +1110,21 @@
     "semantic_hash": "b454dc49dbf9ecb094457f3fd2ef0e5f"
   },
   "tests/identity/test_identity_policy.py": {
-    "mtime": 1794527931.084384,
-    "seen": 1794783908.9850838,
-    "ast_hash": "6f7066a64a7ea1e260b1ca43374cd4ac",
-    "semantic_hash": "6f7066a64a7ea1e260b1ca43374cd4ac"
+    "mtime": 1795433026.5223322,
+    "seen": 1795461823.9563427,
+    "ast_hash": "d0143ed3e8eaca2b1b83245635af35ba",
+    "semantic_hash": ""
   },
   "tests/identity/test_identity_prune.py": {
-    "mtime": 1794527931.0848207,
-    "seen": 1794783908.9850838,
-    "ast_hash": "7eb30a25ebdf25998083556f51b44f3a",
+    "mtime": 1795433026.5223322,
+    "seen": 1795461823.9563427,
+    "ast_hash": "9d6910ee8f90af9f63e7b230705edc9a",
     "semantic_hash": ""
   },
   "tests/identity/test_identity_reset.py": {
-    "mtime": 1795405835.8060975,
-    "seen": 1795422988.5350678,
-    "ast_hash": "9a64d8987240c598d5427f685f259b00",
+    "mtime": 1795433026.5223322,
+    "seen": 1795461823.9563427,
+    "ast_hash": "b7c372af1e80289937d7df7754ada901",
     "semantic_hash": ""
   },
   "tests/identity/test_identity_roles.py": {
@@ -1140,9 +1140,9 @@
     "semantic_hash": "7b810d77fc825f3b94c3c2372691ba34"
   },
   "tests/identity/test_identity_sign_in.py": {
-    "mtime": 1795405835.8064244,
-    "seen": 1795422988.5350678,
-    "ast_hash": "6c94e68e74259cb8d2b493ee75914a34",
+    "mtime": 1795433026.5243616,
+    "seen": 1795461823.9563427,
+    "ast_hash": "4c728de71c816eb5bc4dd13fff499c18",
     "semantic_hash": ""
   },
   "tests/identity/test_identity_single_use.py": {
@@ -1152,10 +1152,10 @@
     "semantic_hash": "409c3930e3e81ce18bb0814ecf42a398"
   },
   "tests/identity/test_identity_throttle.py": {
-    "mtime": 1794527931.0868497,
-    "seen": 1794783908.9850838,
-    "ast_hash": "a869903769bfceb5f434a9b551d764e6",
-    "semantic_hash": "a869903769bfceb5f434a9b551d764e6"
+    "mtime": 1795433026.5243616,
+    "seen": 1795461823.9563427,
+    "ast_hash": "52a8e9a2a225b0e6cf6a355b6f591419",
+    "semantic_hash": ""
   },
   "tests/identity/test_identity_token_body.py": {
     "mtime": 1794527931.0868497,
@@ -1164,16 +1164,16 @@
     "semantic_hash": "3cbc9443fca5df37bb93d7bd277b0ba6"
   },
   "tests/identity/test_identity_tokens.py": {
-    "mtime": 1794527931.0883863,
-    "seen": 1794783908.9850838,
-    "ast_hash": "b50f910d42995aeadad992e7dad5cbe6",
+    "mtime": 1795433026.5243616,
+    "seen": 1795461823.9563427,
+    "ast_hash": "f37fa5775f2e0ec2b6aa747df0052f91",
     "semantic_hash": ""
   },
   "tests/identity/test_identity_totp_reset.py": {
-    "mtime": 1794527931.0888796,
-    "seen": 1794783908.9850838,
-    "ast_hash": "98e42b0eeeebc3e048dbf91fb909fb54",
-    "semantic_hash": "98e42b0eeeebc3e048dbf91fb909fb54"
+    "mtime": 1795433026.526395,
+    "seen": 1795461823.9563427,
+    "ast_hash": "a88184345eeae1e6fc289d4dfe5186e4",
+    "semantic_hash": ""
   },
   "tests/identity/test_identity_totp_storage.py": {
     "mtime": 1794527931.0888796,
@@ -1194,10 +1194,10 @@
     "semantic_hash": ""
   },
   "tests/identity/webauthn/conftest.py": {
-    "mtime": 1794527931.0932848,
-    "seen": 1794783908.9850838,
-    "ast_hash": "ead12e3354b66d570aedac0621afac71",
-    "semantic_hash": "ead12e3354b66d570aedac0621afac71"
+    "mtime": 1795433026.5304618,
+    "seen": 1795461823.9563427,
+    "ast_hash": "2602ea3eca3ebc287cc92cc67034ce2f",
+    "semantic_hash": ""
   },
   "tests/identity/webauthn/passkey_mail_overrides.py": {
     "mtime": 1794527931.095855,
@@ -1206,10 +1206,10 @@
     "semantic_hash": "1caf4fb514f8d0187144d6bdf07cbec6"
   },
   "tests/identity/webauthn/passkey_support.py": {
-    "mtime": 1794527931.095855,
-    "seen": 1794783908.9850838,
-    "ast_hash": "69de28e7667c92c0be99887398418c95",
-    "semantic_hash": "69de28e7667c92c0be99887398418c95"
+    "mtime": 1795433026.5314434,
+    "seen": 1795461823.9563427,
+    "ast_hash": "e089a3eb1e95823139c2d1202cac5cf8",
+    "semantic_hash": ""
   },
   "tests/identity/webauthn/soft_authenticator.py": {
     "mtime": 1794527931.095855,
@@ -1218,21 +1218,21 @@
     "semantic_hash": "319eb3eceb2cd9e7c6d363051715c95e"
   },
   "tests/identity/webauthn/test_passkey_invitation.py": {
-    "mtime": 1794527931.097884,
-    "seen": 1794783908.9850838,
-    "ast_hash": "d9dba8a5b26c51c6d5bc2f91d5fe83b0",
-    "semantic_hash": "d9dba8a5b26c51c6d5bc2f91d5fe83b0"
+    "mtime": 1795433026.5340283,
+    "seen": 1795461823.9563427,
+    "ast_hash": "9145a3471b40308603f2b82edcbb40bf",
+    "semantic_hash": ""
   },
   "tests/identity/webauthn/test_passkey_registration_link.py": {
-    "mtime": 1794527931.097884,
-    "seen": 1794783908.9850838,
-    "ast_hash": "2a0d272231da4910178fd1015da4927f",
-    "semantic_hash": "2a0d272231da4910178fd1015da4927f"
+    "mtime": 1795433026.5340283,
+    "seen": 1795461823.9563427,
+    "ast_hash": "24518913ad833c486da50dbe27b16c0a",
+    "semantic_hash": ""
   },
   "tests/identity/webauthn/test_passkey_sign_in.py": {
-    "mtime": 1795405835.8087764,
-    "seen": 1795422988.5350678,
-    "ast_hash": "56a7069f72a682ffa4800da29be78ff5",
+    "mtime": 1795433026.5340283,
+    "seen": 1795461823.9563427,
+    "ast_hash": "e79ab91ef4e40a015ca395c95408ee5e",
     "semantic_hash": ""
   },
   "tests/identity/webauthn/test_webauthn_authentication.py": {
@@ -1248,9 +1248,9 @@
     "semantic_hash": "431add86c8e6e50b4e43f8ff8793829d"
   },
   "tests/identity/webauthn/test_webauthn_mfa.py": {
-    "mtime": 1795405835.8103487,
-    "seen": 1795422988.5350678,
-    "ast_hash": "a4f5b66d7b46b0cf1e4a6405a0dd819f",
+    "mtime": 1795433026.5360613,
+    "seen": 1795461823.9563427,
+    "ast_hash": "a6d716cf079c48b213decda22ef15ec5",
     "semantic_hash": ""
   },
   "tests/identity/webauthn/test_webauthn_registration.py": {
@@ -1260,16 +1260,16 @@
     "semantic_hash": "be2eb4e9e615342d98e919264d80194b"
   },
   "tests/identity/webauthn/test_webauthn_reset.py": {
-    "mtime": 1794527931.1019514,
-    "seen": 1794783908.9850838,
-    "ast_hash": "e9d74a4e6cea8e18de9421c44a66710e",
-    "semantic_hash": "e9d74a4e6cea8e18de9421c44a66710e"
+    "mtime": 1795433026.5373971,
+    "seen": 1795461823.9563427,
+    "ast_hash": "617443a29f0c7ff349842235144e6956",
+    "semantic_hash": ""
   },
   "tests/identity/webauthn/test_webauthn_unconfigured.py": {
-    "mtime": 1794527931.1027095,
-    "seen": 1794783908.9850838,
-    "ast_hash": "bf5e9f19781cd884c27606a2ed83ad56",
-    "semantic_hash": "bf5e9f19781cd884c27606a2ed83ad56"
+    "mtime": 1795433026.5380943,
+    "seen": 1795461823.9563427,
+    "ast_hash": "51b1d2d33e47e0e8cc149a7e4b1b343b",
+    "semantic_hash": ""
   },
   "tests/identity/webauthn/webauthn_support.py": {
     "mtime": 1794527931.1034455,
@@ -1434,9 +1434,9 @@
     "semantic_hash": ""
   },
   "tests/test_openapi_contract.py": {
-    "mtime": 1794527931.1207862,
-    "seen": 1794783908.9850838,
-    "ast_hash": "d7898eb9a9a14032064cd5f3f34ff2e7",
+    "mtime": 1795433026.5380943,
+    "seen": 1795461823.9563427,
+    "ast_hash": "b85b2fc3dc06681fe9bb89fa532091a7",
     "semantic_hash": ""
   },
   "tests/test_packaging.py": {
@@ -1452,9 +1452,9 @@
     "semantic_hash": "746d280836e49bf88a57de40ecd20da3"
   },
   "tests/test_public_api.py": {
-    "mtime": 1795405835.8120637,
-    "seen": 1795422988.5350678,
-    "ast_hash": "3482556038f0a6b94f34b77d2264f6cb",
+    "mtime": 1795433026.5380943,
+    "seen": 1795461823.9563427,
+    "ast_hash": "20eef1860bebbd79f3bc9c80b754cb56",
     "semantic_hash": ""
   },
   "tests/test_readme.py": {
@@ -1542,9 +1542,9 @@
     "semantic_hash": "93b2a84c8097f9ccaaf20fde64fb22d6"
   },
   "CHANGELOG.md": {
-    "mtime": 1795407935.3579726,
-    "seen": 1795422988.5350678,
-    "ast_hash": "f23a6f341d6bfd65a0d7dc48e460af97",
+    "mtime": 1795434253.038849,
+    "seen": 1795461823.9563427,
+    "ast_hash": "f0e5d6e06304a43098e1375c73bb5127",
     "semantic_hash": ""
   },
   "CLAUDE.md": {
@@ -1572,15 +1572,15 @@
     "semantic_hash": "6a8d22f13f02480a7e406ede1d14155c"
   },
   "docs/design/overview.md": {
-    "mtime": 1795405835.7733085,
-    "seen": 1795422988.5350678,
-    "ast_hash": "92fa1febecfe029f08d4461a9ec0bd6d",
+    "mtime": 1795433026.4963188,
+    "seen": 1795461823.9563427,
+    "ast_hash": "95c374e13bfb0a7dc6383e2833d1889e",
     "semantic_hash": ""
   },
   "docs/guide/clients.md": {
-    "mtime": 1795030447.585471,
-    "seen": 1795422988.5350678,
-    "ast_hash": "edc1bed169204ac9e04bef4be05023a2",
+    "mtime": 1795433026.4974053,
+    "seen": 1795461823.9563427,
+    "ast_hash": "38bb5061fd65d4232906c1fdde0add36",
     "semantic_hash": ""
   },
   "docs/releasing.md": {
@@ -1590,9 +1590,9 @@
     "semantic_hash": ""
   },
   "examples/console/README.md": {
-    "mtime": 1794527930.909914,
-    "seen": 1794783908.9850838,
-    "ast_hash": "8917b25d36902ca05a6c94b263daef8f",
+    "mtime": 1795424882.0833483,
+    "seen": 1795461823.9563427,
+    "ast_hash": "092a0b67c847e869e0605ee65336f113",
     "semantic_hash": ""
   },
   "examples/console/static/index.html": {
@@ -1608,9 +1608,9 @@
     "semantic_hash": ""
   },
   "tests/examples/test_console_passkeys.py": {
-    "mtime": 1795405835.8011298,
-    "seen": 1795422988.5350678,
-    "ast_hash": "e659cdfb6bb28a144debe65f7b673336",
+    "mtime": 1795433026.508356,
+    "seen": 1795461823.9563427,
+    "ast_hash": "715cd1abc814190c29ce35f452e45523",
     "semantic_hash": ""
   },
   "tests/identity/webauthn/live/page/ceremony.js": {
@@ -1626,9 +1626,9 @@
     "semantic_hash": ""
   },
   "tests/identity/webauthn/live/webauthn_live_support.py": {
-    "mtime": 1794527931.095855,
-    "seen": 1794783908.9850838,
-    "ast_hash": "ff9617b9284251c9e1734bc2982236da",
+    "mtime": 1795433026.5314434,
+    "seen": 1795461823.9563427,
+    "ast_hash": "78f2c5f87a1fde0e8eb456a133346a09",
     "semantic_hash": ""
   },
   "tests/identity/webauthn/live/page/index.html": {
@@ -1638,9 +1638,9 @@
     "semantic_hash": ""
   },
   "tests/identity/webauthn/test_passkey_flag.py": {
-    "mtime": 1794527931.097353,
-    "seen": 1794783908.9850838,
-    "ast_hash": "f3a3fbc90853e9d621019d313a71b406",
+    "mtime": 1795433026.5324945,
+    "seen": 1795461823.9563427,
+    "ast_hash": "d47adda5f27f3bd5e4c4d2923a537e0b",
     "semantic_hash": ""
   },
   "tests/identity/webauthn/test_passkey_options_throttle.py": {
@@ -1662,9 +1662,9 @@
     "semantic_hash": ""
   },
   "tests/identity/test_identity_capabilities.py": {
-    "mtime": 1794527931.0791147,
-    "seen": 1794783908.9846542,
-    "ast_hash": "69ec048cf7032ac0a641fc6358085497",
+    "mtime": 1795433026.5182664,
+    "seen": 1795461823.9563427,
+    "ast_hash": "b116c9e15cb6fd24c440ea0103141ba4",
     "semantic_hash": ""
   },
   "docs/contract/password-rule-vectors.json": {
@@ -1812,9 +1812,9 @@
     "semantic_hash": ""
   },
   "tests/identity/password_policy/test_password_no_leaks.py": {
-    "mtime": 1794527931.0657165,
-    "seen": 1794783908.9846542,
-    "ast_hash": "0daa685fa6ebd4894bcf6e05b5d6c907",
+    "mtime": 1795433026.5124218,
+    "seen": 1795461823.9563427,
+    "ast_hash": "5916e4d713c3b453adb5cda464afc7e0",
     "semantic_hash": ""
   },
   "tests/identity/password_policy/test_password_policy_store.py": {
@@ -1824,9 +1824,9 @@
     "semantic_hash": ""
   },
   "tests/identity/password_policy/test_password_recheck.py": {
-    "mtime": 1794527931.066795,
-    "seen": 1794783908.9846542,
-    "ast_hash": "44bcc3731495e23d92b7a2cf1b5d5718",
+    "mtime": 1795433026.5124218,
+    "seen": 1795461823.9563427,
+    "ast_hash": "258f071659d6993699469967e99f54f9",
     "semantic_hash": ""
   },
   "tests/identity/password_policy/test_password_rule_vectors.py": {
@@ -1896,21 +1896,21 @@
     "semantic_hash": ""
   },
   "tests/identity/password_admin_support.py": {
-    "mtime": 1794527931.0611994,
-    "seen": 1794783908.9846542,
-    "ast_hash": "d90110ceaf066e6ee32098e923e90cc5",
+    "mtime": 1795433026.5101757,
+    "seen": 1795461823.9563427,
+    "ast_hash": "79085c7c0e431373529e108db81b9ef3",
     "semantic_hash": ""
   },
   "tests/identity/password_policy/test_password_cli.py": {
-    "mtime": 1794527931.0638354,
-    "seen": 1794783908.9846542,
-    "ast_hash": "7a4c759c01efa669a330fbe2d95bf814",
+    "mtime": 1795433026.5101757,
+    "seen": 1795461823.9563427,
+    "ast_hash": "600ab28cb360ed9a3111b838d7f3d1d3",
     "semantic_hash": ""
   },
   "tests/identity/password_support.py": {
-    "mtime": 1794527931.0695846,
-    "seen": 1794783908.9846542,
-    "ast_hash": "aca36e9c15e740a3858e67001ad5d652",
+    "mtime": 1795433026.5124218,
+    "seen": 1795461823.9563427,
+    "ast_hash": "410f759823ac4475011013f038eb27e0",
     "semantic_hash": ""
   },
   "tests/identity/sso/test_sso_password_state.py": {
@@ -1926,21 +1926,21 @@
     "semantic_hash": ""
   },
   "tests/identity/test_password_feedback.py": {
-    "mtime": 1794527931.0912278,
-    "seen": 1794783908.9850838,
-    "ast_hash": "47896563f110eb3492e4c0f812bd6889",
+    "mtime": 1795433026.5271745,
+    "seen": 1795461823.9563427,
+    "ast_hash": "e1bfd4cbd0b7f3e0a5ccdda8c013c2e0",
     "semantic_hash": ""
   },
   "tests/identity/test_password_set_points.py": {
-    "mtime": 1794527931.091692,
-    "seen": 1794783908.9850838,
-    "ast_hash": "382c34d081ee78e737c0da2aa28fc3ee",
+    "mtime": 1795433026.5289083,
+    "seen": 1795461823.9563427,
+    "ast_hash": "fb31b58fb07af50a0e9cd50b3fe4d6d1",
     "semantic_hash": ""
   },
   "tests/identity/test_password_sign_in.py": {
-    "mtime": 1794527931.0925162,
-    "seen": 1794783908.9850838,
-    "ast_hash": "37e801da146f56f853352442958fbe30",
+    "mtime": 1795433026.5289083,
+    "seen": 1795461823.9563427,
+    "ast_hash": "96f9dfdc667f3e0251686948087da31d",
     "semantic_hash": ""
   },
   "tests/identity/test_watch_list_admin_routes.py": {
@@ -1968,21 +1968,15 @@
     "semantic_hash": ""
   },
   "examples/console/static/js/checklist.js": {
-    "mtime": 1794527930.9246204,
-    "seen": 1794783908.9846542,
-    "ast_hash": "e7a12f4948a5d778b940e6dab28c2f5b",
+    "mtime": 1795424882.0850217,
+    "seen": 1795461823.9558446,
+    "ast_hash": "f52eb9e66e38748590985459479579f3",
     "semantic_hash": ""
   },
   "examples/console/static/js/dev.js": {
     "mtime": 1794527930.9246204,
     "seen": 1794783908.9846542,
     "ast_hash": "540e199360ff16cb293bbc9da50189c2",
-    "semantic_hash": ""
-  },
-  "examples/console/static/js/passwordrules.js": {
-    "mtime": 1794527930.926655,
-    "seen": 1794783908.9846542,
-    "ast_hash": "3ee4d1100424b79cfbb0533717e1bb78",
     "semantic_hash": ""
   },
   "examples/console/static/js/passwords.js": {
@@ -1992,15 +1986,9 @@
     "semantic_hash": ""
   },
   "tests/examples/test_console_password_policy.py": {
-    "mtime": 1794527931.057824,
-    "seen": 1794783908.9846542,
-    "ast_hash": "5bfd9c1c272a7ded6101c568e2c7eff8",
-    "semantic_hash": ""
-  },
-  "tests/examples/test_console_password_rules.py": {
-    "mtime": 1794527931.057824,
-    "seen": 1794783908.9846542,
-    "ast_hash": "90497854d75ddaa6f80e028f1249dc06",
+    "mtime": 1795433026.508356,
+    "seen": 1795461823.9563427,
+    "ast_hash": "f1ce129ea26b0a27cb2f1806ddb75ec7",
     "semantic_hash": ""
   },
   "examples/console/data/synthetic-pwned.txt": {
@@ -2028,15 +2016,15 @@
     "semantic_hash": ""
   },
   "tests/identity/test_audit_source_ip_routes.py": {
-    "mtime": 1795405835.803308,
-    "seen": 1795422988.5350678,
-    "ast_hash": "79fb6c9696fed87727054f4ec3ec827c",
+    "mtime": 1795433026.5163088,
+    "seen": 1795461823.9563427,
+    "ast_hash": "dc7f57a70b64c834078f0d3b785072f8",
     "semantic_hash": ""
   },
   "tests/identity/test_invitation_revoke_routes.py": {
-    "mtime": 1795030447.6485813,
-    "seen": 1795422988.5350678,
-    "ast_hash": "183605e927d0182bfdd4fac54e32f7ee",
+    "mtime": 1795433026.526395,
+    "seen": 1795461823.9563427,
+    "ast_hash": "28bb75091cbd5339705d6efbcf9c5905",
     "semantic_hash": ""
   },
   "tests/test_audit_source_ip_tripwire.py": {
@@ -2058,9 +2046,9 @@
     "semantic_hash": ""
   },
   "src/warden/identity/sign_in_settings.py": {
-    "mtime": 1795405835.7939491,
-    "seen": 1795422988.5350678,
-    "ast_hash": "e2ef32fc87b5ae55a17f3dfc24718e94",
+    "mtime": 1795433026.5061471,
+    "seen": 1795461823.9558446,
+    "ast_hash": "ae6701d80b7e05e96ce80e4f15baaae7",
     "semantic_hash": ""
   },
   "tests/db/test_sign_in_methods_migration.py": {
@@ -2070,21 +2058,81 @@
     "semantic_hash": ""
   },
   "tests/identity/sso/test_sign_in_methods_sso.py": {
-    "mtime": 1795405835.8015773,
-    "seen": 1795422988.5350678,
-    "ast_hash": "483a658677e87242dfad0dfdba482516",
+    "mtime": 1795433026.5144606,
+    "seen": 1795461823.9563427,
+    "ast_hash": "75a252f149c45f31c1acadc71bec6dcf",
     "semantic_hash": ""
   },
   "tests/identity/test_sign_in_methods.py": {
-    "mtime": 1795405835.807741,
-    "seen": 1795422988.5350678,
-    "ast_hash": "1f451ea72a7a920b8e29d1ba161dc3e3",
+    "mtime": 1795433026.5289083,
+    "seen": 1795461823.9563427,
+    "ast_hash": "ad83b600c4f2e7287451b0c8e0ffc47a",
     "semantic_hash": ""
   },
   "tests/identity/webauthn/test_sign_in_methods_passkey.py": {
-    "mtime": 1795405835.8092928,
-    "seen": 1795422988.5350678,
-    "ast_hash": "28f28015925c811522909675d3155007",
+    "mtime": 1795433026.5360613,
+    "seen": 1795461823.9563427,
+    "ast_hash": "fedc8cbefe472fcd2f14fadf67886039",
+    "semantic_hash": ""
+  },
+  "src/warden/static/__init__.py": {
+    "mtime": 1795424882.0853486,
+    "seen": 1795461823.9558446,
+    "ast_hash": "eb7a0258fbde638bb76314c921ba8076",
+    "semantic_hash": ""
+  },
+  "src/warden/static/passwordrules.js": {
+    "mtime": 1795424882.0863473,
+    "seen": 1795461823.9558446,
+    "ast_hash": "5ba43d4b05b6f8dd9b3ca84fad0b8416",
+    "semantic_hash": ""
+  },
+  "tests/identity/sso/test_sso_setup_guides.py": {
+    "mtime": 1795428980.8939881,
+    "seen": 1795461823.9563427,
+    "ast_hash": "d224ec1c7180d6cc10cba226505db630",
+    "semantic_hash": ""
+  },
+  "tests/identity/test_mfa_factors.py": {
+    "mtime": 1795433026.5271745,
+    "seen": 1795461823.9563427,
+    "ast_hash": "eba19ecb2513b4590fc31ca0ddd3285c",
+    "semantic_hash": ""
+  },
+  "tests/identity/webauthn/test_mfa_factors_webauthn.py": {
+    "mtime": 1795433026.5324945,
+    "seen": 1795461823.9563427,
+    "ast_hash": "8deeb5e860971bcd1bf6be0e43e0512b",
+    "semantic_hash": ""
+  },
+  "tests/packaging/test_static_scripts.py": {
+    "mtime": 1795424882.0873506,
+    "seen": 1795461823.9563427,
+    "ast_hash": "bc893bf90197f24dba134ad1ecca8cd6",
+    "semantic_hash": ""
+  },
+  "tests/static/run_vectors.mjs": {
+    "mtime": 1795424882.0883505,
+    "seen": 1795461823.9563427,
+    "ast_hash": "b60705743694aaa12c36ba88b1eb6304",
+    "semantic_hash": ""
+  },
+  "tests/static/test_browser_rules_vectors.py": {
+    "mtime": 1795424882.0883505,
+    "seen": 1795461823.9563427,
+    "ast_hash": "8ef339eeec6a079158e50416935334cf",
+    "semantic_hash": ""
+  },
+  "tests/static/test_static_helper.py": {
+    "mtime": 1795424882.0894494,
+    "seen": 1795461823.9563427,
+    "ast_hash": "5e22e8188114c5d95c11be3489e81606",
+    "semantic_hash": ""
+  },
+  "docs/guide/sso-providers.md": {
+    "mtime": 1795428980.8874586,
+    "seen": 1795461823.9563427,
+    "ast_hash": "896044e3a84b9bfa4827afdc1f89e2c3",
     "semantic_hash": ""
   }
 }
