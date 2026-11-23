@@ -516,3 +516,16 @@ async def test_the_route_takes_password_and_null_and_reports_the_pending_change(
     answer = await client.post(path, json={"sign_in_method": "sso_only"}, headers=admin)
     assert answer.status_code == 409
     assert "single sign-on" in answer.json()["detail"]
+
+
+async def test_the_set_password_link_works_while_the_method_in_force_has_no_password(
+    identity: Identity, make_user: UserFactory, mail: RecordingSender, db: Database
+) -> None:
+    user = await make_user(password=None, sign_in_method=SignInMethod.PASSKEY_ONLY)
+    state = await identity.set_sign_in_method(user.id, SignInMethod.PASSWORD, actor="admin-1")
+    assert state.effective is SignInMethod.PASSKEY_ONLY
+    assert state.pending is not None and state.pending.link is SetupLink.SET_PASSWORD
+    await identity.resets.complete(mail.token(), NEW_PASSWORD)
+    state = await identity.sign_in_method(user.id)
+    assert (state.effective, state.pending) == (SignInMethod.PASSWORD, None)
+    assert await has_password(db, user.id)

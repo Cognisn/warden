@@ -181,3 +181,15 @@ async def test_the_old_link_refusal_still_applies_to_sso_only_users_with_nothing
         await identity.send_passkey_registration(user.id, actor="admin-1")
     assert mail.sent == []
     assert_refused(await http.post("/auth/passkey-registration/options", json={"token": "x" * 43}))
+
+
+async def test_a_password_set_meanwhile_does_not_complete_a_move_to_passkey_only(
+    identity: Identity, make_user: UserFactory, db: Database
+) -> None:
+    user = await make_user()
+    await identity.set_sign_in_method(user.id, SignInMethod.PASSKEY_ONLY, actor="admin-1")
+    await identity.users.set_password(user.id, "an administrator's new passphrase", actor="admin-1")
+    state = await identity.sign_in_method(user.id)
+    assert state.effective is SignInMethod.PASSWORD_AND_SSO
+    assert state.pending is not None and state.pending.to_method is SignInMethod.PASSKEY_ONLY
+    assert await has_password(db, user.id)
