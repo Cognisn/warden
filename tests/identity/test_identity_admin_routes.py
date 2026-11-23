@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from fastapi import FastAPI
-from identity_support import PASSWORD, RecordingSender, UserFactory, audit_rows
+from identity_support import PASSWORD, RecordingSender, UserFactory, audit_rows, complete_sign_in
 
 from warden.db import Database
 from warden.identity import Identity, PermissionRegistry, User, UserStatus
@@ -53,7 +53,7 @@ async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
 
 
 async def _bearer(identity: Identity, user: User) -> dict[str, str]:
-    result = await identity.sign_in(user.email, PASSWORD)
+    result = await complete_sign_in(identity, user.email, PASSWORD)
     assert result.tokens is not None
     return {"authorization": f"Bearer {result.tokens.access_token}"}
 

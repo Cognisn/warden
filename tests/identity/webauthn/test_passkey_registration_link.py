@@ -19,6 +19,7 @@ from identity_support import (
     RecordingSender,
     UserFactory,
     audit_rows,
+    http_sign_in,
     race,
 )
 from passkey_support import (
@@ -60,7 +61,7 @@ async def http(identity: Identity) -> AsyncIterator[httpx.AsyncClient]:
 @pytest.fixture
 async def admin(http: httpx.AsyncClient, make_user: UserFactory) -> dict[str, str]:
     user = await make_user(roles=("admin",))
-    answer = await http.post("/auth/sign-in", json={"email": user.email, "password": PASSWORD})
+    answer = await http_sign_in(http, user.email, PASSWORD)
     return {"authorization": f"Bearer {answer.json()['access_token']}"}
 
 
@@ -250,7 +251,7 @@ async def test_without_a_link_template_mail_or_relying_party_nothing_is_sent(
                 "accept_invitation_link": "https://app.example.com/accept?t={token}",
                 "reset_password_link": "https://app.example.com/reset?t={token}",
             },
-            "identity": {"require_mfa": False},
+            "identity": {},
         }
     )
     cases = [
@@ -268,9 +269,7 @@ async def test_without_a_link_template_mail_or_relying_party_nothing_is_sent(
             f"user-{status}-{len(message)}@example.com", actor="t", password=PASSWORD
         )
         async with http_client(identity) as http:
-            signed_in = await http.post(
-                "/auth/sign-in", json={"email": admin.email, "password": PASSWORD}
-            )
+            signed_in = await http_sign_in(http, admin.email, PASSWORD)
             bearer = {"authorization": f"Bearer {signed_in.json()['access_token']}"}
             answer = await _send(http, bearer, user)
         assert answer.status_code == status, (message, answer.text)

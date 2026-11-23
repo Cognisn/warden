@@ -1,4 +1,9 @@
-"""Session policy: token lifetimes, the session lifespan, reuse grace and MFA.
+"""Session policy: token lifetimes, the session lifespan and reuse grace.
+
+``require_mfa`` stays readable for compatibility and is always true: MFA is
+always required for password sign-in in warden 0.2.0 and later (ruling
+CS14), so a change to false is refused, and an override stored by 0.1.x is
+ignored when the policy is read.
 
 Configuration supplies the defaults. An administrator may override them at
 run time; the overrides live in ``warden.settings`` and every replica caches
@@ -34,6 +39,12 @@ __all__ = ["POLICY_CHANNEL", "POLICY_SETTING", "PolicyError", "PolicyStore", "Se
 
 logger = logging.getLogger(__name__)
 
+# The same sentence configuration refuses ``identity.require_mfa: false`` with.
+_MFA_ALWAYS_REQUIRED = (
+    "MFA is always required for password sign-in in warden 0.2.0 and later;"
+    " remove identity.require_mfa or set it to true"
+)
+
 _SETTINGS = table(SETTINGS)
 
 
@@ -47,7 +58,8 @@ class SessionPolicy:
     refresh_token_ttl_seconds: int
     session_lifespan_seconds: int
     refresh_reuse_grace_seconds: int
-    require_mfa: bool
+    require_mfa: bool = True
+    """Deprecated and always true (ruling CS14): kept readable for compatibility."""
 
     @classmethod
     def from_config(cls, config: IdentityConfig) -> SessionPolicy:
@@ -73,6 +85,8 @@ class SessionPolicy:
                 problems.append(f"{name} must be an integer")
         if type(self.require_mfa) is not bool:
             problems.append("require_mfa must be true or false")
+        elif not self.require_mfa:
+            problems.append(_MFA_ALWAYS_REQUIRED)
         if problems:
             raise PolicyError("; ".join(problems))
         if not 60 <= self.access_token_ttl_seconds <= 3600:
@@ -94,6 +108,7 @@ class SessionPolicy:
 
 
 _FIELDS = frozenset(f.name for f in dataclasses.fields(SessionPolicy))
+_OVERRIDABLE = _FIELDS - {"require_mfa"}
 
 
 class PolicyStore:
@@ -170,7 +185,7 @@ class PolicyStore:
             await tx.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (POLICY_SETTING,))
             overrides = {**await self._read(tx), **changes}
             policy = self._effective(overrides)
-            await self._write(tx, overrides)
+            await self._write(tx, {k: v for k, v in overrides.items() if k in _OVERRIDABLE})
             await record_audit(
                 AuditEvent(
                     action="warden.identity.policy.changed",
@@ -242,7 +257,9 @@ class PolicyStore:
         row = await cur.fetchone()
         if row is None or not isinstance(row[0], dict):
             return {}
-        return {k: v for k, v in row[0].items() if k in _FIELDS}
+        # require_mfa is no longer an override (ruling CS14): one stored by
+        # 0.1.x is ignored, so it can neither switch MFA off nor void the rest.
+        return {k: v for k, v in row[0].items() if k in _OVERRIDABLE}
 
     async def _write(self, tx: AsyncConnection[Any], overrides: dict[str, Any]) -> None:
         await tx.execute(

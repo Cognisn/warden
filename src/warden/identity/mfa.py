@@ -18,6 +18,12 @@ is confirmed, never again for a later one, and cover every factor. A change
 to a user's second factors locks the user's row (``lock_user``) first, so
 two of them for one user are decided one at a time.
 
+Which kinds a user may use is the administrator's choice (ruling CS14, the
+allowed second factors in ``warden.sign_in_settings``); ``Identity``
+enforces it, and ``remove_disallowed`` takes away a kind that is no longer
+allowed once the user holds an allowed one. Recovery codes are always the
+backup, and a signed-in user may replace theirs (``regenerate_recovery_codes``).
+
 TOTP secrets are stored sealed (``warden.identity.crypto``), bound to their
 user; a secret that does not open is treated as no secret.
 """
@@ -49,9 +55,11 @@ __all__ = [
     "MAX_CHALLENGE_FAILURES",
     "Challenge",
     "Enrolment",
+    "FreshSecondFactorRequired",
     "LastSecondFactorError",
     "Mfa",
     "SecondFactor",
+    "SecondFactorNotAllowed",
     "WebAuthnUnavailable",
 ]
 
@@ -96,6 +104,32 @@ class Challenge:
 
 class LastSecondFactorError(MfaError):
     """Refused: it would leave the user without a second factor while one is required."""
+
+
+class SecondFactorNotAllowed(MfaError):
+    """Refused: the administrator does not allow this kind of second factor (ruling CS14).
+
+    ``factor`` is the kind refused: ``totp``, or ``passkey`` for security
+    keys and passkeys.
+    """
+
+    def __init__(self, factor: str) -> None:
+        super().__init__(f"{factor} is not an allowed second factor")
+        self.factor = factor
+
+
+class FreshSecondFactorRequired(MfaError):
+    """Refused: replacing recovery codes needs a second factor proved just now.
+
+    The session must have been signed in with TOTP, a security key or a
+    passkey (not a recovery code, a password alone, single sign-on or an API
+    key) within ``identity.mfa_challenge_ttl_seconds``. ``reason`` is the
+    audited reason: ``no_second_factor`` or ``stale_second_factor``.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"a fresh second factor is required: {reason}")
+        self.reason = reason
 
 
 class WebAuthnUnavailable(MfaError):
@@ -228,6 +262,45 @@ class Mfa:
         if await cur.fetchone() is not None:
             return []
         return await self._replace_recovery_codes(conn, user_id)
+
+    async def regenerate_recovery_codes(
+        self, conn: AsyncConnection[Any], user_id: uuid.UUID
+    ) -> tuple[int, list[str]]:
+        """Replace every recovery code the user holds, used or not, with fresh ones.
+
+        Returns how many were removed and the new codes. Call with the user
+        locked (``lock_user``).
+        """
+        removed = await self.remove_recovery_codes(conn, user_id)
+        return removed, await self._replace_recovery_codes(conn, user_id)
+
+    async def remove_disallowed(
+        self,
+        conn: AsyncConnection[Any],
+        user_id: uuid.UUID,
+        *,
+        totp: bool,
+        keys: bool,
+    ) -> tuple[bool, int]:
+        """Delete the user's TOTP credential if ``totp``, and every key if ``keys``.
+
+        For second factors no longer allowed, once the user holds an allowed
+        one (ruling CS14). Returns whether a TOTP credential was removed and
+        how many keys. Recovery codes stay: they cover the factors left.
+        """
+        totp_removed = False
+        if totp:
+            cur = await conn.execute(
+                sql.SQL("DELETE FROM {} WHERE user_id = %s").format(_TOTP), (user_id,)
+            )
+            totp_removed = cur.rowcount == 1
+        keys_removed = 0
+        if keys:
+            cur = await conn.execute(
+                sql.SQL("DELETE FROM {} WHERE user_id = %s").format(_KEYS), (user_id,)
+            )
+            keys_removed = cur.rowcount
+        return totp_removed, keys_removed
 
     async def remove_recovery_codes(self, conn: AsyncConnection[Any], user_id: uuid.UUID) -> int:
         """Delete every recovery code the user holds; how many."""

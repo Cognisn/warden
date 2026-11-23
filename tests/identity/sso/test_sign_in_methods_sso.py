@@ -15,7 +15,14 @@ import httpx
 import pytest
 from fake_idp import CLIENT_SECRET, FakeIdp
 from fastapi import FastAPI
-from identity_support import PASSWORD, RecordingSender, UserFactory, audit_rows, race
+from identity_support import (
+    PASSWORD,
+    RecordingSender,
+    UserFactory,
+    audit_rows,
+    complete_sign_in,
+    race,
+)
 from sso_support import CLIENT_SECRET_NAME, sign_in, sso_config
 
 from warden.config import WardenConfig
@@ -150,12 +157,12 @@ async def test_a_default_change_to_password_ends_single_sign_on_sessions(
 ) -> None:
     user = await make_user(ALICE)
     assert (await sign_in(client, idp, email=ALICE, sub="alice-sub")).status_code == 200
-    assert (await identity.sign_in(ALICE, PASSWORD)).tokens is not None
+    assert (await complete_sign_in(identity, ALICE, PASSWORD)).tokens is not None
     change = await identity.update_sign_in_settings(
         actor="admin-1", default_sign_in_method="password"
     )
     assert change.changed == (user.id,)
-    assert await live_sessions(db, user.id) == [["pwd"]]
+    assert await live_sessions(db, user.id) == [["pwd", "otp"]]
 
 
 # Moving to sso_only
@@ -170,13 +177,13 @@ async def test_a_move_to_sso_only_completes_at_the_first_single_sign_on(
     identity: Identity,
 ) -> None:
     user = await make_user(ALICE)
-    assert (await identity.sign_in(ALICE, PASSWORD)).tokens is not None
+    assert (await complete_sign_in(identity, ALICE, PASSWORD)).tokens is not None
     state = await identity.set_sign_in_method(user.id, SignInMethod.SSO_ONLY, actor="admin-1")
     assert state.effective is SignInMethod.PASSWORD_AND_SSO
     assert state.pending is not None and state.pending.link is None
     assert mail.sent == []
     # The password keeps working until then.
-    assert (await identity.sign_in(ALICE, PASSWORD)).tokens is not None
+    assert (await complete_sign_in(identity, ALICE, PASSWORD)).tokens is not None
     answer = await sign_in(client, idp, email=ALICE, sub="alice-sub")
     assert answer.status_code == 200, answer.text
     state = await identity.sign_in_method(user.id)
@@ -285,7 +292,7 @@ async def test_password_and_sso_and_inactive_users_do_not_hold_single_sign_on(
     await identity.users.set_status(gone.id, UserStatus.SUSPENDED, actor="admin-1")
     settings = await sso.settings.update(actor="admin-1", enabled=False)
     assert not settings.enabled
-    assert (await identity.sign_in(ALICE, PASSWORD)).tokens is not None
+    assert (await complete_sign_in(identity, ALICE, PASSWORD)).tokens is not None
 
 
 async def test_turning_sso_off_racing_a_move_to_sso_only_never_does_both(

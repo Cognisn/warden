@@ -78,7 +78,7 @@ def live_config(port: int) -> WardenConfig:
                 "reset_password_link": f"{origin}/reset?t={{token}}",
                 "passkey_registration_link": f"{origin}/passkey?t={{token}}",
             },
-            "identity": {"require_mfa": False},
+            "identity": {},
             "webauthn": {
                 "rp_id": "localhost",
                 "rp_name": "warden live check",

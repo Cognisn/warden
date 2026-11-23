@@ -21,7 +21,7 @@ def webauthn_config(**webauthn: Any) -> WardenConfig:
                 "accept_invitation_link": "https://app.example.com/accept?t={token}",
                 "reset_password_link": "https://app.example.com/reset?t={token}",
             },
-            "identity": {"require_mfa": False},
+            "identity": {},
             "webauthn": webauthn,
         }
     )

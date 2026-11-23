@@ -26,6 +26,7 @@ from identity_support import (
     audit_rows,
     current_code,
     enrol_totp,
+    http_sign_in,
     make_config,
     race,
 )
@@ -94,6 +95,17 @@ async def _user(identity: Identity, password: str = STRONG, **kw: Any) -> User:
 
 
 async def _sign_in(c: httpx.AsyncClient, user: User, password: str = STRONG) -> dict[str, Any]:
+    """The password, then TOTP (always required since 0.2.0): the final answer's body."""
+    response = await http_sign_in(c, user.email, password)
+    assert response.status_code == 200, response.text
+    body: dict[str, Any] = response.json()
+    return body
+
+
+async def _password_step(
+    c: httpx.AsyncClient, user: User, password: str = STRONG
+) -> dict[str, Any]:
+    """The password step alone: its answer, a challenge for the second factor."""
     response = await c.post("/auth/sign-in", json={"email": user.email, "password": password})
     assert response.status_code == 200, response.text
     body: dict[str, Any] = response.json()
@@ -330,9 +342,9 @@ async def test_the_forced_change_for_each_reason_end_to_end(
         assert done.status_code == 200, done.text
         signed_in = done.json()
         assert signed_in["status"] == "signed_in"
-        assert await _amr(identity, signed_in["access_token"]) == ["pwd"]
+        assert await _amr(identity, signed_in["access_token"]) == ["pwd", "otp"]
         # The old password no longer works; the new one signs in normally.
-        old = await c.post("/auth/sign-in", json={"email": user.email, "password": password})
+        old = await http_sign_in(c, user.email, password)
         assert old.status_code == 401 and old.content == REFUSAL
         assert (await _sign_in(c, user, STRONG))["status"] == "signed_in"
     completed = await audit_rows(db, "warden.identity.password.change_completed")
@@ -347,7 +359,7 @@ async def test_the_second_factor_comes_before_the_change(identity: Identity, db:
     secret = await enrol_totp(identity, user)
     await identity.password_states.require_change(user.id, ChangeReason.ADMINISTRATOR)
     async with http(identity) as c:
-        first = await _sign_in(c, user)
+        first = await _password_step(c, user)
         # Holding only the password reveals nothing about the change.
         assert first["status"] == "mfa_required"
         assert set(first) == {"status", "challenge", "expires_in", "methods"}
@@ -374,7 +386,7 @@ async def test_a_recovery_code_then_the_change_keeps_its_amr(identity: Identity)
     assert codes
     await identity.password_states.require_change(user.id, ChangeReason.ADMINISTRATOR)
     async with http(identity) as c:
-        first = await _sign_in(c, user)
+        first = await _password_step(c, user)
         used = await c.post(
             "/auth/recovery-code", json={"challenge": first["challenge"], "code": codes[0]}
         )
@@ -396,7 +408,7 @@ async def test_a_forced_enrolment_then_the_change_returns_the_recovery_codes(
     user = await _user(identity)
     await identity.password_states.require_change(user.id, ChangeReason.ADMINISTRATOR)
     async with http(identity) as c:
-        first = await _sign_in(c, user)
+        first = await _password_step(c, user)
         assert first["status"] == "mfa_enrolment_required"
         begun = await c.post("/auth/totp/enrolment", json={"challenge": first["challenge"]})
         encoded = begun.json()["secret"]
@@ -496,7 +508,8 @@ async def test_a_tampered_challenge_tag_names_no_challenge(identity: Identity) -
     await identity.password_states.require_change(user.id, ChangeReason.ADMINISTRATOR)
     async with http(identity) as c:
         body = await _sign_in(c, user)
-        assert body["challenge"].startswith("p")
+        # Password and TOTP: "o" (a password alone, "p", no longer signs in).
+        assert body["challenge"].startswith("o")
         forged = "h" + body["challenge"][1:]
         assert (await _complete(c, forged, OTHER_STRONG)).status_code == 401
         assert (await _complete(c, body["challenge"], OTHER_STRONG)).status_code == 200
@@ -694,7 +707,7 @@ async def test_the_fingerprint_is_written_at_sign_in_when_the_policy_keeps_one(
                 "accept_invitation_link": "https://app.example.com/accept?t={token}",
                 "reset_password_link": "https://app.example.com/reset?t={token}",
             },
-            "identity": {"require_mfa": False},
+            "identity": {},
             "passwords": {"fingerprint_key_secret": "warden.password-fingerprint"},
         }
     )

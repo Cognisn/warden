@@ -16,7 +16,7 @@ import httpx
 import pytest
 from fake_idp import CLIENT_SECRET, DROP, ISSUER, FakeIdp
 from fastapi import FastAPI
-from identity_support import PASSWORD, UserFactory, audit_rows, race
+from identity_support import PASSWORD, UserFactory, audit_rows, http_sign_in, race
 from sso_support import (
     CLIENT_SECRET_NAME,
     COMPLETION,
@@ -148,9 +148,7 @@ async def test_the_handoff_body_has_the_shape_of_a_password_sign_in(
 ) -> None:
     # Products handle both the same way, so the bodies match field for field.
     sso = await tokens(await sign_in(client, idp, sub="s-alice", email=ALICE))
-    password = await tokens(
-        await client.post("/auth/sign-in", json={"email": ALICE, "password": PASSWORD})
-    )
+    password = await tokens(await http_sign_in(client, ALICE, PASSWORD))
     assert list(sso) == list(password)
     assert {k: type(v) for k, v in sso.items()} == {k: type(v) for k, v in password.items()}
     assert (sso["status"], sso["token_type"]) == (password["status"], password["token_type"])
@@ -532,7 +530,6 @@ async def test_concurrent_first_sign_ins_with_different_subjects_pin_one(
 async def test_sso_sessions_skip_forced_totp_enrolment(
     client: httpx.AsyncClient, idp: FakeIdp, alice: User, identity: Identity
 ) -> None:
-    await identity.policy.update(actor="admin", require_mfa=True)
     await tokens(await sign_in(client, idp, sub="s-alice", email=ALICE))
     password = await client.post("/auth/sign-in", json={"email": ALICE, "password": PASSWORD})
     assert password.json()["status"] == "mfa_enrolment_required"
@@ -558,9 +555,7 @@ async def test_disabling_sso_ends_sso_sessions_and_refuses_new_ones(
             client, provider_code(idp, started, sub="s-alice", email=ALICE), started.state
         )
     )
-    password = await tokens(
-        await client.post("/auth/sign-in", json={"email": ALICE, "password": PASSWORD})
-    )
+    password = await tokens(await http_sign_in(client, ALICE, PASSWORD))
 
     await sso.settings.update(actor="admin", enabled=False)
 
@@ -609,7 +604,7 @@ async def test_password_sign_in_works_with_the_provider_down(
     response = await client.get("/auth/sso/start")
     assert response.headers["location"] == f"{COMPLETION}?error=sso_failed"
     assert (await refusals(db))[-1] == "discovery_unavailable"
-    await tokens(await client.post("/auth/sign-in", json={"email": ALICE, "password": PASSWORD}))
+    await tokens(await http_sign_in(client, ALICE, PASSWORD))
 
 
 # Housekeeping

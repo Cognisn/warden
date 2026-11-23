@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from identity_support import FAST_HASHER, MemorySecrets, audit_rows
+from identity_support import FAST_HASHER, MemorySecrets, audit_rows, complete_sign_in
 
 from warden.audit import ActionRegistry
 from warden.cli import main
@@ -60,7 +60,7 @@ def _settings(dsn: str) -> FakeSettings:
             "warden": {
                 "http": dict(HTTP),
                 "db": {"dsn": dsn},
-                "identity": {"require_mfa": False},
+                "identity": {},
                 "passwords": {"fingerprint_key_secret": FINGERPRINT_KEY},
             }
         }
@@ -87,7 +87,7 @@ async def fp_identity(
     config = parse_config(
         {
             "http": dict(HTTP),
-            "identity": {"require_mfa": False},
+            "identity": {},
             "passwords": {"fingerprint_key_secret": FINGERPRINT_KEY},
         }
     )
@@ -304,7 +304,7 @@ async def test_recheck_flags_a_match_ends_sessions_and_prints_counts_only(
     await _policy(identity, end_sessions=True, listed=listed)
     matching = await _user(identity, LISTED, ("viewer",))
     other = await _user(identity, FINE, ("viewer",))
-    signed_in = await identity.sign_in(matching.email, LISTED)
+    signed_in = await complete_sign_in(identity, matching.email, LISTED)
     assert signed_in.tokens is not None
     await identity.watch_lists.add_entries(listed.id, [LISTED], actor="a")
 
@@ -340,7 +340,7 @@ async def test_recheck_override_keeps_sessions_and_policy_limits_the_run(
     policy = await _policy(identity, end_sessions=True, listed=listed)
     matching = await _user(identity, LISTED, ("viewer",))
     default_user = await _user(identity, LISTED)  # the default policy has no fingerprint
-    signed_in = await identity.sign_in(matching.email, LISTED)
+    signed_in = await complete_sign_in(identity, matching.email, LISTED)
     assert signed_in.tokens is not None
     await identity.watch_lists.add_entries(listed.id, [LISTED], actor="a")
 

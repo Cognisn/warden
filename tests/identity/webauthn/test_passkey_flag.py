@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator
 
 import httpx
 import pytest
-from identity_support import PASSWORD, UserFactory
+from identity_support import PASSWORD, UserFactory, http_sign_in
 from passkey_support import (
     give_passkey,
     http_client,
@@ -57,7 +57,7 @@ async def test_the_listed_passkey_value_matches_what_sign_in_does(
     expected: bool,
 ) -> None:
     user = await make_user()
-    signed_in = await http.post("/auth/sign-in", json={"email": user.email, "password": PASSWORD})
+    signed_in = await http_sign_in(http, user.email, PASSWORD)
     headers = {"authorization": f"Bearer {signed_in.json()['access_token']}"}
     key, credential = await give_passkey(
         identity,

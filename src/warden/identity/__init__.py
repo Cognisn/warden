@@ -41,7 +41,13 @@ from warden.identity.mail import (
     MailSender,
     MailTemplate,
 )
-from warden.identity.mfa import Enrolment, LastSecondFactorError, WebAuthnUnavailable
+from warden.identity.mfa import (
+    Enrolment,
+    FreshSecondFactorRequired,
+    LastSecondFactorError,
+    SecondFactorNotAllowed,
+    WebAuthnUnavailable,
+)
 from warden.identity.password_enforcement import (
     PasswordAdvice,
     PasswordEnforcement,
@@ -166,6 +172,7 @@ __all__ = [
     "EffectivePolicy",
     "Enrolment",
     "Fingerprints",
+    "FreshSecondFactorRequired",
     "HibpRangeClient",
     "HibpUnavailable",
     "Identity",
@@ -226,6 +233,7 @@ __all__ = [
     "RoleError",
     "Roles",
     "SecondFactorKind",
+    "SecondFactorNotAllowed",
     "SecretKeyError",
     "SessionPolicy",
     "SetupLink",

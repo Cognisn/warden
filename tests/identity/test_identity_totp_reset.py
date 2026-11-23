@@ -22,6 +22,7 @@ from identity_support import (
     current_code,
     make_config,
     race,
+    sign_in_tokens,
 )
 
 from warden.db import Database
@@ -88,9 +89,8 @@ async def _signed_in(identity: Identity, user: User, secret: bytes) -> TokenPair
 
 
 async def _bearer(identity: Identity, user: User) -> dict[str, str]:
-    result = await identity.sign_in(user.email, PASSWORD)
-    assert result.tokens is not None
-    return {"authorization": f"Bearer {result.tokens.access_token}"}
+    tokens = await sign_in_tokens(identity, user.email)
+    return {"authorization": f"Bearer {tokens.access_token}"}
 
 
 async def _counts(db: Database, user: User) -> tuple[int, int]:
@@ -193,14 +193,16 @@ async def test_sign_in_then_asks_for_enrolment_and_enrolment_succeeds_again(
     assert len(codes) == 10 and isinstance(tokens, TokenPair)
 
 
-async def test_without_a_required_factor_sign_in_issues_a_session_after_a_reset(
+async def test_a_reset_user_is_always_asked_to_enrol_again(
     identity: Identity, make_user: UserFactory
 ) -> None:
+    """A second factor is always required since 0.2.0 (ruling CS14): never a bare session."""
     user = await make_user()
     await _enrol(identity, user)
     await identity.reset_totp(user.id, actor="admin")
     signed = await identity.sign_in(user.email, PASSWORD)
-    assert signed.challenge is None and signed.tokens is not None
+    assert signed.tokens is None
+    assert signed.challenge is not None and signed.challenge.purpose == "enrol"
 
 
 async def test_a_reset_of_an_unknown_user_is_refused(identity: Identity, db: Database) -> None:
@@ -384,9 +386,8 @@ async def test_a_reset_racing_an_enrolment_confirmation_ends_consistently(
     async with httpx.AsyncClient(transport=transport, base_url="https://app.example.com") as c:
         for round_ in range(6):
             user = await make_user()
-            signed = (
-                await c.post("/auth/sign-in", json={"email": user.email, "password": PASSWORD})
-            ).json()
+            body = {"email": user.email, "password": PASSWORD}
+            signed = (await c.post("/auth/sign-in", json=body)).json()
             assert signed["status"] == "mfa_enrolment_required"
             challenge = signed["challenge"]
             begun = (await c.post("/auth/totp/enrolment", json={"challenge": challenge})).json()

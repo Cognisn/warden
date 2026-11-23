@@ -4,7 +4,7 @@ The instance's identity settings live in ``warden.sign_in_settings``, one
 row: the default sign-in method every user follows unless they have one of
 their own (initially ``password_and_sso``, ruling CS16), and the second
 factors an administrator allows (initially both ``totp`` and ``passkey``;
-stored and read here, enforced from wave 2). Each replica caches them for
+stored here, enforced by ``Identity``: ruling CS14). Each replica caches them for
 ``identity.policy_cache_seconds``, as the single sign-on settings are; a
 change invalidates this replica's copy, and sign-in itself never reads the
 cache: ``effective_method_sql`` reads the row in the query that decides.
@@ -149,7 +149,8 @@ class SignInSettings:
     default_sign_in_method: SignInMethod
     """The method every user without one of their own follows."""
     allowed_second_factors: frozenset[SecondFactorKind]
-    """The second factors users may hold (enforced from wave 2, ``mfa-factors``)."""
+    """The second factors users may enrol and be challenged with (ruling CS14);
+    never empty. Recovery codes are always the backup."""
     updated_at: datetime
     updated_by: str | None
 
@@ -360,11 +361,13 @@ class SignInMethods:
         each mailed a set-up link where one is needed (after this commits; a
         failed delivery is audited and listed in ``links_failed``).
         ``sso_only`` as the default needs single sign-on enabled with an
-        issuer and a client id. Raises ``SignInSettingsError`` for a value
-        that is not valid and ``SignInMethodChangeRefused`` when the change
-        cannot be made (``sso_not_configured``, or a link that cannot be
-        sent: ``mail_sender`` and the others); nothing is changed then, and
-        the refusal is audited. Users holding a security key or passkey
+        issuer and a client id. The allowed second factors may not be
+        emptied, and passkeys alone need WebAuthn configured (ruling CS14).
+        Raises ``SignInSettingsError`` for a value that is not valid (an
+        empty set among them) and ``SignInMethodChangeRefused`` when the
+        change cannot be made (``sso_not_configured``, ``webauthn``, or a
+        link that cannot be sent: ``mail_sender`` and the others); nothing
+        is changed then, and the refusal is audited. Users holding a security key or passkey
         that a move to ``sso_only`` would not allow lose them when it completes.
         """
         new_default = (
@@ -376,6 +379,12 @@ class SignInMethods:
         before: SignInSettings | None = None
         outcomes: list[tuple[uuid.UUID, _Outcome]] = []
         try:
+            if new_factors is not None and not self._enrolable(new_factors):
+                # Users without a factor could never enrol one (ruling CS14).
+                raise SignInMethodChangeRefused(
+                    "webauthn",
+                    "allowing passkeys alone needs WebAuthn configured (a relying party id)",
+                )
             async with self._db.transaction() as tx:
                 await self._lock_sso(tx)
                 before = await self._read(tx, lock="UPDATE")
@@ -456,6 +465,10 @@ class SignInMethods:
             pending=tuple(u for u, o in outcomes if o.resolved == "pending"),
             links_failed=tuple(failed),
         )
+
+    def _enrolable(self, factors: frozenset[SecondFactorKind]) -> bool:
+        """Whether a user holding no second factor could enrol one of ``factors``."""
+        return SecondFactorKind.TOTP in factors or self._webauthn
 
     # A user's method
 

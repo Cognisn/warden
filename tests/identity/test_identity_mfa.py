@@ -12,6 +12,7 @@ from identity_support import (
     UserFactory,
     audit_rows,
     current_code,
+    direct_session,
     enrol_totp,
     make_config,
     race,
@@ -402,13 +403,12 @@ async def test_forced_enrolment_over_http(
 
 
 async def test_voluntary_enrolment_with_an_access_token(
-    client: httpx.AsyncClient, make_user: UserFactory
+    client: httpx.AsyncClient, identity: Identity, make_user: UserFactory
 ) -> None:
     user = await make_user()
-    tokens = (
-        await client.post("/auth/sign-in", json={"email": user.email, "password": PASSWORD})
-    ).json()
-    auth = {"authorization": f"Bearer {tokens['access_token']}"}
+    # Signed in without TOTP, as after a passkey sign-in.
+    tokens = await direct_session(identity, user.id, ("hwk", "mfa"))
+    auth = {"authorization": f"Bearer {tokens.access_token}"}
     begun = (await client.post("/auth/totp/enrolment", headers=auth, json={})).json()
     import base64
 
@@ -424,14 +424,13 @@ async def test_voluntary_enrolment_with_an_access_token(
 
 
 async def test_a_signed_in_users_wrong_enrolment_code_is_a_400_not_a_sign_out(
-    client: httpx.AsyncClient, make_user: UserFactory, db: Database
+    client: httpx.AsyncClient, identity: Identity, make_user: UserFactory, db: Database
 ) -> None:
     """A 401 would tell the client its session ended; it has not."""
     user = await make_user()
-    tokens = (
-        await client.post("/auth/sign-in", json={"email": user.email, "password": PASSWORD})
-    ).json()
-    auth = {"authorization": f"Bearer {tokens['access_token']}"}
+    # Signed in without TOTP, as after a passkey sign-in.
+    tokens = await direct_session(identity, user.id, ("hwk", "mfa"))
+    auth = {"authorization": f"Bearer {tokens.access_token}"}
     await client.post("/auth/totp/enrolment", headers=auth, json={})
     for code in ("000000x", 123456, None):
         response = await client.post(

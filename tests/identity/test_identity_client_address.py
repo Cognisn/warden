@@ -38,7 +38,7 @@ def config() -> WardenConfig:
                 "reset_password_link": "https://app.example.com/reset?t={token}",
             },
             "audit": {"trusted_proxies": ["10.0.0.0/8"]},
-            "identity": {"require_mfa": False},
+            "identity": {},
         }
     )
 

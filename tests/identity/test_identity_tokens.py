@@ -8,7 +8,7 @@ import time
 
 import httpx
 import pytest
-from identity_support import PASSWORD, UserFactory, audit_rows, race
+from identity_support import PASSWORD, UserFactory, audit_rows, complete_sign_in, race
 
 from warden.db import Database
 from warden.identity import AuthenticationRefused, Identity, TokenPair, User, UserStatus
@@ -21,7 +21,7 @@ REFUSAL = b'{"detail":"authentication failed"}'
 
 async def _signed_in(identity: Identity, make_user: UserFactory) -> tuple[User, TokenPair]:
     user = await make_user()
-    result = await identity.sign_in(user.email, PASSWORD)
+    result = await complete_sign_in(identity, user.email, PASSWORD)
     assert result.tokens is not None
     return user, result.tokens
 
@@ -49,7 +49,7 @@ async def test_access_token_carries_kid_and_claims(
     assert claims["sub"] == str(user.id)
     assert claims["sid"] == str(tokens.session_id)
     assert claims["iss"] == "https://app.example.com"
-    assert claims["amr"] == ["pwd"]
+    assert claims["amr"] == ["pwd", "otp"]
     assert isinstance(claims["exp"], int) and isinstance(claims["iat"], int)
     assert claims["exp"] - claims["iat"] == 900
     principal = await identity.authenticate(tokens.access_token)
@@ -337,7 +337,7 @@ async def test_change_password(
     client: httpx.AsyncClient, identity: Identity, make_user: UserFactory, db: Database
 ) -> None:
     user, tokens = await _signed_in(identity, make_user)
-    other = await identity.sign_in(user.email, PASSWORD)
+    other = await complete_sign_in(identity, user.email, PASSWORD)
     assert other.tokens is not None
     auth = {"authorization": f"Bearer {tokens.access_token}"}
     new = "a much better passphrase"
@@ -354,7 +354,7 @@ async def test_change_password(
         "/auth/password", headers=auth, json={"current_password": PASSWORD, "new_password": new}
     )
     assert ok.status_code == 204
-    assert (await identity.sign_in(user.email, new)).tokens is not None
+    assert (await complete_sign_in(identity, user.email, new)).tokens is not None
     with pytest.raises(AuthenticationRefused):
         await identity.sign_in(user.email, PASSWORD)
     # Other sessions end; this one continues.

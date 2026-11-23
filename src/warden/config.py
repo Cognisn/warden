@@ -67,6 +67,10 @@ __all__ = [
 SECRET_SCHEME = "secret://"  # noqa: S105 - a URI scheme, not a secret
 DEFAULT_PREFIX = "warden"
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+_MFA_ALWAYS_REQUIRED = (
+    "MFA is always required for password sign-in in warden 0.2.0 and later;"
+    " remove identity.require_mfa or set it to true"
+)
 
 _PRINTABLE = re.compile(r"[!-~]+")
 _MOUNT_PREFIX = re.compile(r"(?:/[A-Za-z0-9._~-]+)+")
@@ -336,6 +340,12 @@ class IdentityConfig(_Section):
     invitation_ttl_seconds: int = Field(default=604_800, ge=300)
     reset_ttl_seconds: int = Field(default=3600, ge=300, le=86_400)
     require_mfa: bool = True
+    """Deprecated: accepted only as true, for configuration written for 0.1.x.
+
+    MFA is always required for password sign-in in warden 0.2.0 and later
+    (ruling CS14): every password sign-in takes a second factor, of a kind
+    the administrator allows. False is refused at start-up. Omit the setting.
+    """
     password_min_length: int = Field(default=12, ge=8, le=1024)
     """Seeds the default password policy's minimum length (ruling PW2) when a
     deployment has none. Once a default policy is stored, the stored value
@@ -366,6 +376,13 @@ class IdentityConfig(_Section):
     api_key_max_lifetime_days: int | None = Field(default=365, ge=1, le=3660)
     """Longest lifetime an API key may be given; None allows keys that never
     expire."""
+
+    @field_validator("require_mfa")
+    @classmethod
+    def _mfa_always_required(cls, value: bool) -> bool:
+        if value is not True:
+            raise ValueError(_MFA_ALWAYS_REQUIRED)
+        return value
 
     @field_validator("totp_issuer")
     @classmethod

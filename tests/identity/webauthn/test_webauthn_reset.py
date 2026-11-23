@@ -15,7 +15,7 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI
-from identity_support import PASSWORD, UserFactory, audit_rows, enrol_totp, race
+from identity_support import PASSWORD, UserFactory, audit_rows, http_sign_in, race
 from soft_authenticator import SoftwareAuthenticator
 
 from warden.db import Database
@@ -38,7 +38,7 @@ async def http(identity: Identity) -> AsyncIterator[httpx.AsyncClient]:
 
 
 async def _bearer(http: httpx.AsyncClient, user: User) -> dict[str, str]:
-    answer = await http.post("/auth/sign-in", json={"email": user.email, "password": PASSWORD})
+    answer = await http_sign_in(http, user.email, PASSWORD)
     assert answer.json()["status"] == "signed_in", answer.json()
     return {"authorization": f"Bearer {answer.json()['access_token']}"}
 
@@ -77,8 +77,7 @@ async def test_the_reset_removes_every_second_factor_and_ends_every_session(
 ) -> None:
     admin = await _admin(http, make_user)
     user = await make_user()
-    headers = await _bearer(http, user)
-    await enrol_totp(identity, user)
+    headers = await _bearer(http, user)  # signing in enrols TOTP
     for _ in range(2):
         assert (await _register(http, headers)).status_code == 200
     assert await _state(db, user.id) == {"totp": 1, "keys": 2, "codes": 10, "sessions": 1}
@@ -101,9 +100,9 @@ async def test_the_reset_removes_every_second_factor_and_ends_every_session(
         "recovery_codes_removed": 10,
         "sessions_ended": 1,
     }
-    # The user signs in with the password alone again (the policy requires nothing).
+    # The user's next password sign-in enrols a second factor again (ruling CS14).
     signed_in = await http.post("/auth/sign-in", json={"email": user.email, "password": PASSWORD})
-    assert signed_in.json()["status"] == "signed_in"
+    assert signed_in.json()["status"] == "mfa_enrolment_required"
 
 
 async def test_after_a_reset_a_required_second_factor_is_enrolled_again(
@@ -171,8 +170,7 @@ async def test_the_totp_reset_keeps_its_published_behaviour(
     """DELETE .../totp removes TOTP and the codes, ends sessions, and leaves keys alone."""
     admin = await _admin(http, make_user)
     user = await make_user()
-    headers = await _bearer(http, user)
-    await enrol_totp(identity, user)
+    headers = await _bearer(http, user)  # signing in enrols TOTP
     assert (await _register(http, headers)).status_code == 200
     assert (await http.delete(f"/admin/users/{user.id}/totp", headers=admin)).status_code == 204
     assert await _state(db, user.id) == {"totp": 0, "keys": 1, "codes": 0, "sessions": 0}

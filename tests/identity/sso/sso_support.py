@@ -29,7 +29,7 @@ def sso_config(*, completion: str | None = COMPLETION, **sso: Any) -> WardenConf
         "client_secret": CLIENT_SECRET_NAME,
         **sso,
     }
-    return parse_config({"http": http, "identity": {"require_mfa": False}, "sso": section})
+    return parse_config({"http": http, "identity": {}, "sso": section})
 
 
 # Driving a browser through the flow

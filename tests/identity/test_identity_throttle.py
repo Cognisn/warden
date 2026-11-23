@@ -13,6 +13,7 @@ from identity_support import (
     MemorySecrets,
     UserFactory,
     audit_rows,
+    complete_sign_in,
     current_code,
     enrol_totp,
     race,
@@ -72,10 +73,10 @@ async def test_attempts_beyond_the_limit_are_refused_even_with_the_right_passwor
 
 async def test_another_address_is_not_affected(throttled: Identity, make_user: UserFactory) -> None:
     """An attacker elsewhere cannot lock the user out."""
-    await make_user("uma@example.com")
+    await enrol_totp(throttled, await make_user("uma@example.com"))
     for _ in range(LIMIT + 1):
         await _fail(throttled, "uma@example.com", IP_A)
-    result = await throttled.sign_in("uma@example.com", PASSWORD, source_ip=IP_B)
+    result = await complete_sign_in(throttled, "uma@example.com", source_ip=IP_B)
     assert result.tokens is not None
 
 
@@ -97,10 +98,10 @@ async def test_unknown_identifiers_are_throttled_alike(throttled: Identity) -> N
 async def test_a_successful_sign_in_resets_the_count(
     throttled: Identity, make_user: UserFactory
 ) -> None:
-    await make_user("wes@example.com")
+    await enrol_totp(throttled, await make_user("wes@example.com"))
     for _ in range(LIMIT - 1):
         await _fail(throttled, "wes@example.com")
-    assert (await throttled.sign_in("wes@example.com", PASSWORD, source_ip=IP_A)).tokens
+    assert (await complete_sign_in(throttled, "wes@example.com", source_ip=IP_A)).tokens
     for _ in range(LIMIT - 1):
         assert await _fail(throttled, "wes@example.com") == "wrong_password"
 
@@ -140,7 +141,7 @@ async def test_completing_the_second_factor_resets_the_count(
 async def test_the_window_expires(
     throttled: Identity, make_user: UserFactory, db: Database
 ) -> None:
-    await make_user("zed@example.com")
+    await enrol_totp(throttled, await make_user("zed@example.com"))
     for _ in range(LIMIT + 1):
         await _fail(throttled, "zed@example.com")
     async with db.connection() as conn:
@@ -148,7 +149,7 @@ async def test_the_window_expires(
             "UPDATE warden.sign_in_attempts"
             " SET window_started_at = window_started_at - interval '16 minutes'"
         )
-    assert (await throttled.sign_in("zed@example.com", PASSWORD, source_ip=IP_A)).tokens
+    assert (await complete_sign_in(throttled, "zed@example.com", source_ip=IP_A)).tokens
 
 
 async def test_concurrent_attempts_cannot_exceed_the_limit(

@@ -22,6 +22,7 @@ from identity_support import (
     RecordingSender,
     UserFactory,
     audit_rows,
+    http_sign_in,
     race,
 )
 
@@ -223,14 +224,16 @@ async def test_a_users_own_method_takes_effect_at_once_with_its_credential(
 async def test_a_password_user_signs_in_with_a_password_and_must_take_a_second_factor(
     identity: Identity, make_user: UserFactory
 ) -> None:
-    # Password + MFA asks for a second factor even where the policy does not.
-    assert not (await identity.policy.current()).require_mfa
+    # Password + MFA asks for a second factor; since 0.2.0 so does every password
+    # sign-in (ruling CS14), Password + MFA or SSO included.
     user = await make_user(sign_in_method=SignInMethod.PASSWORD)
     result = await identity.sign_in(user.email, PASSWORD)
     assert result.tokens is None
     assert result.challenge is not None and result.challenge.purpose == "enrol"
     both = await make_user()
-    assert (await identity.sign_in(both.email, PASSWORD)).tokens is not None
+    result = await identity.sign_in(both.email, PASSWORD)
+    assert result.tokens is None
+    assert result.challenge is not None and result.challenge.purpose == "enrol"
 
 
 # Pending changes and set-password links
@@ -473,7 +476,7 @@ def app(identity: Identity) -> FastAPI:
 @pytest.fixture
 async def admin(client: httpx.AsyncClient, make_user: UserFactory) -> AsyncIterator[dict[str, str]]:
     user = await make_user(roles=("admin",))
-    answer = await client.post("/auth/sign-in", json={"email": user.email, "password": PASSWORD})
+    answer = await http_sign_in(client, user.email, PASSWORD)
     yield {"authorization": f"Bearer {answer.json()['access_token']}"}
 
 

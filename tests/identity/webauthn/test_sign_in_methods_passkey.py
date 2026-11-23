@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 
 import httpx
 import pytest
-from identity_support import PASSWORD, RecordingSender, UserFactory, audit_rows
+from identity_support import PASSWORD, RecordingSender, UserFactory, audit_rows, complete_sign_in
 from passkey_support import (
     assert_refused,
     give_passkey,
@@ -74,7 +74,7 @@ async def test_a_default_change_to_passkey_only_waits_for_the_passkey(
     db: Database,
 ) -> None:
     user = await make_user()
-    assert (await identity.sign_in(user.email, PASSWORD)).tokens is not None
+    assert (await complete_sign_in(identity, user.email, PASSWORD)).tokens is not None
     change = await identity.update_sign_in_settings(
         actor="admin-1", default_sign_in_method="passkey_only"
     )
@@ -85,8 +85,8 @@ async def test_a_default_change_to_passkey_only_waits_for_the_passkey(
     assert [m.kind for m in mail.sent] == [MailKind.PASSKEY_REGISTRATION]
     assert "https://app.example.com/passkey?t=" in mail.sent[-1].text
     # The method in force keeps working meanwhile.
-    assert (await identity.sign_in(user.email, PASSWORD)).tokens is not None
-    assert await live_sessions(db, user.id) == [["pwd"], ["pwd"]]
+    assert (await complete_sign_in(identity, user.email, PASSWORD)).tokens is not None
+    assert await live_sessions(db, user.id) == [["pwd", "otp"], ["pwd", "otp"]]
 
     token = mail.token()
     key = passkey_authenticator()
@@ -120,7 +120,7 @@ async def test_a_user_holding_a_passkey_moves_at_once_and_loses_the_password(
     identity: Identity, make_user: UserFactory, mail: RecordingSender, db: Database
 ) -> None:
     user = await make_user()
-    password_session = await identity.sign_in(user.email, PASSWORD)
+    password_session = await complete_sign_in(identity, user.email, PASSWORD)
     assert password_session.tokens is not None
     await give_passkey(identity, user)
     state = await identity.set_sign_in_method(user.id, SignInMethod.PASSKEY_ONLY, actor="admin-1")
@@ -139,7 +139,7 @@ async def test_a_passkey_registered_as_a_second_factor_completes_the_move(
     user = await make_user()
     await identity.set_sign_in_method(user.id, SignInMethod.PASSKEY_ONLY, actor="admin-1")
     assert (await identity.sign_in_method(user.id)).pending is not None
-    signed_in = await identity.sign_in(user.email, PASSWORD)
+    signed_in = await complete_sign_in(identity, user.email, PASSWORD)
     assert signed_in.tokens is not None
     principal = await identity.authenticate(signed_in.tokens.access_token)
     key = passkey_authenticator()
@@ -157,7 +157,7 @@ async def test_a_security_key_that_is_not_a_passkey_leaves_the_move_pending(
 ) -> None:
     user = await make_user()
     await identity.set_sign_in_method(user.id, SignInMethod.PASSKEY_ONLY, actor="admin-1")
-    signed_in = await identity.sign_in(user.email, PASSWORD)
+    signed_in = await complete_sign_in(identity, user.email, PASSWORD)
     assert signed_in.tokens is not None
     principal = await identity.authenticate(signed_in.tokens.access_token)
     key = passkey_authenticator(resident=False)
