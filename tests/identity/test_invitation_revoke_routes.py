@@ -12,7 +12,14 @@ from collections.abc import AsyncIterator
 import httpx
 import pytest
 from fastapi import FastAPI
-from identity_support import PASSWORD, RecordingSender, UserFactory, audit_rows, race
+from identity_support import (
+    PASSWORD,
+    RecordingSender,
+    UserFactory,
+    audit_rows,
+    complete_sign_in,
+    race,
+)
 
 from warden.db import Database
 from warden.identity import Identity, User
@@ -41,7 +48,7 @@ async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
 @pytest.fixture
 async def headers(identity: Identity, make_user: UserFactory) -> dict[str, str]:
     admin = await make_user("admin@example.com", roles=("admin",))
-    result = await identity.sign_in(admin.email, PASSWORD)
+    result = await complete_sign_in(identity, admin.email, PASSWORD)
     assert result.tokens is not None
     return {"authorization": f"Bearer {result.tokens.access_token}"}
 

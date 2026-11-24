@@ -55,6 +55,9 @@ class WebAuthnRefusal(StrEnum):
     SSO_ONLY = "sso_only"
     """Ruling P5: a single sign-on only user's identity provider owns authentication."""
     NICKNAME = "nickname"
+    FACTOR_NOT_ALLOWED = "factor_not_allowed"
+    """The administrator does not allow security keys and passkeys as a second factor
+    (ruling CS14)."""
 
 
 class WebAuthnError(Exception):

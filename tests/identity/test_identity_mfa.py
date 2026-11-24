@@ -12,6 +12,7 @@ from identity_support import (
     UserFactory,
     audit_rows,
     current_code,
+    direct_session,
     enrol_totp,
     make_config,
     race,
@@ -22,7 +23,6 @@ from warden.identity import (
     AuthenticationRefused,
     Identity,
     PermissionRegistry,
-    SignInMethod,
     TokenPair,
     User,
     UserStatus,
@@ -287,7 +287,12 @@ async def test_verify_issues_nothing_once_the_user_is_sso_only(
 ) -> None:
     user, secret = await _enrolled(identity, make_user)
     challenge = await _challenge(identity, user)
-    await identity.users.set_sign_in_method(user.id, SignInMethod.SSO_ONLY, actor="t")
+    # In force at once, behind the services' back: a move to sso_only now waits for
+    # the first single sign-on (ruling CS18).
+    async with identity.db.connection() as conn:
+        await conn.execute(
+            "UPDATE warden.users SET sign_in_method = 'sso_only' WHERE id = %s", (user.id,)
+        )
     with pytest.raises(AuthenticationRefused):
         await identity.verify_totp(challenge, await _fresh_code(secret))
 
@@ -398,13 +403,12 @@ async def test_forced_enrolment_over_http(
 
 
 async def test_voluntary_enrolment_with_an_access_token(
-    client: httpx.AsyncClient, make_user: UserFactory
+    client: httpx.AsyncClient, identity: Identity, make_user: UserFactory
 ) -> None:
     user = await make_user()
-    tokens = (
-        await client.post("/auth/sign-in", json={"email": user.email, "password": PASSWORD})
-    ).json()
-    auth = {"authorization": f"Bearer {tokens['access_token']}"}
+    # Signed in without TOTP, as after a passkey sign-in.
+    tokens = await direct_session(identity, user.id, ("hwk", "mfa"))
+    auth = {"authorization": f"Bearer {tokens.access_token}"}
     begun = (await client.post("/auth/totp/enrolment", headers=auth, json={})).json()
     import base64
 
@@ -420,14 +424,13 @@ async def test_voluntary_enrolment_with_an_access_token(
 
 
 async def test_a_signed_in_users_wrong_enrolment_code_is_a_400_not_a_sign_out(
-    client: httpx.AsyncClient, make_user: UserFactory, db: Database
+    client: httpx.AsyncClient, identity: Identity, make_user: UserFactory, db: Database
 ) -> None:
     """A 401 would tell the client its session ended; it has not."""
     user = await make_user()
-    tokens = (
-        await client.post("/auth/sign-in", json={"email": user.email, "password": PASSWORD})
-    ).json()
-    auth = {"authorization": f"Bearer {tokens['access_token']}"}
+    # Signed in without TOTP, as after a passkey sign-in.
+    tokens = await direct_session(identity, user.id, ("hwk", "mfa"))
+    auth = {"authorization": f"Bearer {tokens.access_token}"}
     await client.post("/auth/totp/enrolment", headers=auth, json={})
     for code in ("000000x", 123456, None):
         response = await client.post(

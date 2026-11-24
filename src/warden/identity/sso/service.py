@@ -50,7 +50,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, NoReturn, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol, runtime_checkable
 from urllib.parse import urlencode
 
 import httpx
@@ -81,7 +81,17 @@ from warden.identity.sso.sealing import open_invitation, seal_invitation
 from warden.identity.sso.settings import SSO_AMR, SsoSettings, SsoSettingsStore
 from warden.identity.sso.validation import IdTokenClaims, IdTokenValidator
 from warden.identity.tokens import NewSession, Sessions, TokenPair
-from warden.identity.users import SignInMethod, UserStatus, is_email
+from warden.identity.users import (
+    SignInMethod,
+    UserStatus,
+    allows_sso,
+    effective_method_sql,
+    is_email,
+    pending_method_sql,
+)
+
+if TYPE_CHECKING:
+    from warden.identity.sign_in_settings import SignInMethods
 
 __all__ = [
     "COOKIE_NAME",
@@ -103,6 +113,8 @@ _PROVIDER_ERROR = re.compile(r"[a-z_]{1,64}")
 _MAX_SECRET = 4096
 
 _USERS = table(schema.USERS)
+_METHOD = effective_method_sql("u")
+_PENDING = pending_method_sql("u")
 _IDENTITIES = table(SSO_IDENTITIES)
 _TRANSACTIONS = table(SSO_LOGIN_TRANSACTIONS)
 _HANDOFFS = table(SSO_HANDOFF_CODES)
@@ -167,6 +179,18 @@ def _hash(value: str) -> bytes:
     return hashlib.sha256(value.encode("ascii")).digest()
 
 
+def _method_refusal(method: str, pending: str | None) -> str | None:
+    """Why a user's method keeps them from single sign-on, or None.
+
+    ``method`` is the method in force; a pending move to ``sso_only`` admits
+    the first single sign-on, which completes it (ruling CS18). The reason
+    is the method's own name (``passkey_only``, ``password``).
+    """
+    if allows_sso(method) or pending == SignInMethod.SSO_ONLY:
+        return None
+    return str(method)
+
+
 def _challenge(verifier: str) -> str:
     import base64
 
@@ -198,6 +222,7 @@ class SingleSignOn:
         self.settings = SsoSettingsStore(db, config, max_age=settings_max_age)
         self._sessions = sessions
         self._policy = policy
+        self._methods: SignInMethods | None = None
         self._secrets = secrets_store
         self._http = http
         self._clock = clock
@@ -422,6 +447,13 @@ class SingleSignOn:
             raise SsoError("token_exchange_failed")
         return id_token
 
+    def use_sign_in_methods(self, methods: SignInMethods) -> None:
+        """Complete a pending move to ``sso_only`` at the first single sign-on (ruling CS18).
+
+        ``Identity`` calls this once, when it builds ``Identity.sign_in_methods``.
+        """
+        self._methods = methods
+
     async def _verified_email(
         self, claims: IdTokenClaims, settings: SsoSettings, source_ip: SourceIp
     ) -> tuple[str, dict[str, Any]]:
@@ -460,10 +492,10 @@ class SingleSignOn:
         async with self.db.transaction() as tx:
             cur = await tx.execute(
                 sql.SQL(
-                    "SELECT u.id, u.email, u.status, u.sign_in_method FROM {} i"
+                    "SELECT u.id, u.email, u.status, {}, {} FROM {} i"
                     " JOIN {} u ON u.id = i.user_id"
                     " WHERE i.issuer = %s AND i.subject = %s FOR SHARE OF i"
-                ).format(_IDENTITIES, _USERS),
+                ).format(_METHOD, _PENDING, _IDENTITIES, _USERS),
                 (claims.issuer, claims.subject),
             )
             pinned = await cur.fetchone()
@@ -473,8 +505,8 @@ class SingleSignOn:
                     reason = "email_mismatch"
                 elif pinned[2] != UserStatus.ACTIVE:
                     reason = "user_inactive"
-                elif pinned[3] == SignInMethod.PASSKEY_ONLY:
-                    reason = "passkey_only"
+                else:
+                    reason = _method_refusal(pinned[3], pinned[4])
             else:
                 user_id, reason = await self._first_sign_in(tx, claims, email, source_ip)
             if reason is None and user_id is not None:
@@ -552,8 +584,8 @@ class SingleSignOn:
         """Match a verified email to a pre-provisioned user and pin the subject."""
         cur = await tx.execute(
             sql.SQL(
-                "SELECT id, status, sign_in_method FROM {} WHERE lower(email) = lower(%s)"
-            ).format(_USERS),
+                "SELECT u.id, u.status, {}, {} FROM {} u WHERE lower(u.email) = lower(%s)"
+            ).format(_METHOD, _PENDING, _USERS),
             (email,),
         )
         row = await cur.fetchone()
@@ -562,9 +594,11 @@ class SingleSignOn:
         user_id: uuid.UUID = row[0]
         if row[1] != UserStatus.ACTIVE:
             return user_id, "user_inactive"
-        if row[2] == SignInMethod.PASSKEY_ONLY:
-            # A passkey_only user signs in with a passkey alone (Skuld question 26).
-            return user_id, "passkey_only"
+        refused = _method_refusal(row[2], row[3])
+        if refused is not None:
+            # A passkey_only user signs in with a passkey alone (Skuld question 26);
+            # a password user with a password alone (ruling CS13).
+            return user_id, refused
         cur = await tx.execute(
             sql.SQL(
                 "INSERT INTO {} (user_id, issuer, subject) VALUES (%s, %s, %s)"
@@ -651,6 +685,15 @@ class SingleSignOn:
                     ),
                     conn=tx,
                 )
+                if self._methods is not None:
+                    # The first single sign-on completes a pending move to sso_only.
+                    await self._methods.credential_added(
+                        tx,
+                        user_id,
+                        actor=str(user_id),
+                        source_ip=source_ip,
+                        keep_session=new.session_id,
+                    )
         if reason is not None or new is None:
             await self._refuse_handoff(reason or "handoff_unknown", user_id, source_ip)
         return await self._sessions.finish(new)
@@ -660,16 +703,17 @@ class SingleSignOn:
     ) -> str | None:
         cur = await tx.execute(
             sql.SQL(
-                "SELECT u.status, i.issuer, u.sign_in_method FROM {} u"
+                "SELECT u.status, i.issuer, {}, {} FROM {} u"
                 " LEFT JOIN {} i ON i.user_id = u.id WHERE u.id = %s FOR SHARE OF u"
-            ).format(_USERS, _IDENTITIES),
+            ).format(_METHOD, _PENDING, _USERS, _IDENTITIES),
             (user_id,),
         )
         row = await cur.fetchone()
         if row is None or row[0] != UserStatus.ACTIVE:
             return "user_inactive"
-        if row[2] == SignInMethod.PASSKEY_ONLY:
-            return "passkey_only"
+        refused = _method_refusal(row[2], row[3])
+        if refused is not None:
+            return refused
         if row[1] != settings.issuer_url:
             return "not_pinned"
         return None

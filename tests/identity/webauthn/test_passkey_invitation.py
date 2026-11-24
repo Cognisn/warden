@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
-from identity_support import PASSWORD, RecordingSender, UserFactory, audit_rows, race
+from identity_support import PASSWORD, RecordingSender, UserFactory, audit_rows, http_sign_in, race
 from passkey_support import (
     assert_refused,
     http_client,
@@ -61,7 +61,7 @@ async def http(identity: Identity) -> AsyncIterator[httpx.AsyncClient]:
 @pytest.fixture
 async def admin(http: httpx.AsyncClient, make_user: UserFactory) -> dict[str, str]:
     user = await make_user(roles=("admin",))
-    answer = await http.post("/auth/sign-in", json={"email": user.email, "password": PASSWORD})
+    answer = await http_sign_in(http, user.email, PASSWORD)
     return {"authorization": f"Bearer {answer.json()['access_token']}"}
 
 

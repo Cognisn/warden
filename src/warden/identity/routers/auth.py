@@ -10,8 +10,10 @@
 | ``POST /password`` | bearer token; ``current_password``, ``new_password`` | 204 |
 | ``POST /totp/enrolment`` | bearer token, or ``challenge`` | ``secret``, ``uri`` |
 | ``POST /totp/enrolment/confirm`` | bearer or ``challenge``; ``code`` | ``recovery_codes`` (*) |
+| ``POST /recovery-codes/regenerate`` | bearer token | ``recovery_codes`` |
 | ``POST /passkey/options`` | | options |
 | ``POST /passkey/sign-in`` | ``credential`` | tokens |
+| ``GET /sign-in-method`` | bearer token | the own method, pending change, allowed factors |
 | ``GET /capabilities`` | | ``password_reset``, ``single_sign_on``, ``passkey_sign_in`` |
 | ``GET /password/policy`` | bearer token | the policy (+) |
 | ``POST /password/check`` | bearer token; ``password`` | the check (+) |
@@ -25,8 +27,9 @@ Tokens are ``{"status": "signed_in", "access_token", "token_type": "Bearer",
 "expires_in", "refresh_token", "refresh_expires_in"}``, and after a
 password sign-in within the policy's warning window
 ``password_expires_in_days``. A challenge is ``{"status": "mfa_required" |
-"mfa_enrolment_required", "challenge", "expires_in"}``; ``mfa_required``
-also carries ``methods``, the kinds of second factor the user holds. Where
+"mfa_enrolment_required", "challenge", "expires_in", "methods"}``: for
+``mfa_required`` the allowed kinds of second factor the user holds, for
+``mfa_enrolment_required`` the allowed kinds they may enrol. Where
 a password sign-in would issue a session but the password must change, the
 answer is ``{"status": "password_change_required", "challenge",
 "expires_in", "reason"}`` (and ``watch_list_reason``), completed at
@@ -48,6 +51,7 @@ from fastapi.responses import Response
 from warden.identity.dependencies import Principal, bearer_token
 from warden.identity.errors import AuthenticationRefused, MfaError
 from warden.identity.http import SourceIp, client_ip, json_response, read_object, refusal
+from warden.identity.mfa import FreshSecondFactorRequired, SecondFactorNotAllowed
 from warden.identity.password_enforcement import PasswordRejected
 from warden.identity.routers.contract import (
     REFUSED,
@@ -64,8 +68,10 @@ from warden.identity.routers.contract import (
     RefreshBody,
     SignInBody,
     WardenEnrolmentConfirmed,
+    WardenOwnSignInMethod,
     WardenPasswordCheck,
     WardenPasswordPolicy,
+    WardenRecoveryCodesRegenerated,
     WardenSecondFactorAnswer,
     WardenSignedIn,
     WardenSignInAnswer,
@@ -78,7 +84,9 @@ from warden.identity.routers.contract import (
     password_rejected,
 )
 from warden.identity.routers.tokens import change_body, session_body, token_body
+from warden.identity.routers.views import allowed_factors, method_state
 from warden.identity.routers.webauthn import build_webauthn_router
+from warden.identity.users import UserError
 
 if TYPE_CHECKING:
     from warden.identity.service import Identity
@@ -86,6 +94,8 @@ if TYPE_CHECKING:
 __all__ = ["build_auth_router"]
 
 _CHALLENGE_STATUS = {"verify": "mfa_required", "enrol": "mfa_enrolment_required"}
+_TOTP_NOT_ALLOWED = "TOTP is not allowed as a second factor"
+_FRESH_FACTOR = "sign in again with a second factor to replace your recovery codes"
 
 
 def build_auth_router(identity: Identity) -> APIRouter:
@@ -108,13 +118,14 @@ def build_auth_router(identity: Identity) -> APIRouter:
         "/sign-in",
         summary="Sign in with an email address and password",
         description=(
-            "Answers with a new session (`status` `signed_in`), or with a challenge when a "
-            "second factor is needed: `mfa_required` (send a TOTP code to `/totp/verify`, a "
-            "security key's answer to `/webauthn/verify`, or a recovery code to "
-            "`/recovery-code`; `methods` lists the kinds the user holds) or "
-            "`mfa_enrolment_required` (enrol through `/totp/enrolment` or "
-            "`/webauthn/registration` under the challenge). Where a session would be issued, "
-            "here or after the second factor, a password that must change first (expired, on "
+            "A right password always answers with a challenge, since a password sign-in "
+            "always needs a second factor: `mfa_required` (send a TOTP code to `/totp/verify`, "
+            "a security key's answer to `/webauthn/verify`, or a recovery code to "
+            "`/recovery-code`; `methods` lists the kinds the user holds that the administrator "
+            "allows) or `mfa_enrolment_required` when the user holds none of those (enrol "
+            "through `/totp/enrolment` or `/webauthn/registration` under the challenge; "
+            "`methods` lists the kinds allowed). Where a session would be issued, after the "
+            "second factor, a password that must change first (expired, on "
             "a watch list, asked for by an administrator, or failing a policy enforced at "
             "sign-in) answers `password_change_required` instead; complete it at "
             "`/password-change`. A session within the password's expiry warning window carries "
@@ -137,14 +148,14 @@ def build_auth_router(identity: Identity) -> APIRouter:
         except AuthenticationRefused:
             return refusal()
         if result.challenge is not None:
-            answer: dict[str, object] = {
-                "status": _CHALLENGE_STATUS[result.challenge.purpose],
-                "challenge": result.challenge.token,
-                "expires_in": result.challenge.expires_in,
-            }
-            if result.challenge.purpose == "verify":
-                answer["methods"] = list(result.challenge.methods)
-            return json_response(answer)
+            return json_response(
+                {
+                    "status": _CHALLENGE_STATUS[result.challenge.purpose],
+                    "challenge": result.challenge.token,
+                    "expires_in": result.challenge.expires_in,
+                    "methods": list(result.challenge.methods),
+                }
+            )
         if result.password_change is not None:
             return json_response(change_body(result.password_change))
         if result.tokens is None:
@@ -164,9 +175,9 @@ def build_auth_router(identity: Identity) -> APIRouter:
         summary="Complete sign-in with a TOTP code",
         description=(
             "Sends the `mfa_required` challenge with a six-digit code. A code is accepted at "
-            "most once per time step; too many wrong codes end the challenge. When the "
-            "password must change first, the answer is `password_change_required` instead of "
-            "a session."
+            "most once per time step; too many wrong codes end the challenge. Refused while "
+            "the administrator does not allow TOTP. When the password must change first, the "
+            "answer is `password_change_required` instead of a session."
         ),
         responses=_second_factor,
         openapi_extra=json_body(ChallengeBody),
@@ -289,11 +300,16 @@ def build_auth_router(identity: Identity) -> APIRouter:
         description=(
             "Under an access token (bearer) for a signed-in user, or under an "
             "`mfa_enrolment_required` challenge during a forced enrolment. The enrolment counts "
-            "as a second factor only once confirmed."
+            "as a second factor only once confirmed. Refused while the administrator does not "
+            "allow TOTP: a 409 for a signed-in user, the uniform refusal under a challenge."
         ),
         responses={
             200: {"model": WardenTotpEnrolment, "description": "The secret to enrol."},
-            409: detail("TOTP is already enrolled.", "TOTP is already enrolled"),
+            409: detail(
+                "TOTP is already enrolled, or not allowed.",
+                "TOTP is already enrolled",
+                _TOTP_NOT_ALLOWED,
+            ),
             **REFUSED,
         },
         openapi_extra=json_body(EnrolmentBody, required=False),
@@ -309,6 +325,8 @@ def build_auth_router(identity: Identity) -> APIRouter:
             )
         except AuthenticationRefused:
             return refusal()
+        except SecondFactorNotAllowed:
+            return json_response({"detail": _TOTP_NOT_ALLOWED}, 409)
         except MfaError:
             return json_response({"detail": "TOTP is already enrolled"}, 409)
         return json_response({"secret": enrolment.secret_base32, "uri": enrolment.uri})
@@ -320,7 +338,10 @@ def build_auth_router(identity: Identity) -> APIRouter:
             "Answers with the recovery codes, shown once. Under a challenge (a forced "
             "enrolment) the answer is also the new session, or `password_change_required` when "
             "the password must change first. A wrong code from a signed-in user is a 400, so a "
-            "client does not take it for a sign-out."
+            "client does not take it for a sign-out. Once confirmed, any security key or "
+            "passkey the administrator no longer allows as a second factor is removed. Refused "
+            "while TOTP is not allowed: a 409 for a signed-in user, the uniform refusal under a "
+            "challenge."
         ),
         responses={
             200: {
@@ -328,6 +349,7 @@ def build_auth_router(identity: Identity) -> APIRouter:
                 "description": "Confirmed: the recovery codes, with a session under a challenge.",
             },
             400: detail("The code was not accepted.", "code not accepted"),
+            409: detail("TOTP is not allowed.", _TOTP_NOT_ALLOWED),
             **REFUSED,
         },
         openapi_extra=json_body(EnrolmentConfirmBody),
@@ -344,11 +366,50 @@ def build_auth_router(identity: Identity) -> APIRouter:
             )
         except AuthenticationRefused:
             return refusal()
+        except SecondFactorNotAllowed:
+            return json_response({"detail": _TOTP_NOT_ALLOWED}, 409)
         except MfaError:
             return json_response({"detail": "code not accepted"}, 400)
         if answer is None:
             return json_response({"recovery_codes": codes})
         return json_response(session_body(answer, recovery_codes=codes))
+
+    # Self-service recovery codes (ruling CS22).
+
+    @router.post(
+        "/recovery-codes/regenerate",
+        summary="Replace the signed-in user's recovery codes",
+        description=(
+            "Needs an access token as the bearer token (not an API key) from a session signed "
+            "in with a second factor (TOTP, a security key or a passkey; not a recovery code) "
+            "within `identity.mfa_challenge_ttl_seconds`. Replaces every recovery code the user "
+            "holds, used or not, and answers with the new ones, shown once. Audited; with a "
+            "mail sender the user is sent a notice, never the codes. A session whose second "
+            "factor is older, or that had none, is a 403: sign in again with a second factor "
+            "and retry. No request body."
+        ),
+        responses={
+            200: {
+                "model": WardenRecoveryCodesRegenerated,
+                "description": "The new recovery codes.",
+                "headers": no_store(),
+            },
+            403: detail("No second factor within the challenge window.", _FRESH_FACTOR),
+            **REFUSED,
+        },
+    )
+    async def regenerate_recovery_codes(request: Request) -> Response:
+        try:
+            principal = await principal_or_none(request)
+        except AuthenticationRefused:
+            return refusal()
+        if principal is None:
+            return refusal()
+        try:
+            codes = await identity.regenerate_recovery_codes(principal, source_ip=source(request))
+        except FreshSecondFactorRequired:
+            return json_response({"detail": _FRESH_FACTOR}, 403)
+        return json_response({"recovery_codes": codes})
 
     # Passkey-only sign-in (rulings P5, P6 and P7).
 
@@ -405,6 +466,46 @@ def build_auth_router(identity: Identity) -> APIRouter:
         except AuthenticationRefused:
             return refusal()
         return json_response(token_body(pair))
+
+    # The signed-in user's own method (ruling CS22): their own data only.
+
+    @router.get(
+        "/sign-in-method",
+        summary="Show the signed-in user's own sign-in method",
+        description=(
+            "Needs an access token as the bearer token. Answers with the user's own setting "
+            "(null when they follow the instance default), the method in force, any pending "
+            "change with the set-up link that completes it, and the second factors the "
+            "administrator allows. Never anyone else's data: there is no way to name another "
+            "user."
+        ),
+        responses={
+            200: {
+                "model": WardenOwnSignInMethod,
+                "description": "The user's own method and the allowed second factors.",
+                "headers": no_store(),
+            },
+            **REFUSED,
+        },
+    )
+    async def own_sign_in_method(request: Request) -> Response:
+        try:
+            principal = await principal_or_none(request)
+        except AuthenticationRefused:
+            return refusal()
+        if principal is None:
+            return refusal()
+        try:
+            state = await identity.sign_in_method(principal.user_id)
+        except UserError:
+            return refusal()
+        settings = await identity.sign_in_settings()
+        return json_response(
+            {
+                "sign_in_method": method_state(state),
+                "allowed_second_factors": allowed_factors(settings),
+            }
+        )
 
     # What a sign-in screen may offer: three booleans, the same for every caller.
 

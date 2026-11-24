@@ -23,14 +23,17 @@ from identity_support import (
     UserFactory,
     audit_rows,
     current_code,
+    direct_session,
     enrol_totp,
+    identity_of,
     race,
 )
+from psycopg.types.json import Jsonb
 from soft_authenticator import SoftwareAuthenticator, other_key
 from webauthn_support import expire_challenges
 
-from warden.db import Database
-from warden.identity import Identity, SignInMethod, User, UserStatus
+from warden.db import POLICY_SETTING, Database
+from warden.identity import Identity, User, UserStatus
 from warden.identity.mail import MailKind
 
 pytestmark = pytest.mark.db
@@ -65,10 +68,13 @@ async def _sign_in(http: httpx.AsyncClient, user: User) -> httpx.Response:
 
 
 async def _bearer(http: httpx.AsyncClient, user: User) -> dict[str, str]:
-    """Sign in with the password alone (the user holds no second factor yet)."""
-    answer = await _sign_in(http, user)
-    assert answer.json()["status"] == "signed_in", answer.json()
-    return {"authorization": f"Bearer {answer.json()['access_token']}"}
+    """A session for a user holding no second factor yet.
+
+    A password sign-in can no longer give one (ruling CS14), so the session
+    is started directly, as one from before the user's factors were reset.
+    """
+    pair = await direct_session(identity_of(http), user.id, ("pwd",))
+    return {"authorization": f"Bearer {pair.access_token}"}
 
 
 async def _challenge(http: httpx.AsyncClient, user: User, status: str = "mfa_required") -> str:
@@ -231,7 +237,9 @@ async def test_an_enrolment_challenge_keeps_its_published_shape(
     await _require_mfa(identity)
     answer = (await _sign_in(http, await make_user())).json()
     assert answer["status"] == "mfa_enrolment_required"
-    assert set(answer) == {"status", "challenge", "expires_in"}
+    # Since 0.2.0 it names the kinds the user may enrol (ruling CS14).
+    assert set(answer) == {"status", "challenge", "expires_in", "methods"}
+    assert answer["methods"] == ["totp", "webauthn"]
 
 
 async def test_a_key_alone_turns_a_password_sign_in_into_a_challenge(
@@ -710,7 +718,12 @@ async def test_an_sso_only_user_cannot_register_a_key(
 ) -> None:
     user = await make_user()
     headers = await _bearer(http, user)
-    await identity.users.set_sign_in_method(user.id, SignInMethod.SSO_ONLY, actor="test")
+    # In force at once, behind the services' back: a move to sso_only now waits for
+    # the first single sign-on (ruling CS18).
+    async with db.connection() as conn:
+        await conn.execute(
+            "UPDATE warden.users SET sign_in_method = 'sso_only' WHERE id = %s", (user.id,)
+        )
     answer = await http.post("/auth/webauthn/registration", json={}, headers=headers)
     assert answer.status_code == 409
     assert answer.json() == {"detail": "security keys are not available to this user"}
@@ -826,19 +839,23 @@ async def test_the_last_factor_cannot_be_removed_while_mfa_is_required(
     assert removed.status_code == 204
 
 
-async def test_the_last_factor_can_go_where_mfa_is_not_required_and_takes_the_codes(
+async def test_the_last_factor_never_goes_even_under_a_stored_0_1_policy(
     http: httpx.AsyncClient, identity: Identity, db: Database, make_user: UserFactory
 ) -> None:
+    """A second factor is always required (ruling CS14), whatever 0.1.x stored."""
+    async with db.transaction() as tx:
+        await tx.execute(
+            "INSERT INTO warden.settings (key, value, updated_at) VALUES (%s, %s, now())",
+            (POLICY_SETTING, Jsonb({"require_mfa": False})),
+        )
+    identity.policy.invalidate()
     user = await make_user()
     headers = await _bearer(http, user)
     answer = await _register(http, SoftwareAuthenticator(), headers=headers)
     credential_id = answer.json()["credential"]["id"]
-    removed = await http.delete(f"/auth/webauthn/credentials/{credential_id}", headers=headers)
-    assert removed.status_code == 204
-    assert await _recovery_code_count(db, user.id) == 0
-    (event,) = await audit_rows(db, "warden.identity.mfa.webauthn.removed")
-    assert event["details"]["recovery_codes_removed"] == 10
-    assert (await _sign_in(http, user)).json()["status"] == "signed_in"
+    refused = await http.delete(f"/auth/webauthn/credentials/{credential_id}", headers=headers)
+    assert (refused.status_code, refused.json()) == (409, LAST_FACTOR)
+    assert await _recovery_code_count(db, user.id) == 10
 
 
 async def test_two_removals_of_the_last_two_factors_at_once_never_leave_none(

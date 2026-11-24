@@ -64,7 +64,7 @@ async def test_nothing_secret_is_recorded_logged_or_raised(
                 "accept_invitation_link": "https://app.example.com/accept?t={token}",
                 "reset_password_link": "https://app.example.com/reset?t={token}",
             },
-            "identity": {"require_mfa": False},
+            "identity": {},
             "passwords": {"fingerprint_key_secret": "warden.fp"},
         }
     )

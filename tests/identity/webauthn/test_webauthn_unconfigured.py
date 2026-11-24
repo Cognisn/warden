@@ -42,7 +42,7 @@ def _config(**identity: object) -> WardenConfig:
                 "accept_invitation_link": f"{BASE}/accept?t={{token}}",
                 "reset_password_link": f"{BASE}/reset?t={{token}}",
             },
-            "identity": {"require_mfa": False, **identity},
+            "identity": {**identity},
         }
     )
 
@@ -83,15 +83,19 @@ async def test_password_and_totp_sign_in_are_unchanged(
 ) -> None:
     user = await bare.users.create("enid@example.com", actor="test", password=PASSWORD)
     body = {"email": user.email, "password": PASSWORD}
-    signed_in = await http.post("/auth/sign-in", json=body)
-    assert signed_in.json()["status"] == "signed_in"
-    headers = {"authorization": f"Bearer {signed_in.json()['access_token']}"}
-    secret = (await http.post("/auth/totp/enrolment", json={}, headers=headers)).json()["secret"]
+    # A second factor is always required (ruling CS14): TOTP, the only kind here.
+    forced = (await http.post("/auth/sign-in", json=body)).json()
+    assert forced["status"] == "mfa_enrolment_required"
+    assert forced["methods"] == ["totp"]
+    enrol = {"challenge": forced["challenge"]}
+    secret = (await http.post("/auth/totp/enrolment", json=enrol)).json()["secret"]
     raw = base64.b32decode(secret + "=" * (-len(secret) % 8))
     confirmed = await http.post(
-        "/auth/totp/enrolment/confirm", json={"code": current_code(raw)}, headers=headers
+        "/auth/totp/enrolment/confirm", json={**enrol, "code": current_code(raw)}
     )
+    assert confirmed.json()["status"] == "signed_in"
     assert len(confirmed.json()["recovery_codes"]) == 10
+    headers = {"authorization": f"Bearer {confirmed.json()['access_token']}"}
     challenged = (await http.post("/auth/sign-in", json=body)).json()
     assert challenged["status"] == "mfa_required"
     assert challenged["methods"] == ["totp"]
@@ -110,3 +114,32 @@ async def test_password_and_totp_sign_in_are_unchanged(
     assert (options.status_code, options.content) == (401, REFUSAL)
     listed = await http.get("/auth/webauthn/credentials", headers=headers)
     assert listed.json() == {"credentials": []}
+
+
+async def test_passkeys_alone_cannot_be_allowed_without_webauthn(
+    bare: Identity, db: Database
+) -> None:
+    """A user without a factor could never enrol one (ruling CS14)."""
+    from identity_support import audit_rows
+
+    from warden.identity import SecondFactorKind, SignInMethodChangeRefused
+
+    with pytest.raises(SignInMethodChangeRefused) as caught:
+        await bare.update_sign_in_settings(actor="admin-1", allowed_second_factors=["passkey"])
+    assert caught.value.reason == "webauthn"
+    settings = await bare.sign_in_methods.read_now()
+    assert settings.allowed_second_factors == {SecondFactorKind.TOTP, SecondFactorKind.PASSKEY}
+    rows = await audit_rows(db, "warden.identity.sign_in_settings_changed")
+    assert [(r["outcome"], r["details"]["reason"]) for r in rows] == [("failure", "webauthn")]
+    # TOTP alone is fine, and forced enrolment then offers TOTP only.
+    await bare.update_sign_in_settings(actor="admin-1", allowed_second_factors=["totp"])
+    user = await bare.users.create("ivo@example.com", actor="test", password=PASSWORD)
+    result = await bare.sign_in(user.email, PASSWORD)
+    assert result.challenge is not None and result.challenge.methods == ("totp",)
+
+
+async def test_forced_enrolment_offers_totp_only_without_webauthn(bare: Identity) -> None:
+    user = await bare.users.create("una@example.com", actor="test", password=PASSWORD)
+    result = await bare.sign_in(user.email, PASSWORD)
+    assert result.challenge is not None and result.challenge.purpose == "enrol"
+    assert result.challenge.methods == ("totp",)

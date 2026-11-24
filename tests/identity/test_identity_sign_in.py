@@ -16,6 +16,7 @@ from identity_support import (
     UserFactory,
     audit_rows,
     enrol_totp,
+    http_sign_in,
     make_config,
 )
 
@@ -42,11 +43,12 @@ async def _sign_in(client: httpx.AsyncClient, email: str, password: str) -> http
     return await client.post("/auth/sign-in", json={"email": email, "password": password})
 
 
-async def test_sign_in_without_mfa_issues_tokens(
+async def test_sign_in_with_a_second_factor_issues_tokens(
     client: httpx.AsyncClient, make_user: UserFactory, db: Database
 ) -> None:
+    """The password, then the second factor (ruling CS14): the signed_in body."""
     user = await make_user("alice@example.com")
-    response = await _sign_in(client, "ALICE@example.com", PASSWORD)
+    response = await http_sign_in(client, "ALICE@example.com", PASSWORD)
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "signed_in"
@@ -58,7 +60,7 @@ async def test_sign_in_without_mfa_issues_tokens(
     rows = await audit_rows(db, "warden.identity.sign_in")
     assert rows[-1]["outcome"] == "success"
     assert rows[-1]["actor"] == str(user.id)
-    assert rows[-1]["details"]["amr"] == ["pwd"]
+    assert rows[-1]["details"]["amr"] == ["pwd", "otp"]
 
 
 async def test_confirmed_totp_turns_sign_in_into_a_challenge(
@@ -80,9 +82,10 @@ async def test_an_unconfirmed_enrolment_is_not_mfa(
     await identity.mfa.begin_enrolment(user.id, account=user.email)
     assert not await identity.mfa.has_confirmed_totp(user.id)
     body = (await _sign_in(client, user.email, PASSWORD)).json()
-    assert body["status"] == "signed_in"
+    assert body["status"] == "mfa_enrolment_required"
+    assert "access_token" not in body
     rows = await audit_rows(db, "warden.identity.sign_in")
-    assert rows[-1]["details"]["amr"] == ["pwd"]
+    assert [r for r in rows if r["outcome"] == "success"] == []
 
 
 async def test_require_mfa_without_confirmed_totp_forces_enrolment(
@@ -186,11 +189,11 @@ async def test_sign_in_timing_does_not_reveal_a_username(
         password=PASSWORD,
         sign_in_method=SignInMethod.SSO_ONLY,
     )
-    await identity.users.create("sso-no-password@example.com", actor="t", password=None)
-    await identity.users.set_sign_in_method(
-        (await identity.users.get_by_email("sso-no-password@example.com")).id,  # type: ignore[union-attr]
-        SignInMethod.SSO_ONLY,
+    await identity.users.create(
+        "sso-no-password@example.com",
         actor="t",
+        password=None,
+        sign_in_method=SignInMethod.SSO_ONLY,
     )
     cases = {
         "unknown": ("nobody-here@example.com", PASSWORD),
@@ -226,15 +229,16 @@ async def test_legacy_pbkdf2_hash_is_rehashed_to_argon2id_on_sign_in(
             (f"pbkdf2:sha256:1000${salt}${digest}", user.id),
         )
     response = await _sign_in(client, "legacy@example.com", PASSWORD)
-    assert response.json()["status"] == "signed_in"
+    assert response.json()["status"] == "mfa_enrolment_required"
     async with db.connection() as conn:
         cur = await conn.execute("SELECT password_hash FROM warden.users WHERE id = %s", (user.id,))
         row = await cur.fetchone()
     assert row is not None and row[0].startswith("$argon2id$")
-    rows = await audit_rows(db, "warden.identity.sign_in")
+    rows = await audit_rows(db, "warden.identity.mfa.challenge")
     assert rows[-1]["details"]["rehashed"] is True
     # The new hash works; the legacy one is gone.
-    assert (await _sign_in(client, "legacy@example.com", PASSWORD)).json()["status"] == "signed_in"
+    answer = await http_sign_in(client, "legacy@example.com", PASSWORD)
+    assert answer.json()["status"] == "signed_in"
 
 
 async def test_a_failed_legacy_sign_in_keeps_the_legacy_hash(

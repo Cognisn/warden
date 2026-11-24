@@ -8,9 +8,9 @@ warden reports that as ``MailDeliveryError`` without the sender's detail.
 Templates use ``string.Template`` placeholders (``$link``), which can only
 substitute a value, never reach into an object. A product replaces warden's
 templates one at a time through ``mail.template_package``: a module whose
-``INVITATION``, ``PASSWORD_RESET``, ``MFA_ENROLLED`` or
-``PASSKEY_REGISTRATION`` attribute, if present, is a ``MailTemplate`` used
-instead of warden's. Every template is
+``INVITATION``, ``PASSWORD_RESET``, ``MFA_ENROLLED``, ``PASSKEY_REGISTRATION``,
+``PASSWORD_SETUP`` or ``RECOVERY_CODES_REGENERATED`` attribute, if present, is a
+``MailTemplate`` used instead of warden's. Every template is
 checked when the ``Mailer`` is built, so a bad one fails at start-up.
 
 Every value has its control characters replaced before substitution, so
@@ -58,6 +58,10 @@ class MailKind(StrEnum):
     PASSWORD_RESET = "password_reset"  # noqa: S105 - a message kind, not a password
     MFA_ENROLLED = "mfa_enrolled"
     PASSKEY_REGISTRATION = "passkey_registration"
+    PASSWORD_SETUP = "password_setup"  # noqa: S105 - a message kind, not a password
+    """A set-password link for a sign-in method that needs a password (ruling CS18)."""
+    RECOVERY_CODES_REGENERATED = "recovery_codes_regenerated"
+    """A notice that the user replaced their recovery codes (ruling CS22)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +99,8 @@ PLACEHOLDERS: Mapping[MailKind, frozenset[str]] = {
     MailKind.PASSWORD_RESET: frozenset({"email", "display_name", "link", "expires_at"}),
     MailKind.MFA_ENROLLED: frozenset({"email", "display_name", "enrolled_at"}),
     MailKind.PASSKEY_REGISTRATION: frozenset({"email", "display_name", "link", "expires_at"}),
+    MailKind.PASSWORD_SETUP: frozenset({"email", "display_name", "link", "expires_at"}),
+    MailKind.RECOVERY_CODES_REGENERATED: frozenset({"email", "display_name", "regenerated_at"}),
 }
 
 DEFAULT_TEMPLATES: Mapping[MailKind, MailTemplate] = {
@@ -167,6 +173,44 @@ DEFAULT_TEMPLATES: Mapping[MailKind, MailTemplate] = {
             "<p>The link can be used once and expires on $expires_at. It does not sign you in;"
             " sign in with the passkey afterwards.</p>"
             "<p>If you were not expecting this, contact your administrator straight away.</p>"
+        ),
+    ),
+    MailKind.PASSWORD_SETUP: MailTemplate(
+        subject="Set up your password",
+        text=(
+            "Hello $display_name,\n\n"
+            "Your administrator has changed how you sign in as $email: you now sign in with a"
+            " password and a second step. Choose your password here:\n\n"
+            "$link\n\n"
+            "The link can be used once and expires on $expires_at. Until you choose a password"
+            " you keep signing in as before. When you next sign in you will be asked to set up"
+            " the second step.\n\n"
+            "If you were not expecting this, contact your administrator straight away.\n"
+        ),
+        html=(
+            "<p>Hello $display_name,</p>"
+            "<p>Your administrator has changed how you sign in as $email: you now sign in with a"
+            " password and a second step.</p>"
+            '<p><a href="$link">Choose your password</a></p>'
+            "<p>The link can be used once and expires on $expires_at. Until you choose a password"
+            " you keep signing in as before. When you next sign in you will be asked to set up"
+            " the second step.</p>"
+            "<p>If you were not expecting this, contact your administrator straight away.</p>"
+        ),
+    ),
+    MailKind.RECOVERY_CODES_REGENERATED: MailTemplate(
+        subject="Your recovery codes were replaced",
+        text=(
+            "Hello $display_name,\n\n"
+            "New recovery codes were issued for $email on $regenerated_at. The earlier codes"
+            " no longer work.\n\n"
+            "If this was not you, contact your administrator straight away.\n"
+        ),
+        html=(
+            "<p>Hello $display_name,</p>"
+            "<p>New recovery codes were issued for $email on $regenerated_at. The earlier codes"
+            " no longer work.</p>"
+            "<p>If this was not you, contact your administrator straight away.</p>"
         ),
     ),
 }

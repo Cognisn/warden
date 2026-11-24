@@ -14,6 +14,14 @@ and every error is a fixed message.
 | ``GET /users/{id}`` | | ``{"user", "roles", "webauthn_credentials", "password"}`` |
 | ``POST /users/{id}/status`` | ``status`` | ``{"user"}`` |
 | ``POST /users/{id}/sign-in-method`` | ``sign_in_method`` | ``{"user"}`` (+) |
+| ``GET /users/{id}/sign-in-method`` | | ``{"user", "sign_in_method"}`` (+) |
+| ``POST /users/{id}/sign-in-method/resend`` | | 202 |
+| ``POST /users/{id}/sign-in-method/cancel`` | | ``{"user", "sign_in_method"}`` (+) |
+| ``GET /sign-in-settings`` | | the default method and the allowed second factors |
+| ``PUT /sign-in-settings`` | the default, the allowed factors | the settings |
+| ``GET /session-policy`` | | ``{"policy", "defaults"}`` |
+| ``PUT /session-policy`` | the four lifetimes | ``{"policy", "defaults"}`` |
+| ``POST /session-policy/reset`` | | ``{"policy", "defaults"}`` |
 | ``POST /users/{id}/password-reset`` | | 202 |
 | ``POST /users/{id}/passkey-registration`` | | 202 |
 | ``DELETE /users/{id}/totp`` | | 204 |
@@ -30,7 +38,9 @@ and every error is a fixed message.
 | ``DELETE /api-keys/{id}`` | | 204 |
 
 The password policy, watch list and exposure routes are in
-``warden.identity.routers.password_admin``, mounted here.
+``warden.identity.routers.password_admin``, and the instance sign-in settings,
+a user's pending change and the session policy are in
+``warden.identity.routers.settings_admin``, both mounted here.
 
 (*) ``display_name``, ``sign_in_method``, ``roles`` and ``expires_at`` are optional.
 (+) With ``has_passkey`` as well when the method set is ``passkey_only``.
@@ -53,7 +63,7 @@ from warden.identity.invitations import InvitationError, PendingInvitation, Stag
 from warden.identity.mail import MailDeliveryError, MailError
 from warden.identity.mfa import WebAuthnUnavailable
 from warden.identity.roles import LastAdministratorError, RoleAssignment, RoleError
-from warden.identity.routers import password_admin
+from warden.identity.routers import password_admin, settings_admin
 from warden.identity.routers.contract import (
     FORBIDDEN,
     REFUSED,
@@ -64,6 +74,7 @@ from warden.identity.routers.contract import (
     StatusBody,
     WardenApiKeyList,
     WardenCapabilities,
+    WardenChangeRefused,
     WardenInvitationIssued,
     WardenInvitationList,
     WardenNewApiKeyIssued,
@@ -78,11 +89,12 @@ from warden.identity.routers.contract import (
     json_body,
     no_store,
 )
+from warden.identity.routers.views import allowed_factors, iso, method_state, user_body
 from warden.identity.service import PasskeyLinkNotConfigured, PasskeyLinkRefused
+from warden.identity.sign_in_settings import SignInMethodChangeRefused
 from warden.identity.users import (
     SignInMethod,
     SignInMethodConflict,
-    User,
     UserError,
     UserStatus,
 )
@@ -106,40 +118,23 @@ _LINK_NOT_CONFIGURED = "the passkey registration link is not configured"
 _UNAVAILABLE = "WebAuthn is not configured"
 
 
-def _iso(moment: datetime | None) -> str | None:
-    return None if moment is None else moment.isoformat()
-
-
-def _user(user: User) -> dict[str, Any]:
-    return {
-        "id": str(user.id),
-        "email": user.email,
-        "display_name": user.display_name,
-        "status": user.status.value,
-        "sign_in_method": user.sign_in_method.value,
-        "has_password": user.has_password,
-        "created_at": _iso(user.created_at),
-        "updated_at": _iso(user.updated_at),
-    }
-
-
 def _assignment(assignment: RoleAssignment) -> dict[str, Any]:
     return {
         "role": assignment.role,
-        "granted_at": _iso(assignment.granted_at),
+        "granted_at": iso(assignment.granted_at),
         "granted_by": assignment.granted_by,
-        "expires_at": _iso(assignment.expires_at),
+        "expires_at": iso(assignment.expires_at),
     }
 
 
 def _grants(grants: tuple[StagedGrant, ...]) -> list[dict[str, Any]]:
-    return [{"role": g.role, "expires_at": _iso(g.expires_at)} for g in grants]
+    return [{"role": g.role, "expires_at": iso(g.expires_at)} for g in grants]
 
 
 def _invitation(pending: PendingInvitation) -> dict[str, Any]:
     return {
-        "user": _user(pending.user),
-        "expires_at": _iso(pending.expires_at),
+        "user": user_body(pending.user),
+        "expires_at": iso(pending.expires_at),
         "roles": _grants(pending.grants),
     }
 
@@ -151,11 +146,11 @@ def _api_key(key: ApiKey) -> dict[str, Any]:
         "name": key.name,
         "hint": key.hint,
         "scopes": sorted(key.scopes),
-        "created_at": _iso(key.created_at),
+        "created_at": iso(key.created_at),
         "created_by": key.created_by,
-        "expires_at": _iso(key.expires_at),
-        "revoked_at": _iso(key.revoked_at),
-        "last_used_at": _iso(key.last_used_at),
+        "expires_at": iso(key.expires_at),
+        "revoked_at": iso(key.revoked_at),
+        "last_used_at": iso(key.last_used_at),
     }
 
 
@@ -207,12 +202,14 @@ def build_admin_router(
     invitations: str | None = None,
     api_keys: str | None = None,
     password_policies: str | None = None,
+    settings: str | None = None,
 ) -> APIRouter:
-    """Routes for users, roles, invitations, API keys and password policies, each area
-    behind one permission.
+    """Routes for users, roles, invitations, API keys, password policies and the instance
+    settings, each area behind one permission.
 
-    ``roles``, ``invitations``, ``api_keys`` and ``password_policies`` default
-    to ``users``. Each must be one of the product's registered permissions.
+    ``roles``, ``invitations``, ``api_keys``, ``password_policies`` and ``settings``
+    default to ``users``. Each must be one of the product's registered permissions.
+    ``settings`` guards the instance sign-in settings and the session policy.
     """
     registered = identity.permissions.permissions()
     needed = {
@@ -221,6 +218,7 @@ def build_admin_router(
         "invitations": invitations or users,
         "api_keys": api_keys or users,
         "password_policies": password_policies or users,
+        "settings": settings or users,
     }
     for permission in needed.values():
         if permission not in registered:
@@ -240,6 +238,11 @@ def build_admin_router(
     router.include_router(
         password_admin.build_password_admin_router(identity, permission=needed["password_policies"])
     )
+    router.include_router(
+        settings_admin.build_settings_admin_router(
+            identity, users=needed["users"], settings=needed["settings"]
+        )
+    )
 
     # Capabilities
 
@@ -250,10 +253,11 @@ def build_admin_router(
             "Whether invitations, password reset links and passkey registration links can be "
             "mailed, whether a mail sender is installed, whether single sign-on is enabled "
             "and whether passkeys and security keys work, so an administration screen can "
-            "disable and explain those actions up front. Booleans only, never a setting's "
-            "value. Each is the condition the route behind it checks; that route's own "
-            "answer (such as its 503) stays the authority. Behind the user administration "
-            "permission."
+            "disable and explain those actions up front, and the instance's default sign-in "
+            "method and allowed second factors (the run-time settings `GET /sign-in-settings` "
+            "reads). Otherwise booleans only, never a setting's value. Each boolean is the "
+            "condition the route behind it checks; that route's own answer (such as its 503) "
+            "stays the authority. Behind the user administration permission."
         ),
         responses={
             200: {
@@ -267,6 +271,7 @@ def build_admin_router(
     )
     async def capabilities(principal: Annotated[Principal, Depends(users_admin)]) -> Response:
         offered = await identity.capabilities()
+        current = await identity.sign_in_settings()
         return json_response(
             {
                 "mail_sender": offered.mail_sender,
@@ -275,6 +280,8 @@ def build_admin_router(
                 "passkey_registration_link": offered.passkey_registration_link,
                 "single_sign_on": offered.single_sign_on,
                 "webauthn": offered.webauthn,
+                "allowed_second_factors": allowed_factors(current),
+                "default_sign_in_method": current.default_sign_in_method.value,
             }
         )
 
@@ -319,7 +326,7 @@ def build_admin_router(
                 return _invalid()
         if limit is None and after is None:
             found = await identity.users.list(status=wanted)
-            return json_response({"users": [_user(u) for u in found]})
+            return json_response({"users": [user_body(u) for u in found]})
         size: int | None = None
         if limit is not None:
             if _PAGE_SIZE.fullmatch(limit) is None or int(limit) > _MAX_USER_PAGE:
@@ -334,7 +341,7 @@ def build_admin_router(
         more = size is not None and len(found) > size
         page = found[:size] if more else found
         following = identity.users.cursor(page[-1]) if more else None
-        return json_response({"users": [_user(u) for u in page], "next": following})
+        return json_response({"users": [user_body(u) for u in page], "next": following})
 
     @router.get(
         "/users/{user_id}",
@@ -362,7 +369,7 @@ def build_admin_router(
         keys = await identity.webauthn_credentials.count(user.id)
         return json_response(
             {
-                "user": _user(user),
+                "user": user_body(user),
                 "roles": [_assignment(a) for a in assignments],
                 "webauthn_credentials": keys,
                 "password": await password_admin.password_status(identity, user),
@@ -410,26 +417,45 @@ def build_admin_router(
             return _detail("this would leave no active administrator", 409)
         except UserError:
             return _not_found()
-        return json_response({"user": _user(user)})
+        return json_response({"user": user_body(user)})
 
     @router.post(
         "/users/{user_id}/sign-in-method",
         summary="Set a user's sign-in method",
         description=(
-            "`password_and_sso`, `sso_only` or `passkey_only`. An `sso_only` or "
-            "`passkey_only` user cannot sign in with, reset or change a password; a "
-            "`passkey_only` user signs in with a passkey alone (`POST /passkey/sign-in` under "
-            "the auth prefix). Setting `passkey_only` also answers `has_passkey`: when false, "
-            "the user cannot sign in until they register a passkey from a link "
-            "(`POST /users/{user_id}/passkey-registration`). `sso_only` is refused (409) "
-            "while the user holds security keys or passkeys: reset their second factors "
-            "first (`DELETE /users/{user_id}/mfa`)."
+            "`password`, `password_and_sso`, `sso_only` or `passkey_only`, or null for the "
+            "instance default. A `password` user signs in with a password and a second "
+            "factor, never single sign-on. An `sso_only` or `passkey_only` user cannot sign "
+            "in with, reset or change a password; a `passkey_only` user signs in with a "
+            "passkey alone (`POST /passkey/sign-in` under the auth prefix). The change takes "
+            "effect at once when the user holds the new method's credential, and whatever "
+            "the new method does not allow is removed (a password, keys, sessions signed in "
+            "another way). Otherwise it is pending: the method in force keeps working and the "
+            "user is mailed a set-up link (a passkey registration link, or a set-password "
+            "link through the reset page); a move to `sso_only` completes at the user's first "
+            "single sign-on. `sign_in_method` in the answer reports the user's own setting, "
+            "the method in force and any pending change. Setting `passkey_only` also answers "
+            "`has_passkey`. `sso_only` is refused (409) while the user holds security keys or "
+            "passkeys (reset their second factors first, `DELETE /users/{user_id}/mfa`) or "
+            "while single sign-on is not set up; a change needing a link is refused (409) when "
+            "the link cannot be sent, naming what is missing (such as `mail_sender`)."
         ),
         responses={
             200: {"model": WardenSignInMethodSet, "description": "The updated user."},
             400: detail("The request is not valid.", "the request is not valid"),
             404: detail("No such user.", "not found"),
-            409: detail("The user holds security keys or passkeys.", _HOLDS_KEYS),
+            409: {
+                "model": WardenChangeRefused,
+                "description": (
+                    "The user cannot take that method now. `reason` says why (such as "
+                    "`sso_not_configured` or `mail_sender`); a refusal because the user holds "
+                    f"security keys or passkeys answers only `detail`: {_HOLDS_KEYS}."
+                ),
+                "headers": no_store(),
+            },
+            502: detail(
+                "The set-up link could not be delivered.", "the message could not be delivered"
+            ),
             **REFUSED,
             **FORBIDDEN,
         },
@@ -442,22 +468,35 @@ def build_admin_router(
         if uid is None:
             return _not_found()
         body = await read_object(request) or {}
-        try:
-            method = SignInMethod(str(body.get("sign_in_method")))
-        except ValueError:
+        if "sign_in_method" not in body:
             return _invalid()
+        value = body["sign_in_method"]
+        method: SignInMethod | None = None
+        if value is not None:
+            try:
+                method = SignInMethod(str(value))
+            except ValueError:
+                return _invalid()
         try:
-            user = await identity.users.set_sign_in_method(
+            state = await identity.set_sign_in_method(
                 uid, method, actor=str(principal.user_id), source_ip=source(request)
             )
+        except SignInMethodChangeRefused as exc:
+            return json_response({"detail": str(exc), "reason": exc.reason}, 409)
         except SignInMethodConflict:
             return _detail(_HOLDS_KEYS, 409)
+        except MailDeliveryError:
+            return _detail("the message could not be delivered", 502)
         except UserError:
             return _not_found()
-        if method is SignInMethod.PASSKEY_ONLY:
-            has_passkey = await identity.users.holds_passkey(user.id)
-            return json_response({"user": _user(user), "has_passkey": has_passkey})
-        return json_response({"user": _user(user)})
+        user = await identity.users.get(uid)
+        if user is None:
+            return _not_found()
+        answer: dict[str, Any] = {"user": user_body(user), "sign_in_method": method_state(state)}
+        target = state.effective if state.pending is None else state.pending.to_method
+        if target is SignInMethod.PASSKEY_ONLY:
+            answer["has_passkey"] = await identity.users.holds_passkey(user.id)
+        return json_response(answer)
 
     @router.post(
         "/users/{user_id}/password-reset",
@@ -555,7 +594,7 @@ def build_admin_router(
             return _detail("the message could not be delivered", 502)
         except MailError:
             return _detail("mail is not configured", 503)
-        return json_response({"status": "sent", "expires_at": _iso(expires_at)}, 202)
+        return json_response({"status": "sent", "expires_at": iso(expires_at)}, 202)
 
     @router.delete(
         "/users/{user_id}/totp",
@@ -822,7 +861,7 @@ def build_admin_router(
             {
                 "user_id": str(invitation.user_id),
                 "email": invitation.email,
-                "expires_at": _iso(invitation.expires_at),
+                "expires_at": iso(invitation.expires_at),
                 "roles": _grants(invitation.grants),
             },
             201,
@@ -867,7 +906,7 @@ def build_admin_router(
             {
                 "user_id": str(invitation.user_id),
                 "email": invitation.email,
-                "expires_at": _iso(invitation.expires_at),
+                "expires_at": iso(invitation.expires_at),
                 "roles": _grants(invitation.grants),
             }
         )

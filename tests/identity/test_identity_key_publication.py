@@ -11,7 +11,7 @@ import httpx
 import jwt
 import pytest
 from fastapi import FastAPI
-from identity_support import PASSWORD, UserFactory
+from identity_support import PASSWORD, UserFactory, complete_sign_in
 
 from warden.identity import Identity
 from warden.jwks import keys_router
@@ -33,7 +33,7 @@ async def keys_client(keys: KeyStore) -> AsyncIterator[httpx.AsyncClient]:
 
 async def _access_token(identity: Identity, make_user: UserFactory) -> str:
     user = await make_user()
-    result = await identity.sign_in(user.email, PASSWORD)
+    result = await complete_sign_in(identity, user.email, PASSWORD)
     assert result.tokens is not None
     return result.tokens.access_token
 

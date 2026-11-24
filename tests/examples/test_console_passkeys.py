@@ -26,6 +26,7 @@ from console_support import (
     assert_strict_csp,
     authenticator,
     bearer,
+    key_session,
     make_user,
     sign_in,
 )
@@ -193,7 +194,7 @@ async def test_a_user_registers_lists_renames_and_removes_a_key(
     console: Any, client: httpx.AsyncClient
 ) -> None:
     await make_user(console, "alice@example.com", "editor")
-    token = await sign_in(client, "alice@example.com")
+    token = await key_session(console, "alice@example.com")  # holding no second factor yet
     key = authenticator()
 
     registered = await register_key(client, token, key, "Desk key")
@@ -215,12 +216,17 @@ async def test_a_user_registers_lists_renames_and_removes_a_key(
     assert renamed.status_code == 200, renamed.text
     assert renamed.json()["credential"]["nickname"] == "Blue key"
 
+    # The last second factor stays (always required since warden 0.2.0); with
+    # a second key, the first can go.
+    kept = await client.delete(f"/auth/webauthn/credentials/{credential_id}", headers=bearer(token))
+    assert kept.status_code == 409
+    assert (await register_key(client, token, authenticator(), "Spare")).status_code == 200
     removed = await client.delete(
         f"/auth/webauthn/credentials/{credential_id}", headers=bearer(token)
     )
     assert removed.status_code == 204
     listed = await client.get("/auth/webauthn/credentials", headers=bearer(token))
-    assert listed.json()["credentials"] == []
+    assert [c["nickname"] for c in listed.json()["credentials"]] == ["Spare"]
 
 
 async def test_a_passkey_sign_in_round_trip_through_the_sample(
@@ -262,7 +268,7 @@ async def test_a_key_is_offered_beside_the_code_when_mfa_is_required(
     console: Any, client: httpx.AsyncClient
 ) -> None:
     await make_user(console, "alice@example.com", "editor")
-    token = await sign_in(client, "alice@example.com")
+    token = await key_session(console, "alice@example.com")  # holding no second factor yet
     key = authenticator(resident=False, user_verifying=False)
     assert (await register_key(client, token, key)).status_code == 200
 
@@ -337,13 +343,16 @@ async def test_an_administrator_moves_a_user_to_passkey_only_and_sends_a_link(
         headers=bearer(admin),
     )
     assert moved.status_code == 200, moved.text
-    assert moved.json()["user"]["sign_in_method"] == "passkey_only"
+    # Bob has no passkey yet: the move waits for one and the link is mailed (CS18).
+    assert moved.json()["user"]["sign_in_method"] == "password_and_sso"
+    assert moved.json()["sign_in_method"]["pending"]["to"] == "passkey_only"
     assert moved.json()["has_passkey"] is False
 
+    # His password keeps working until the passkey exists.
     password = await client.post(
         "/auth/sign-in", json={"email": "bob@example.com", "password": PASSWORD}
     )
-    assert password.status_code == 401
+    assert password.status_code == 200
 
     sent = await client.post(f"/admin/users/{bob.id}/passkey-registration", headers=bearer(admin))
     assert sent.status_code == 202, sent.text
@@ -369,8 +378,15 @@ async def test_an_administrator_moves_a_user_to_passkey_only_and_sends_a_link(
     signed_in = await passkey_sign_in(client, key)
     assert signed_in.status_code == 200, signed_in.text
 
+    # The passkey completed the move, and the password went with it.
+    password = await client.post(
+        "/auth/sign-in", json={"email": "bob@example.com", "password": PASSWORD}
+    )
+    assert password.status_code == 401
+
     detail = await client.get(f"/admin/users/{bob.id}", headers=bearer(admin))
     assert detail.json()["webauthn_credentials"] == 1
+    assert detail.json()["user"]["sign_in_method"] == "passkey_only"
 
 
 async def test_the_administrators_reset_removes_keys_and_ends_passkey_sign_in(

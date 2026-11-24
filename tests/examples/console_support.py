@@ -13,6 +13,7 @@ PASSWORD = "correct horse battery staple"
 ORIGIN = "http://localhost:8040"
 # Wave 9's software authenticator lives beside the WebAuthn tests.
 WEBAUTHN_TESTS = Path(__file__).resolve().parents[1] / "identity" / "webauthn"
+IDENTITY_TESTS = Path(__file__).resolve().parents[1] / "identity"
 
 
 async def make_user(console: Any, email: str, *roles: str) -> Any:
@@ -22,8 +23,33 @@ async def make_user(console: Any, email: str, *roles: str) -> Any:
     return user
 
 
+def identity_support() -> Any:
+    """The identity tests' helpers (``tests/identity/identity_support.py``)."""
+    if str(IDENTITY_TESTS) not in sys.path:
+        sys.path.insert(0, str(IDENTITY_TESTS))
+    import identity_support as module
+
+    return module
+
+
+async def http_sign_in(
+    client: httpx.AsyncClient, email: str, password: str = PASSWORD
+) -> httpx.Response:
+    """``POST /auth/sign-in`` carried through the second factor: the final response."""
+    response: httpx.Response = await identity_support().http_sign_in(client, email, password)
+    return response
+
+
+async def key_session(console: Any, email: str) -> str:
+    """An access token for a user holding no second factor, as if signed in with a key."""
+    user = await console.identity.users.get_by_email(email)
+    pair = await identity_support().direct_session(console.identity, user.id, ("pwd", "hwk"))
+    return str(pair.access_token)
+
+
 async def sign_in(client: httpx.AsyncClient, email: str, password: str = PASSWORD) -> str:
-    answer = await client.post("/auth/sign-in", json={"email": email, "password": password})
+    """A password sign-in carried through its second factor (always required since 0.2.0)."""
+    answer = await identity_support().http_sign_in(client, email, password)
     assert answer.status_code == 200, answer.text
     body = answer.json()
     assert body["status"] == "signed_in"
@@ -61,7 +87,7 @@ def console_config(**sections: Any) -> Any:
             "sso_completion_link": "/signed-in",
             "passkey_registration_link": "/passkey?t={token}",
         },
-        "identity": {"require_mfa": False},
+        "identity": {},
         "mail": {"from_address": "console@example.com"},
         "syslog": {"enabled": True, "host": "127.0.0.1", "port": 9, "transport": "udp"},
     }

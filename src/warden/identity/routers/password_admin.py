@@ -116,7 +116,7 @@ from warden.identity.routers.contract import (
     json_body,
     no_store,
 )
-from warden.identity.users import SignInMethod, User
+from warden.identity.users import User, allows_password, effective_method_sql
 
 if TYPE_CHECKING:
     from warden.identity.service import Identity
@@ -419,10 +419,10 @@ async def password_status(identity: "Identity", user: User) -> dict[str, Any]:
     """A user's effective password policy, why it applies, their tier, expiry and change state.
 
     Identifiers, names and times only. Policies apply only to users who sign
-    in with a password (``password_and_sso``): for anyone else ``applies`` is
-    false and the policy fields are null.
+    in with a password (``password`` or ``password_and_sso`` in force): for
+    anyone else ``applies`` is false and the policy fields are null.
     """
-    applies = user.sign_in_method is SignInMethod.PASSWORD_AND_SSO
+    applies = allows_password(user.sign_in_method)
     state = await identity.password_states.get(user.id)
     view: dict[str, Any] = {
         "applies": applies,
@@ -510,11 +510,18 @@ _PROPOSED_SQL = sql.SQL(
     FROM {users} u
     LEFT JOIN {pins} pin ON pin.user_id = u.id
     LEFT JOIN mapped m ON m.user_id = u.id AND m.rank = 1
-    WHERE u.sign_in_method = 'password_and_sso'
+    WHERE {method} IN ('password', 'password_and_sso')
       AND COALESCE(pin.policy_id, m.policy_id,
                    (SELECT id FROM {policies} WHERE is_default)) = %(target)s
     """
-).format(policies=_POLICIES, roles=_ROLES, assignments=_ASSIGNMENTS, users=_USERS, pins=_PINS)
+).format(
+    policies=_POLICIES,
+    roles=_ROLES,
+    assignments=_ASSIGNMENTS,
+    users=_USERS,
+    pins=_PINS,
+    method=effective_method_sql("u"),
+)
 
 
 async def _proposed_count(
@@ -1202,7 +1209,7 @@ def build_password_admin_router(identity: "Identity", *, permission: str) -> API
         user = await user_or_none(user_id)
         if user is None:
             return _not_found()
-        if user.sign_in_method is not SignInMethod.PASSWORD_AND_SSO or not user.has_password:
+        if not allows_password(user.sign_in_method) or not user.has_password:
             return _detail(_SIGNS_IN_OTHERWISE, 409)
         async with identity.db.transaction() as tx:
             flagged = await identity.password_states.require_change(

@@ -16,11 +16,17 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI
-from identity_support import FAST_HASHER, PASSWORD, MemorySecrets, RecordingSender
+from identity_support import FAST_HASHER, PASSWORD, MemorySecrets, RecordingSender, complete_sign_in
 
 from warden.config import WardenConfig, parse_config
 from warden.db import Database
-from warden.identity import Identity, IdentityCapabilities, PermissionRegistry, User
+from warden.identity import (
+    Identity,
+    IdentityCapabilities,
+    PermissionRegistry,
+    SignInMethod,
+    User,
+)
 from warden.keys import KeyStore
 
 pytestmark = pytest.mark.db
@@ -28,7 +34,7 @@ pytestmark = pytest.mark.db
 DOMAIN = "https://app.example.com"
 LOOPBACK = "http://127.0.0.1:8000"
 ANONYMOUS_FIELDS = {"password_reset", "single_sign_on", "passkey_sign_in"}
-ADMIN_FIELDS = {
+CAPABILITY_FIELDS = {
     "mail_sender",
     "invitations",
     "password_reset",
@@ -36,6 +42,9 @@ ADMIN_FIELDS = {
     "single_sign_on",
     "webauthn",
 }
+# The admin route adds the run-time sign-in settings to the capabilities (ruling CS22).
+SETTINGS_FIELDS = {"allowed_second_factors", "default_sign_in_method"}
+ADMIN_FIELDS = CAPABILITY_FIELDS | SETTINGS_FIELDS
 
 
 def deployment(
@@ -55,7 +64,7 @@ def deployment(
         http["passkey_registration_link"] = f"{base}/passkey?t={{token}}"
     complete = invitation_link and reset_link
     return parse_config(
-        {"http": http, "identity": {"require_mfa": False, "enabled": complete}},
+        {"http": http, "identity": {"enabled": complete}},
     )
 
 
@@ -113,7 +122,7 @@ async def make(
 
 
 async def bearer(identity: Identity, user: User) -> dict[str, str]:
-    result = await identity.sign_in(user.email, PASSWORD)
+    result = await complete_sign_in(identity, user.email, PASSWORD)
     assert result.tokens is not None
     return {"authorization": f"Bearer {result.tokens.access_token}"}
 
@@ -151,9 +160,9 @@ async def test_without_a_sender_nothing_that_mails_is_available(make: Any) -> No
 def test_the_result_is_frozen_and_only_booleans() -> None:
     assert dataclasses.is_dataclass(IdentityCapabilities)
     fields = dataclasses.fields(IdentityCapabilities)
-    assert {f.name for f in fields} == ADMIN_FIELDS
+    assert {f.name for f in fields} == CAPABILITY_FIELDS
     assert all(f.type in (bool, "bool") for f in fields)
-    value = IdentityCapabilities(**dict.fromkeys(ADMIN_FIELDS, False))
+    value = IdentityCapabilities(**dict.fromkeys(CAPABILITY_FIELDS, False))
     with pytest.raises(dataclasses.FrozenInstanceError):
         value.mail_sender = True  # type: ignore[misc]
 
@@ -284,6 +293,27 @@ async def test_the_anonymous_route_answers_every_caller_identically(make: Any) -
         assert dict(answer.headers) == dict(plain.headers)
 
 
+async def test_the_anonymous_route_does_not_depend_on_any_account_or_setting(make: Any) -> None:
+    """The same bytes with no accounts, every kind of account, and different sign-in settings."""
+    d = await make(deployment())
+    empty = (await d.client.get("/auth/capabilities")).content
+    for method in SignInMethod:
+        user = await member(d, f"{method.value}@example.com")
+        if method is not SignInMethod.SSO_ONLY:
+            await d.identity.set_sign_in_method(user.id, method, actor="test")
+    await d.identity.update_sign_in_settings(
+        actor="test", default_sign_in_method="password", allowed_second_factors=["totp"]
+    )
+    for headers in (None, d.admin, {"x-forwarded-for": "198.51.100.1"}, {"cookie": "a=b"}):
+        answer = await d.client.get("/auth/capabilities", headers=headers)
+        assert answer.content == empty
+    # Asking about accounts that exist, and one that does not, changes nothing.
+    probes = [f"{method.value}@example.com" for method in SignInMethod]
+    for probe in (*probes, "admin-1@example.com", "nobody@example.com"):
+        answer = await d.client.get("/auth/capabilities", params={"email": probe})
+        assert answer.content == empty
+
+
 async def test_the_anonymous_route_follows_the_deployment(make: Any) -> None:
     bare = await make(deployment(base=LOOPBACK), sender=False)
     assert await anonymous(bare.client) == dict.fromkeys(ANONYMOUS_FIELDS, False)
@@ -299,8 +329,12 @@ async def test_the_admin_route_answers_every_capability_as_a_boolean(make: Any) 
     assert answer.headers["cache-control"] == "no-store"
     body = answer.json()
     assert set(body) == ADMIN_FIELDS
-    assert all(isinstance(value, bool) for value in body.values())
-    assert body == dataclasses.asdict(await d.identity.capabilities())
+    assert all(isinstance(body[name], bool) for name in CAPABILITY_FIELDS)
+    assert {k: v for k, v in body.items() if k in CAPABILITY_FIELDS} == dataclasses.asdict(
+        await d.identity.capabilities()
+    )
+    assert body["allowed_second_factors"] == ["totp", "passkey"]
+    assert body["default_sign_in_method"] == "password_and_sso"
     assert body["passkey_registration_link"] is False
     assert body["mail_sender"] is True
 
@@ -315,7 +349,19 @@ async def test_the_admin_route_without_a_sender(make: Any) -> None:
         "passkey_registration_link": False,
         "single_sign_on": False,
         "webauthn": True,
+        "allowed_second_factors": ["totp", "passkey"],
+        "default_sign_in_method": "password_and_sso",
     }
+
+
+async def test_the_admin_route_follows_the_sign_in_settings(make: Any) -> None:
+    d = await make(deployment())
+    await d.identity.update_sign_in_settings(
+        actor="test", default_sign_in_method="password", allowed_second_factors=["passkey"]
+    )
+    body = (await d.client.get("/admin/capabilities", headers=d.admin)).json()
+    assert body["allowed_second_factors"] == ["passkey"]
+    assert body["default_sign_in_method"] == "password"
 
 
 async def test_the_admin_route_needs_the_user_administration_permission(make: Any) -> None:

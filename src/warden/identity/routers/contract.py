@@ -49,18 +49,22 @@ __all__ = [
     "ResetCompleteBody",
     "ResetRequestBody",
     "RoleAssignBody",
+    "SessionPolicyBody",
     "SignInBody",
     "SignInMethodBody",
+    "SignInSettingsBody",
     "SsoClientSecretBody",
     "SsoInvitationBody",
     "StagedGrantBody",
     "StatusBody",
+    "WardenAffectedSsoUser",
     "WardenAffectedUsers",
     "WardenAffectedUsersProposal",
     "WardenApiKey",
     "WardenApiKeyList",
     "WardenCapabilities",
     "WardenChallengeIssued",
+    "WardenChangeRefused",
     "WardenChangeRequired",
     "WardenDetail",
     "WardenEnrolmentConfirmed",
@@ -71,7 +75,9 @@ __all__ = [
     "WardenInvitationAccepted",
     "WardenInvitationIssued",
     "WardenInvitationList",
+    "WardenLinkResent",
     "WardenNewApiKeyIssued",
+    "WardenOwnSignInMethod",
     "WardenPasskeyInvitationAccepted",
     "WardenPasskeyLinkSent",
     "WardenPasskeyRegistered",
@@ -103,13 +109,18 @@ __all__ = [
     "WardenRoleAssignment",
     "WardenRoleList",
     "WardenSecondFactorAnswer",
+    "WardenSessionPolicy",
+    "WardenSessionPolicyFields",
     "WardenSignInAnswer",
     "WardenSignInCapabilities",
     "WardenSignInMethodSet",
+    "WardenSignInSettings",
+    "WardenSignInSettingsChanged",
     "WardenSignedIn",
     "WardenSignedInAfterEnrolment",
     "WardenSsoCheck",
     "WardenSsoReport",
+    "WardenSsoStillRequired",
     "WardenStagedGrant",
     "WardenTotpEnrolment",
     "WardenUser",
@@ -142,7 +153,8 @@ __all__ = [
 ]
 
 
-SignInMethodName = Literal["password_and_sso", "sso_only", "passkey_only"]
+SignInMethodName = Literal["password", "password_and_sso", "sso_only", "passkey_only"]
+SecondFactorName = Literal["totp", "passkey"]
 
 
 class _Doc(BaseModel):
@@ -232,12 +244,12 @@ class WardenChallengeIssued(_Doc):
     status: Literal["mfa_required", "mfa_enrolment_required"]
     challenge: str = Field(description="Opaque; pass it to the next step.")
     expires_in: int = Field(description="Seconds until the challenge expires.")
-    methods: list[Literal["totp", "webauthn"]] | None = Field(
-        default=None,
+    methods: list[Literal["totp", "webauthn"]] = Field(
         description=(
-            "With `mfa_required` only (absent from `mfa_enrolment_required`): the kinds of "
-            "second factor the user holds, `totp` before `webauthn`. A recovery code is "
-            "always accepted as well."
+            "`totp` before `webauthn`. With `mfa_required`: the kinds of second factor the "
+            "user holds that the administrator allows; a recovery code is always accepted as "
+            "well. With `mfa_enrolment_required`: the kinds the user may enrol, the allowed "
+            "ones (`webauthn` only where WebAuthn is configured)."
         ),
     )
 
@@ -259,6 +271,12 @@ class WardenTotpEnrolment(_Doc):
 
 
 class WardenRecoveryCodes(_Doc):
+    recovery_codes: list[str] = Field(description="Each usable once; shown only now.")
+
+
+class WardenRecoveryCodesRegenerated(_Doc):
+    """The signed-in user's new recovery codes; every earlier code no longer works."""
+
     recovery_codes: list[str] = Field(description="Each usable once; shown only now.")
 
 
@@ -429,6 +447,15 @@ class WardenCapabilities(_Doc):
     webauthn: bool = Field(
         description="Passkeys and security keys work: a relying party id is known."
     )
+    allowed_second_factors: list[SecondFactorName] = Field(
+        description=(
+            "The second factors the administrator allows, never empty: the run-time setting "
+            "`GET /sign-in-settings` reads."
+        )
+    )
+    default_sign_in_method: SignInMethodName = Field(
+        description="The method every user without one of their own follows."
+    )
 
 
 class WardenResetRequested(_Doc):
@@ -465,14 +492,43 @@ class WardenUserEnvelope(_Doc):
     user: WardenUser
 
 
+class WardenPendingSignInMethod(_Doc):
+    from_: SignInMethodName = Field(
+        alias="from", description="The method in force until the change completes."
+    )
+    to: SignInMethodName = Field(description="The method the change moves to.")
+    requested_at: datetime
+    link: Literal["passkey_registration", "set_password"] | None = Field(
+        description=(
+            "The set-up link that completes the change; null for `sso_only`, which "
+            "completes at the user's first single sign-on."
+        )
+    )
+    link_sent_at: datetime | None = Field(
+        description="When the current link was mailed; null when none was."
+    )
+
+
+class WardenSignInMethodState(_Doc):
+    setting: SignInMethodName | None = Field(
+        description="The user's own setting; null when they follow the instance default."
+    )
+    effective: SignInMethodName = Field(description="The method in force.")
+    pending: WardenPendingSignInMethod | None = Field(
+        description="A change waiting for its credential; null when none is."
+    )
+
+
 class WardenSignInMethodSet(_Doc):
     user: WardenUser
+    sign_in_method: WardenSignInMethodState
     has_passkey: bool | None = Field(
         default=None,
         description=(
-            "Only when the method set is `passkey_only`: whether the user holds a passkey (a "
-            "discoverable credential registered with user verification). When false, send "
-            "them a registration link (`POST /users/{user_id}/passkey-registration`)."
+            "Only when the method set (or followed) is `passkey_only`: whether the user holds "
+            "a passkey (a discoverable credential registered with user verification). When "
+            "false, the change is pending and a registration link has been mailed; resend one "
+            "with `POST /users/{user_id}/passkey-registration`."
         ),
     )
 
@@ -819,7 +875,9 @@ class StatusBody(_Doc):
 
 
 class SignInMethodBody(_Doc):
-    sign_in_method: SignInMethodName
+    sign_in_method: SignInMethodName | None = Field(
+        description="One of the four methods, or null to follow the instance default."
+    )
 
 
 class RoleAssignBody(_Doc):
@@ -1140,6 +1198,115 @@ WardenUserDetail.model_rebuild()
 # Response fragments.
 
 _NO_STORE_HEADER = {"description": "Always `no-store`.", "schema": {"type": "string"}}
+
+
+class WardenSignInSettings(_Doc):
+    default_sign_in_method: SignInMethodName = Field(
+        description="The method every user without one of their own follows."
+    )
+    allowed_second_factors: list[SecondFactorName] = Field(
+        description=(
+            "The second factors users may enrol and be challenged with, never empty. "
+            "Recovery codes are always the backup."
+        )
+    )
+    updated_at: datetime
+    updated_by: str | None = Field(description="The actor who last changed the settings.")
+
+
+class WardenSignInSettingsChanged(_Doc):
+    settings: WardenSignInSettings
+    changed: list[str] = Field(
+        description="User ids whose method in force changed at once (UUIDs)."
+    )
+    pending: list[str] = Field(
+        description="User ids whose change waits for its credential (UUIDs)."
+    )
+    links_failed: list[str] = Field(
+        description="User ids whose set-up link was not delivered (UUIDs); resend each."
+    )
+
+
+class WardenChangeRefused(_Doc):
+    detail: str = Field(description="A fixed message; never a setting's value.")
+    reason: str = Field(
+        description=(
+            "Why the change cannot be made: `sso_not_configured`, `webauthn`, `mail_sender`, "
+            "`passkey_registration_link`, `reset_password_link`, `not_pending`, `no_link`, "
+            "`user_inactive`, or a refusal the route names."
+        )
+    )
+
+
+class WardenLinkResent(_Doc):
+    status: Literal["sent"]
+    expires_at: datetime = Field(description="When the new link stops working.")
+
+
+class WardenOwnSignInMethod(_Doc):
+    sign_in_method: WardenSignInMethodState
+    allowed_second_factors: list[SecondFactorName] = Field(
+        description="The second factors the administrator allows."
+    )
+
+
+class WardenSessionPolicyFields(_Doc):
+    access_token_ttl_seconds: int
+    refresh_token_ttl_seconds: int
+    session_lifespan_seconds: int
+    refresh_reuse_grace_seconds: int
+    require_mfa: Literal[True] = Field(
+        description="Deprecated and always true: a password sign-in always needs a second factor."
+    )
+
+
+class WardenSessionPolicy(_Doc):
+    policy: WardenSessionPolicyFields = Field(description="The effective policy.")
+    defaults: WardenSessionPolicyFields = Field(
+        description="The configuration's policy, which a reset returns to."
+    )
+
+
+class WardenAffectedSsoUser(_Doc):
+    id: str = Field(description="UUID.")
+    email: str
+
+
+class WardenSsoStillRequired(_Doc):
+    detail: str
+    reason: Literal["sso_still_required"]
+    default_sso_only: bool = Field(description="Whether the instance default is `sso_only`.")
+    users: list[WardenAffectedSsoUser] = Field(
+        description="Each active user whose own, pending or in-force method is `sso_only`."
+    )
+
+
+class SignInSettingsBody(_Doc):
+    """At least one field; only the fields given change."""
+
+    default_sign_in_method: SignInMethodName | None = Field(
+        default=None,
+        description=(
+            "The new instance default. Moves every user who follows it: at once for those "
+            "holding its credential, otherwise pending with a set-up link."
+        ),
+    )
+    allowed_second_factors: list[SecondFactorName] | None = Field(
+        default=None, description="`totp`, `passkey` or both; never empty."
+    )
+
+
+class SessionPolicyBody(_Doc):
+    """At least one field; only the fields given change."""
+
+    access_token_ttl_seconds: int | None = Field(default=None, description="60 to 3600.")
+    refresh_token_ttl_seconds: int | None = Field(
+        default=None, description="At least 300 and longer than the access token lifetime."
+    )
+    session_lifespan_seconds: int | None = Field(
+        default=None, description="At least 300 and not shorter than the refresh token lifetime."
+    )
+    refresh_reuse_grace_seconds: int | None = Field(default=None, description="0 to 120.")
 
 
 def no_store() -> dict[str, Any]:

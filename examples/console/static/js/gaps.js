@@ -5,12 +5,6 @@
 import { h } from "./dom.js";
 
 export const GAPS = {
-  policyRoute: {
-    question: "Q7",
-    text:
-      "warden has no HTTP route for the session policy. This screen uses the sample's own " +
-      "routes over Identity.policy, as any product would have to.",
-  },
   anchorRoute: {
     question: "Q8",
     text:
@@ -34,8 +28,8 @@ export const GAPS = {
   whoAmI: {
     question: "Q11",
     text:
-      "warden's routes have no 'who am I' route; the sample answers it from require_user " +
-      "(GET /api/me).",
+      "warden's routes have no 'who am I' route, and GET <auth>/me is not part of 0.2.0 " +
+      "(it stays on the backlog for 0.3.0); the sample answers it from require_user (GET /api/me).",
   },
 };
 

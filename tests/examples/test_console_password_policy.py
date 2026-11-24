@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 import pytest
-from console_support import PASSWORD, assert_strict_csp, bearer, make_user, sign_in
+from console_support import PASSWORD, assert_strict_csp, bearer, http_sign_in, make_user, sign_in
 
 pytestmark = pytest.mark.db
 
@@ -113,7 +113,7 @@ async def test_the_console_settings_default_to_the_public_range_api(
 
 async def test_the_new_screens_are_served_with_the_policy(client: httpx.AsyncClient) -> None:
     for path in (
-        "/static/js/passwordrules.js",
+        "/api/warden/passwordrules.js",
         "/static/js/checklist.js",
         "/static/js/passwords.js",
         "/static/js/dev.js",
@@ -124,6 +124,21 @@ async def test_the_new_screens_are_served_with_the_policy(client: httpx.AsyncCli
         answer = await client.get(path)
         assert answer.status_code == 200, path
         assert_strict_csp(answer)
+
+
+async def test_the_console_serves_the_packaged_rules_not_a_copy(
+    client: httpx.AsyncClient,
+) -> None:
+    from warden.static import path as static_path
+
+    answer = await client.get("/api/warden/passwordrules.js")
+    assert answer.status_code == 200
+    assert answer.headers["content-type"].startswith("text/javascript")
+    assert answer.content == static_path("passwordrules.js").read_bytes()
+    assert (await client.get("/static/js/passwordrules.js")).status_code == 404
+    checklist = (SCRIPTS / "checklist.js").read_text(encoding="utf-8")
+    assert 'import "/api/warden/passwordrules.js";' in checklist
+    assert "./passwordrules.js" not in checklist
 
 
 # The development clock
@@ -175,21 +190,17 @@ async def test_expiry_is_walked_without_waiting(make_console: Any) -> None:
         )
         assert mapped.status_code == 204, mapped.text
         await make_user(built, "ed@example.com", "editor")
-        first = await c.post(
-            "/auth/sign-in", json={"email": "ed@example.com", "password": PASSWORD}
-        )
+        first = await http_sign_in(c, "ed@example.com", PASSWORD)
         assert first.json()["status"] == "signed_in"
         assert first.json().get("password_expires_in_days") is None
 
         assert (await c.put("/api/dev/clock", json={"days": 25})).status_code == 200
-        warned = await c.post(
-            "/auth/sign-in", json={"email": "ed@example.com", "password": PASSWORD}
-        )
+        warned = await http_sign_in(c, "ed@example.com", PASSWORD)
         assert warned.json()["status"] == "signed_in"
         assert 0 < warned.json()["password_expires_in_days"] <= 6
 
         assert (await c.put("/api/dev/clock", json={"days": 40})).status_code == 200
-        due = await c.post("/auth/sign-in", json={"email": "ed@example.com", "password": PASSWORD})
+        due = await http_sign_in(c, "ed@example.com", PASSWORD)
         body = due.json()
         assert body["status"] == "password_change_required"
         assert body["reason"] == "expired"
@@ -246,9 +257,7 @@ async def test_recheck_flags_a_user_whose_password_is_now_on_a_list(
         assert ran.json()["flagged"] == 1
         status = await c.get(f"/admin/users/{user.id}/password-policy", headers=bearer(token))
         assert status.json()["change_required"] is True
-        again = await c.post(
-            "/auth/sign-in", json={"email": "fp@example.com", "password": PASSWORD}
-        )
+        again = await http_sign_in(c, "fp@example.com", PASSWORD)
         assert again.json()["status"] == "password_change_required"
         assert again.json()["reason"] == "watch_list"
         assert again.json()["watch_list_reason"] == "Known to be weak"
@@ -346,9 +355,7 @@ async def test_a_forced_change_round_trip(console: Any, client: httpx.AsyncClien
     assert required.status_code == 200
     assert required.json() == {"change_required": True, "change_reason": "administrator"}
 
-    gate = await client.post(
-        "/auth/sign-in", json={"email": "dave@example.com", "password": PASSWORD}
-    )
+    gate = await http_sign_in(client, "dave@example.com", PASSWORD)
     body = gate.json()
     assert body["status"] == "password_change_required"
     assert body["reason"] == "administrator"
@@ -375,9 +382,7 @@ async def test_a_forced_change_round_trip(console: Any, client: httpx.AsyncClien
     )
     assert done.status_code == 200, done.text
     assert done.json()["status"] == "signed_in"
-    again = await client.post(
-        "/auth/sign-in", json={"email": "dave@example.com", "password": STRONG}
-    )
+    again = await http_sign_in(client, "dave@example.com", STRONG)
     assert again.json()["status"] == "signed_in"
 
 
@@ -391,9 +396,7 @@ async def test_an_administrator_clears_a_required_change(
         f"/admin/users/{user.id}/password-change-required", headers=bearer(token)
     )
     assert cleared.status_code == 204
-    signed = await client.post(
-        "/auth/sign-in", json={"email": "erin@example.com", "password": PASSWORD}
-    )
+    signed = await http_sign_in(client, "erin@example.com", PASSWORD)
     assert signed.json()["status"] == "signed_in"
 
 

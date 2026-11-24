@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from fastapi import FastAPI
-from identity_support import PASSWORD, RecordingSender, UserFactory, audit_rows
+from identity_support import PASSWORD, RecordingSender, UserFactory, audit_rows, complete_sign_in
 
 from warden.db import Database
 from warden.identity import Identity, PermissionRegistry, User, UserStatus
@@ -53,7 +53,7 @@ async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
 
 
 async def _bearer(identity: Identity, user: User) -> dict[str, str]:
-    result = await identity.sign_in(user.email, PASSWORD)
+    result = await complete_sign_in(identity, user.email, PASSWORD)
     assert result.tokens is not None
     return {"authorization": f"Bearer {result.tokens.access_token}"}
 
@@ -233,9 +233,9 @@ async def test_change_status_and_method(
     method = await client.post(
         f"/admin/users/{other.id}/sign-in-method",
         headers=headers,
-        json={"sign_in_method": "sso_only"},
+        json={"sign_in_method": "password"},
     )
-    assert method.json()["user"]["sign_in_method"] == "sso_only"
+    assert method.json()["user"]["sign_in_method"] == "password"
     bad = await client.post(
         f"/admin/users/{other.id}/status", headers=headers, json={"status": "deleted"}
     )

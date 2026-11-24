@@ -8,9 +8,10 @@ cover what the console needs that warden leaves to the product:
   warden's bundled common-password list);
 - ``GET /me``: who the bearer is (warden's routes have no such route; a
   product answers it from ``require_user``);
+- ``GET /warden/passwordrules.js``: warden's packaged browser password rules,
+  served from the console's own route as a product serves them (warden serves
+  no file itself; ``warden.static.path`` says where it is);
 - ``GET /outbox``: the in-memory mail outbox (the sample's own mail sender);
-- ``GET``/``PUT /policy``, ``POST /policy/reset``: the session policy, through
-  ``Identity.policy`` (warden has no HTTP route for it);
 - ``POST /audit/anchor``, ``POST /audit/anchors/verify``: audit anchors,
   through ``warden.audit.anchor`` and ``verify_anchors`` (warden has the CLI
   ``warden audit anchor`` and ``warden audit verify --anchors``, but no route);
@@ -43,7 +44,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from examples.console.devclock import DevClock
 from examples.console.outbox import Outbox
@@ -51,7 +52,6 @@ from examples.console.product import (
     AUDIT_EXPORT,
     AUDIT_READ,
     PASSWORDS_MANAGE,
-    POLICY_MANAGE,
     SYSLOG_MANAGE,
 )
 from warden.audit import (
@@ -63,11 +63,12 @@ from warden.audit import (
 )
 from warden.audit import anchor as write_anchor
 from warden.audit.syslog import SyslogForwarder
-from warden.identity import Identity, PolicyError, Principal, require_permission, require_user
+from warden.identity import Identity, Principal, require_permission, require_user
 from warden.identity.http import SourceIp, client_ip
 from warden.identity.password_policy import WatchListError, WatchListNotFound
 from warden.identity.password_policy.builtin import bundled_list
 from warden.keys import KeyStore
+from warden.static import path as static_path
 
 __all__ = ["console_router"]
 
@@ -75,16 +76,6 @@ __all__ = ["console_router"]
 MAX_ANCHOR_EXPORT = 2_000_000
 # A small file of SHA-1 hashes of synthetic passwords, in the downloader's format.
 SAMPLE_IMPORT = Path(__file__).resolve().parent / "data" / "synthetic-pwned.txt"
-
-
-def _policy(policy: Any) -> dict[str, Any]:
-    return {
-        "access_token_ttl_seconds": policy.access_token_ttl_seconds,
-        "refresh_token_ttl_seconds": policy.refresh_token_ttl_seconds,
-        "session_lifespan_seconds": policy.session_lifespan_seconds,
-        "refresh_reuse_grace_seconds": policy.refresh_reuse_grace_seconds,
-        "require_mfa": policy.require_mfa,
-    }
 
 
 def _anchor_report(report: AnchorReport) -> dict[str, Any]:
@@ -129,7 +120,6 @@ def console_router(
         return client_ip(request, trusted_proxies)
 
     User = Annotated[Principal, Depends(require_user)]
-    PolicyAdmin = Annotated[Principal, Depends(require_permission(POLICY_MANAGE))]
     AuditReader = Annotated[Principal, Depends(require_permission(AUDIT_READ))]
     AuditWriter = Annotated[Principal, Depends(require_permission(AUDIT_EXPORT))]
     SyslogAdmin = Annotated[Principal, Depends(require_permission(SYSLOG_MANAGE))]
@@ -173,36 +163,14 @@ def console_router(
             "api_key_id": None if principal.api_key_id is None else str(principal.api_key_id),
         }
 
+    @router.get("/warden/passwordrules.js", include_in_schema=False)
+    async def password_rules_script() -> FileResponse:
+        """The packaged evaluator, served by the product as warden's guide describes."""
+        return FileResponse(static_path("passwordrules.js"), media_type="text/javascript")
+
     @router.get("/outbox")
     async def show_outbox() -> dict[str, Any]:
         return {"messages": outbox.messages()}
-
-    @router.get("/policy")
-    async def show_policy(principal: PolicyAdmin) -> dict[str, Any]:
-        return {
-            "policy": _policy(await identity.policy.current()),
-            "defaults": _policy(identity.policy.defaults),
-        }
-
-    @router.put("/policy")
-    async def change_policy(request: Request, principal: PolicyAdmin) -> JSONResponse:
-        body = await request.json()
-        if not isinstance(body, dict):
-            return JSONResponse({"detail": "the request is not valid"}, status_code=400)
-        try:
-            policy = await identity.policy.update(
-                actor=str(principal.user_id), source_ip=source(request), **body
-            )
-        except (PolicyError, TypeError, ValueError):
-            return JSONResponse({"detail": "the policy is not valid"}, status_code=400)
-        return JSONResponse({"policy": _policy(policy)})
-
-    @router.post("/policy/reset")
-    async def reset_policy(request: Request, principal: PolicyAdmin) -> dict[str, Any]:
-        policy = await identity.policy.reset(
-            actor=str(principal.user_id), source_ip=source(request)
-        )
-        return {"policy": _policy(policy)}
 
     @router.post("/audit/anchor")
     async def anchor_head(request: Request, principal: AuditWriter) -> JSONResponse:

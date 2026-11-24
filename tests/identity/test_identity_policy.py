@@ -29,7 +29,7 @@ async def test_defaults_come_from_configuration(db: Database, config: WardenConf
         refresh_token_ttl_seconds=28_800,
         session_lifespan_seconds=43_200,
         refresh_reuse_grace_seconds=10,
-        require_mfa=False,
+        require_mfa=True,
     )
 
 
@@ -102,14 +102,14 @@ async def test_without_a_listener_the_cache_expires(db: Database, config: Warden
     replica_a = _store(db, config)
     replica_b = _store(db, config, max_age=0.2)
     await replica_b.current()
-    await replica_a.update(actor="t", require_mfa=True)
+    await replica_a.update(actor="t", refresh_reuse_grace_seconds=0)
     await asyncio.sleep(0.3)
-    assert (await replica_b.current()).require_mfa
+    assert (await replica_b.current()).refresh_reuse_grace_seconds == 0
 
 
 async def test_reset_returns_to_configuration(db: Database, config: WardenConfig) -> None:
     store = _store(db, config)
-    await store.update(actor="t", require_mfa=True)
+    await store.update(actor="t", refresh_reuse_grace_seconds=0)
     assert (await store.reset(actor="t")) == SessionPolicy.from_config(config.identity)
     assert await _store(db, config).current() == SessionPolicy.from_config(config.identity)
 
@@ -139,11 +139,11 @@ async def test_running_starts_and_stops_the_listener(
     assert not identity.policy.listening
     async with identity.running():
         assert identity.policy.listening
-        assert (await identity.policy.current()).require_mfa is False
-        await other.update(actor="t", require_mfa=True)
+        assert (await identity.policy.current()).refresh_reuse_grace_seconds == 10
+        await other.update(actor="t", refresh_reuse_grace_seconds=0)
         for _ in range(100):
-            if (await identity.policy.current()).require_mfa:
+            if (await identity.policy.current()).refresh_reuse_grace_seconds == 0:
                 break
             await asyncio.sleep(0.05)
-        assert (await identity.policy.current()).require_mfa
+        assert (await identity.policy.current()).refresh_reuse_grace_seconds == 0
     assert not identity.policy.listening

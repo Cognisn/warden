@@ -81,6 +81,7 @@ _HOW = {
     SignInMethod.SSO_ONLY: _USE_SSO,
     SignInMethod.PASSKEY_ONLY: _USE_PASSKEY,
     SignInMethod.PASSWORD_AND_SSO: _USE_PASSWORD,
+    SignInMethod.PASSWORD: _USE_PASSWORD,
 }
 _NOT_ACCEPTED = "credential not accepted"
 _NICKNAME = "the nickname is not valid"

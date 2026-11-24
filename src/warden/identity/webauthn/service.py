@@ -35,7 +35,7 @@ from __future__ import annotations
 import hmac
 import secrets
 import uuid
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -43,6 +43,7 @@ from typing import Any, cast
 
 import psycopg
 from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric import ec
 from fido2 import cbor
 from fido2.cose import ES256, RS256, CoseKey, EdDSA
 from fido2.utils import sha256
@@ -67,7 +68,12 @@ from psycopg import AsyncConnection, sql
 
 from warden.config import ConfigError, WardenConfig
 from warden.db import Database, schema, table
-from warden.identity.users import SignInMethod, UserStatus
+from warden.identity.users import (
+    SignInMethod,
+    UserStatus,
+    effective_method_sql,
+    pending_method_sql,
+)
 from warden.identity.webauthn.attestation import AttestationNotTrusted, TrustedRoots
 from warden.identity.webauthn.challenges import Ceremony, Challenges
 from warden.identity.webauthn.errors import WebAuthnError, WebAuthnRefusal
@@ -96,8 +102,15 @@ _MAX_CREDENTIAL_ID = 1023
 _USER_HANDLE_BYTES = 64
 
 _USERS = table(schema.USERS)
+# The method in force and any pending one (ruling CS18).
+_METHOD = sql.SQL("{}, {}").format(effective_method_sql(), pending_method_sql())
 _CREDENTIALS = table(schema.WEBAUTHN_CREDENTIALS)
 _HANDLES = table(schema.WEBAUTHN_USER_HANDLES)
+# The decoy credential's ids: no user and no stored credential has the nil UUID.
+_DECOY_ID = uuid.UUID(int=0)
+
+Decide = Callable[[AsyncConnection[Any], uuid.UUID], Awaitable[WebAuthnRefusal | None]]
+"""A caller's own rule for ``finish_authentication``: the owner's refusal, or None."""
 
 
 class WebAuthnPurpose(StrEnum):
@@ -174,6 +187,18 @@ class WebAuthn:
         self._limit = settings.max_credentials_per_user
         self._challenges = Challenges(db)
         self.credentials = WebAuthnCredentials(db)
+        # A key no authenticator holds, kept encoded as a stored key is, so that a
+        # sign-in with an unknown credential decodes and verifies against it.
+        point = ec.generate_private_key(ec.SECP256R1()).public_key().public_numbers()
+        self._decoy_key = cbor.encode(
+            {
+                1: 2,  # kty: EC2
+                3: ES256.ALGORITHM,
+                -1: 1,  # crv: P-256
+                -2: point.x.to_bytes(32, "big"),
+                -3: point.y.to_bytes(32, "big"),
+            }
+        )
 
     # Registration.
 
@@ -374,12 +399,26 @@ class WebAuthn:
         response: object,
         *,
         conn: AsyncConnection[Any] | None = None,
+        decide: Decide | None = None,
     ) -> WebAuthnAssertion:
         """Check the browser's sign-in response; the signed-in user and credential.
 
         ``user_id`` is the user the ceremony began for, or None for a
         discoverable sign-in, which finds the user by the response's user
         handle and credential id together.
+
+        Once the challenge and the response's own data have passed, every
+        refusal does the same work before it is raised, whichever check
+        failed: the credential is looked up (an unknown one is stood in for
+        by a decoy that no user owns, with a key of its own), its owner's
+        user handle and status are read, and the signature is verified. The
+        first check that failed is the reason, and a refused response changes
+        nothing: the counter is written only when every check passed.
+
+        ``decide``, when given, is the caller's own rule, run in the same
+        transaction on every path, before the counter write: it is passed the
+        credential's owner (the decoy's user, whom no account matches, for an
+        unknown credential) and answers a refusal or None.
         """
         parsed = _parse(AuthenticationResponse, response, user_id)
         client_data = parsed.response.client_data
@@ -392,33 +431,52 @@ class WebAuthn:
         if len(parsed.raw_id) > _MAX_CREDENTIAL_ID:
             raise WebAuthnError(R.MALFORMED, user_id=user_id)
 
+        failed: WebAuthnError | None = None
         async with self._db.transaction(conn) as tx:
             stored = await self._stored(tx, parsed.raw_id)
             if stored is None:
-                raise WebAuthnError(R.UNKNOWN_CREDENTIAL, user_id=user_id)
-            owner, refusal = stored.user_id, {"user_id": stored.user_id, "credential_id": stored.id}
+                failed = WebAuthnError(R.UNKNOWN_CREDENTIAL, user_id=user_id)
+                stored = self._decoy()
+            owner = stored.user_id
+            refusal = {"user_id": owner, "credential_id": stored.id}
+
+            def fail(error: WebAuthnError) -> None:
+                nonlocal failed
+                if failed is None:
+                    failed = error
+
             if user_id is not None and owner != user_id:
-                raise WebAuthnError(R.CREDENTIAL_NOT_ALLOWED, user_id=user_id)
+                fail(WebAuthnError(R.CREDENTIAL_NOT_ALLOWED, user_id=user_id))
             handle = parsed.response.user_handle
-            if user_id is None or handle is not None:
-                expected = await self._stored_user_handle(tx, owner)
-                if handle is None or expected is None or not hmac.compare_digest(handle, expected):
-                    raise WebAuthnError(R.USER_HANDLE, **refusal)
+            expected = await self._stored_user_handle(tx, owner)
+            if (user_id is None or handle is not None) and (
+                handle is None or expected is None or not hmac.compare_digest(handle, expected)
+            ):
+                fail(WebAuthnError(R.USER_HANDLE, **refusal))
             if user_id is None:
                 # Signing in with the credential alone: it must be a passkey.
                 if not stored.discoverable:
-                    raise WebAuthnError(R.NOT_DISCOVERABLE, **refusal)
+                    fail(WebAuthnError(R.NOT_DISCOVERABLE, **refusal))
                 if not stored.user_verified:
-                    raise WebAuthnError(R.USER_VERIFICATION, **refusal)
-            await self._active_user(tx, owner)
+                    fail(WebAuthnError(R.USER_VERIFICATION, **refusal))
+            try:
+                await self._active_user(tx, owner)
+            except WebAuthnError as exc:
+                fail(exc)
             if auth_data.is_backup_eligible() != stored.backup_eligible:
-                raise WebAuthnError(R.BACKUP_ELIGIBILITY, **refusal)
+                fail(WebAuthnError(R.BACKUP_ELIGIBILITY, **refusal))
             try:
                 stored.public_key.verify(
                     bytes(auth_data) + client_data.hash, parsed.response.signature
                 )
             except (InvalidSignature, ValueError, TypeError):
-                raise WebAuthnError(R.SIGNATURE, **refusal) from None
+                fail(WebAuthnError(R.SIGNATURE, **refusal))
+            if decide is not None:
+                reason = await decide(tx, owner)
+                if reason is not None:
+                    fail(WebAuthnError(reason, **refusal))
+            if failed is not None:
+                raise failed
             # The counter rule, as one guarded write: a counter that does not
             # increase (unless both are zero) changes nothing and is refused.
             cur = await tx.execute(
@@ -485,18 +543,24 @@ class WebAuthn:
         ``lock`` holds the user's row until the transaction ends, so two
         registrations for one user count their credentials one at a time.
         ``for_invitation`` requires the user to be invited instead of active.
+        SSO-only is the method in force, unless a change to ``passkey_only``
+        is pending (registering its passkey completes it), or a pending change
+        to ``sso_only``, which allows no key (ruling CS18, Skuld question 25).
         """
-        query = "SELECT email, display_name, status, sign_in_method FROM {} WHERE id = %s"
+        query = "SELECT email, display_name, status, {} FROM {} WHERE id = %s"
         if lock:
             query += " FOR NO KEY UPDATE"
-        cur = await conn.execute(sql.SQL(query).format(_USERS), (user_id,))
+        cur = await conn.execute(sql.SQL(query).format(_METHOD, _USERS), (user_id,))
         row = await cur.fetchone()
         if row is None:
             raise WebAuthnError(R.UNKNOWN_USER, user_id=user_id)
         wanted = UserStatus.INVITED if for_invitation else UserStatus.ACTIVE
         if row[2] != wanted.value:
             raise WebAuthnError(R.INACTIVE_USER, user_id=user_id)
-        if row[3] == SignInMethod.SSO_ONLY.value:
+        moving_to_passkey = row[4] == SignInMethod.PASSKEY_ONLY.value
+        if (row[3] == SignInMethod.SSO_ONLY.value and not moving_to_passkey) or (
+            row[4] == SignInMethod.SSO_ONLY.value
+        ):
             raise WebAuthnError(R.SSO_ONLY, user_id=user_id)
         return row[0], row[1]
 
@@ -550,9 +614,16 @@ class WebAuthn:
         row = await cur.fetchone()
         if row is None:
             return None
-        # warden wrote this COSE key itself at registration, so it is a map.
-        public_key = CoseKey.parse(cast(Mapping[int, Any], cbor.decode(bytes(row[2]))))
-        return _Stored(row[0], row[1], public_key, row[3], row[4], row[5])
+        return _Stored(row[0], row[1], _cose_key(row[2]), row[3], row[4], row[5])
+
+    def _decoy(self) -> _Stored:
+        """Stands in for an unknown credential: a discoverable passkey no user owns."""
+        return _Stored(_DECOY_ID, _DECOY_ID, _cose_key(self._decoy_key), False, True, True)
+
+
+def _cose_key(encoded: bytes) -> CoseKey:
+    # warden wrote this COSE key itself, so it is a map.
+    return CoseKey.parse(cast(Mapping[int, Any], cbor.decode(bytes(encoded))))
 
 
 def _parse[T: (RegistrationResponse, AuthenticationResponse)](

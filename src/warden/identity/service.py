@@ -18,7 +18,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, fields
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, NoReturn
 from urllib.parse import urlsplit
 
@@ -29,7 +29,7 @@ from psycopg import AsyncConnection, sql
 from warden.audit import AuditEvent, get_recorder, record_audit
 from warden.config import WardenConfig
 from warden.db import Database, schema, table
-from warden.identity import apikeys, invitations, prune, reset
+from warden.identity import apikeys, invitations, prune, reset, sign_in_settings
 from warden.identity.actions import register_actions
 from warden.identity.crypto import SecretBox, SecretStore
 from warden.identity.dependencies import APP_STATE_KEY, Principal, ResourceScopeHook
@@ -41,9 +41,11 @@ from warden.identity.mfa import (
     Challenge,
     ChallengePurpose,
     Enrolment,
+    FreshSecondFactorRequired,
     LastSecondFactorError,
     Mfa,
     SecondFactor,
+    SecondFactorNotAllowed,
     WebAuthnUnavailable,
 )
 from warden.identity.password_enforcement import (
@@ -72,11 +74,29 @@ from warden.identity.password_policy.maintenance import PasswordMaintenance
 from warden.identity.passwords import PasswordHasher
 from warden.identity.policy import PolicyStore, SessionPolicy
 from warden.identity.roles import PermissionRegistry, Roles
+from warden.identity.sign_in_settings import (
+    UNSET,
+    SecondFactorKind,
+    SignInMethods,
+    SignInMethodState,
+    SignInSettings,
+    SignInSettingsChange,
+)
 from warden.identity.single_use import Purpose, SingleUseTokens, well_formed
 from warden.identity.sso.service import SingleSignOn
 from warden.identity.throttle import SignInThrottle
 from warden.identity.tokens import NewSession, Sessions, TokenPair
-from warden.identity.users import SignInMethod, UserError, Users, UserStatus, is_email
+from warden.identity.users import (
+    SignInMethod,
+    UserError,
+    Users,
+    UserStatus,
+    allows_passkey_sign_in,
+    allows_password,
+    effective_method_sql,
+    is_email,
+    pending_method_sql,
+)
 from warden.identity.webauthn import (
     WebAuthn,
     WebAuthnCredential,
@@ -104,6 +124,9 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 _USERS = table(schema.USERS)
+# The method in force and any pending one, for an unaliased warden.users row.
+_METHOD = effective_method_sql()
+_PENDING = pending_method_sql()
 # Longest identifier looked up; nothing longer can be an email address.
 _MAX_IDENTIFIER = 320
 # RFC 8176: a password and a hardware-bound key (ruling P7).
@@ -113,7 +136,17 @@ _PASSKEY_AMR = ["hwk", "mfa"]
 # The longest credential id a response may name (WebAuthn caps it at 1023 bytes).
 _MAX_CREDENTIAL_ID = 1023
 # Refusals that say nothing about the second factor offered, so cost no attempt.
-_NOT_AN_ATTEMPT = frozenset({"unknown_challenge", "user_inactive", "sso_only", "challenge_used"})
+_NOT_AN_ATTEMPT = frozenset(
+    {"unknown_challenge", "user_inactive", "sso_only", "challenge_used", "factor_not_allowed"}
+)
+# The kind of second factor each held credential is, as an administrator allows them (CS14).
+_KIND: dict[SecondFactor, SecondFactorKind] = {
+    "totp": SecondFactorKind.TOTP,
+    "webauthn": SecondFactorKind.PASSKEY,
+}
+# RFC 8176 values that prove a second factor: TOTP, and a security key or passkey.
+# A recovery code is the backup, not a fresh second factor (ruling CS22).
+_FRESH_AMR = frozenset({"otp", "hwk"})
 # How a forced-change challenge remembers the sign-in's amr (RFC 8176): one
 # letter at the start of its token, covered by the token's stored hash, so a
 # session issued after the change carries the factors actually proven.
@@ -134,7 +167,8 @@ class ChallengeIssued:
     purpose: ChallengePurpose
     expires_in: int
     methods: tuple[SecondFactor, ...] = ()
-    """For ``verify``: the kinds of second factor the user holds (``totp``, ``webauthn``)."""
+    """For ``verify``: the allowed kinds of second factor the user holds (``totp``,
+    ``webauthn``). For ``enrol``: the kinds the user may enrol (ruling CS14)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,6 +450,19 @@ class Identity:
         self.api_keys = apikeys.ApiKeys(self.config.identity, self.db, self.roles)
         self.mailer = Mailer(self.config.mail, mail_sender)
         self.single_use = SingleUseTokens(self.db)
+        # Sign-in settings and method changes (rulings CS13 to CS18).
+        sign_in_settings.register_actions(get_recorder().registry)
+        self.sign_in_methods = SignInMethods(
+            self.config,
+            self.db,
+            mailer=self.mailer,
+            tokens=self.single_use,
+            sso_settings=self.sso.settings,
+            webauthn=self.webauthn is not None,
+            max_age=self.config.identity.policy_cache_seconds,
+        )
+        self.users.use_sign_in_methods(self.sign_in_methods)
+        self.sso.use_sign_in_methods(self.sign_in_methods)
         self.invitations = invitations.Invitations(
             self.config,
             self.db,
@@ -432,6 +479,7 @@ class Identity:
             self.mailer,
             self.password_enforcement,
             self.sessions,
+            methods=self.sign_in_methods,
         )
         self.pruner = prune.Pruner(
             self.db,
@@ -505,13 +553,15 @@ class Identity:
         invitations: str | None = None,
         api_keys: str | None = None,
         password_policies: str | None = None,
+        settings: str | None = None,
     ) -> APIRouter:
         """Administration routes; mount under ``config.http.admin_prefix``.
 
         ``permission`` guards the user routes, and the role, invitation, API
-        key and password policy routes unless they are given their own
-        permission (``password_policies`` also guards the watch list and
-        exposure routes).
+        key, password policy and settings routes unless they are given their
+        own permission (``password_policies`` also guards the watch list and
+        exposure routes; ``settings`` guards the instance sign-in settings and
+        the session policy).
         """
         from warden.identity.routers.admin import build_admin_router
 
@@ -522,6 +572,7 @@ class Identity:
             invitations=invitations,
             api_keys=api_keys,
             password_policies=password_policies,
+            settings=settings,
         )
 
     @property
@@ -625,12 +676,17 @@ class Identity:
         take the same path and get the same refusal; only the audit trail
         records which it was.
 
+        A correct password from an active user always answers with a
+        challenge (ruling CS14): ``verify``, naming the allowed second
+        factors the user holds, or ``enrol``, naming the allowed kinds, when
+        they hold none (never enrolled, or only a kind no longer allowed).
+
         After a correct password from an active user, and before anything
         else, the password is assessed against the user's password policy
         (``PasswordEnforcement.assess_sign_in``: watch lists, re-evaluation,
         expiry). A required change is answered only where a session would
-        be issued: here when no second factor is needed, otherwise after
-        it, as ``password_change`` with a single-use challenge (ruling PW9).
+        be issued, after the second factor, as ``password_change`` with a
+        single-use challenge (ruling PW9).
         """
         if not isinstance(email, str) or not isinstance(password, str):
             await self._refuse_sign_in("malformed", None, None, source_ip)
@@ -646,7 +702,7 @@ class Identity:
             await self._refuse_sign_in("unknown_user", None, email, source_ip)
         if verification is None or not verification.ok:
             await self._refuse_sign_in("wrong_password", account.id, email, source_ip)
-        if account.sign_in_method != SignInMethod.PASSWORD_AND_SSO:
+        if not allows_password(account.sign_in_method):
             # A passkey_only user is refused as a wrong password is (ruling P5).
             reason = (
                 "passkey_only"
@@ -666,10 +722,6 @@ class Identity:
         new_hash = None
         if verification.needs_rehash:
             new_hash = await self.passwords.hash(password)
-        policy = await self.policy.current()
-        challenge: ChallengeIssued | None = None
-        new: NewSession | None = None
-        change: _ChangeDue | None = None
         async with self.db.transaction() as tx:
             rehashed = False
             if new_hash is not None:
@@ -681,39 +733,27 @@ class Identity:
                     (new_hash, account.id, account.password_hash),
                 )
                 rehashed = cur.rowcount == 1
-            purpose: ChallengePurpose | None = None
-            # Any confirmed second factor, TOTP or a key, is asked for (ruling P4).
-            methods = await self.mfa.methods(account.id, conn=tx)
-            if methods:
-                purpose = "verify"
-            elif policy.require_mfa:
-                purpose = "enrol"
+            # A password sign-in always takes a second factor (ruling CS14), of a
+            # kind the administrator allows: any allowed one the user holds, TOTP
+            # or a key (ruling P4), is asked for; a user holding none enrols one.
+            allowed = await self._allowed(tx)
+            held = await self.mfa.methods(account.id, conn=tx)
+            methods = tuple(m for m in held if _KIND[m] in allowed)
+            purpose: ChallengePurpose = "verify" if methods else "enrol"
+            if not methods:
+                methods = self._enrolment_methods(allowed)
             details: dict[str, Any] = {"rehashed": True} if rehashed else {}
-            if purpose is not None:
-                token = await self.mfa.create_challenge(tx, account.id, purpose)
-                challenge = ChallengeIssued(
-                    token, purpose, self.mfa.challenge_ttl_seconds, tuple(methods)
-                )
-                await self._audit(
-                    tx,
-                    "warden.identity.mfa.challenge",
-                    account.id,
-                    source_ip,
-                    purpose=purpose,
-                    **details,
-                )
-            else:
-                new, change = await self._session_or_change(
-                    tx, account.id, ["pwd"], policy, source_ip, **details
-                )
-        if challenge is not None:
-            return SignInResult(challenge=challenge)
-        if new is None and change is None:
-            raise RuntimeError("sign-in produced neither a session nor a challenge")
-        answer = await self._session_answer(new, change)
-        if isinstance(answer, PasswordChangeIssued):
-            return SignInResult(password_change=answer)
-        return SignInResult(tokens=answer)
+            token = await self.mfa.create_challenge(tx, account.id, purpose)
+            challenge = ChallengeIssued(token, purpose, self.mfa.challenge_ttl_seconds, methods)
+            await self._audit(
+                tx,
+                "warden.identity.mfa.challenge",
+                account.id,
+                source_ip,
+                purpose=purpose,
+                **details,
+            )
+        return SignInResult(challenge=challenge)
 
     # Issuing a session after a password sign-in (rulings PW5 and PW9)
 
@@ -811,6 +851,12 @@ class Identity:
                     reason = "unknown_challenge"
                 else:
                     reason = await self._account_refusal(tx, opened.user_id)
+                if (
+                    reason is None
+                    and method == "totp"
+                    and SecondFactorKind.TOTP not in await self._allowed(tx)
+                ):
+                    reason = "factor_not_allowed"
                 if reason is None and opened is not None:
                     if method == "totp":
                         ok = await self.mfa.claim_totp(tx, opened.user_id, code)
@@ -863,18 +909,27 @@ class Identity:
     async def passkey_sign_in(self, credential: object, *, source_ip: SourceIp = None) -> TokenPair:
         """Sign in with a passkey alone: ``amr`` ``["hwk", "mfa"]``.
 
-        That satisfies ``require_mfa`` with no second step. The user is the
-        one holding the credential, found by the response's user handle and
-        credential id together. Open to ``password_and_sso`` and
+        A sign-in with no second step. The user is the one holding the
+        credential, found by the response's user handle and credential id
+        together. Open to ``password``, ``password_and_sso`` and
         ``passkey_only`` users, with a credential that is discoverable and
-        was registered with user verification. Throttled by source address
-        and, separately, by the credential id's hash. Every failure is
-        ``AuthenticationRefused``, its reason recorded as a failed
-        ``warden.identity.sign_in``.
+        was registered with user verification. While the administrator does
+        not allow passkeys as a second factor, only ``passkey_only`` users,
+        whose passkey is how they sign in, are let in; anyone else is
+        refused with reason ``factor_not_allowed`` (Skuld release 0.2.0,
+        question 1). Throttled by source address and, separately, by the
+        credential id's hash. Every failure is ``AuthenticationRefused``, its
+        reason recorded as a failed ``warden.identity.sign_in``.
+
+        Every refusal after the challenge does the same work: the ceremony
+        runs to its end whichever check fails, and the user's status, method
+        in force and the allowed second factors are read in its transaction on
+        every path (see ``WebAuthn.finish_authentication``).
 
         The ceremony is finished with no transaction of this method's open,
-        as ``verify_webauthn`` does; the user's status and sign-in method are
-        checked again in the transaction that issues the session.
+        as ``verify_webauthn`` does; the user's status, sign-in method and the
+        allowed second factors are checked again in the transaction that
+        issues the session.
         """
         raw_id = _credential_id(credential)
         if not await self.throttle.reserve_passkey(source_ip, raw_id or b""):
@@ -885,7 +940,9 @@ class Identity:
             await self._refuse_passkey("webauthn_unavailable", None, None, source_ip)
         policy = await self.policy.current()
         try:
-            assertion = await self.webauthn.finish_authentication(None, credential)
+            assertion = await self.webauthn.finish_authentication(
+                None, credential, decide=self._passkey_decision
+            )
         except WebAuthnError as exc:
             if exc.suspected_clone:
                 await self._audit_clone(exc, source_ip)
@@ -910,17 +967,32 @@ class Identity:
         return await self.sessions.finish(new)
 
     async def _passkey_refusal(self, conn: AsyncConnection[Any], user_id: uuid.UUID) -> str | None:
-        """Why this user may not sign in with a passkey now, or None."""
+        """Why this user may not sign in with a passkey now, or None.
+
+        Reads the user's status and method in force, and the allowed second
+        factors, whoever the user is (a user id no account has included), so
+        every caller does the same work.
+        """
         cur = await conn.execute(
-            sql.SQL("SELECT status, sign_in_method FROM {} WHERE id = %s").format(_USERS),
+            sql.SQL("SELECT status, {} FROM {} WHERE id = %s").format(_METHOD, _USERS),
             (user_id,),
         )
         row = await cur.fetchone()
+        allowed = await self._allowed(conn)
         if row is None or row[0] != UserStatus.ACTIVE:
             return "inactive_user"
-        if row[1] == SignInMethod.SSO_ONLY:
+        if not allows_passkey_sign_in(row[1]):
             return "sso_only"
+        if SecondFactorKind.PASSKEY not in allowed and row[1] != SignInMethod.PASSKEY_ONLY:
+            return "factor_not_allowed"
         return None
+
+    async def _passkey_decision(
+        self, conn: AsyncConnection[Any], user_id: uuid.UUID
+    ) -> WebAuthnRefusal | None:
+        """``_passkey_refusal`` inside the ceremony's transaction, on every path."""
+        reason = await self._passkey_refusal(conn, user_id)
+        return None if reason is None else WebAuthnRefusal(reason)
 
     async def _refuse_passkey(
         self,
@@ -974,16 +1046,16 @@ class Identity:
             async with self.db.transaction() as tx:
                 cur = await tx.execute(
                     sql.SQL(
-                        "SELECT email, display_name, status, sign_in_method FROM {}"
+                        "SELECT email, display_name, status, {}, {} FROM {}"
                         " WHERE id = %s FOR UPDATE"
-                    ).format(_USERS),
+                    ).format(_METHOD, _PENDING, _USERS),
                     (user_id,),
                 )
                 row = await cur.fetchone()
                 if row is None:
                     raise UserError(f"user {user_id} does not exist")
-                email, display_name, status, method = row
-                refused = _link_refusal(status, method)
+                email, display_name, status, method, pending = row
+                refused = _link_refusal(status, method, pending)
                 if refused is not None:
                     raise PasskeyLinkRefused(refused)
                 revoked = await self.single_use.revoke_live(
@@ -1134,6 +1206,10 @@ class Identity:
                         credential_id=str(key.id),
                         first_factor=bool(codes),
                     )
+                    # A pending move to passkey_only completes with it (ruling CS18).
+                    await self.sign_in_methods.credential_added(
+                        tx, user_id, actor=str(user_id), source_ip=source_ip
+                    )
                     enrolled = WebAuthnEnrolled(key, codes)
         except _Rollback:
             await self._refuse_link(reason or "unknown_token", user_id, source_ip)
@@ -1152,14 +1228,14 @@ class Identity:
         self, conn: AsyncConnection[Any], user_id: uuid.UUID, *, lock: bool
     ) -> str | None:
         """Why this user may not register a passkey from a link now, or None."""
-        query = "SELECT status, sign_in_method FROM {} WHERE id = %s"
+        query = "SELECT status, {}, {} FROM {} WHERE id = %s"
         if lock:
             query += " FOR UPDATE"
-        cur = await conn.execute(sql.SQL(query).format(_USERS), (user_id,))
+        cur = await conn.execute(sql.SQL(query).format(_METHOD, _PENDING, _USERS), (user_id,))
         row = await cur.fetchone()
         if row is None:
             return "unknown_token"
-        return _link_refusal(row[0], row[1])
+        return _link_refusal(row[0], row[1], row[2])
 
     async def _audit_link(
         self,
@@ -1280,8 +1356,22 @@ class Identity:
         principal: Principal | None = None,
         source_ip: SourceIp = None,
     ) -> Enrolment:
-        """Start TOTP enrolment, for a signed-in user or under an enrolment challenge."""
+        """Start TOTP enrolment, for a signed-in user or under an enrolment challenge.
+
+        Refused while the administrator does not allow TOTP (ruling CS14):
+        ``SecondFactorNotAllowed`` for a signed-in user, ``AuthenticationRefused``
+        under a challenge; audited either way.
+        """
         user_id = await self._enrolling_user(challenge, principal, source_ip)
+        async with self.db.connection() as conn:
+            allowed = await self._allowed(conn)
+        if SecondFactorKind.TOTP not in allowed:
+            await self._audit_second_factor_failure(
+                "factor_not_allowed", str(user_id), "enrolment", source_ip
+            )
+            if principal is not None:
+                raise SecondFactorNotAllowed(SecondFactorKind.TOTP.value)
+            raise AuthenticationRefused("factor_not_allowed")
         user = await self.users.get(user_id)
         if user is None:
             raise AuthenticationRefused("user_missing")
@@ -1304,9 +1394,26 @@ class Identity:
 
         Under a challenge, a ``PasswordChangeIssued`` instead of tokens when
         the password must change; the recovery codes are returned either way.
+        Refused, as ``begin_enrolment`` is, while TOTP is not allowed. Once
+        confirmed, any security key the administrator no longer allows is
+        removed (ruling CS14).
         """
         if principal is not None:
-            codes = await self.mfa.confirm_enrolment(principal.user_id, code, source_ip=source_ip)
+            async with self.db.transaction() as tx:
+                allowed = await self._allowed(tx)
+                if SecondFactorKind.TOTP not in allowed:
+                    codes = None
+                else:
+                    codes = await self.mfa.confirm_enrolment(
+                        principal.user_id, code, source_ip=source_ip, conn=tx
+                    )
+                if codes is not None:
+                    await self._remove_disallowed(tx, principal.user_id, allowed, source_ip)
+            if SecondFactorKind.TOTP not in allowed:
+                await self._audit_second_factor_failure(
+                    "factor_not_allowed", str(principal.user_id), "enrolment", source_ip
+                )
+                raise SecondFactorNotAllowed(SecondFactorKind.TOTP.value)
             if codes is None:
                 # Signed in: say the code was wrong, not that authentication failed.
                 await self._audit_second_factor_failure(
@@ -1329,6 +1436,9 @@ class Identity:
                     reason = "unknown_challenge"
                 else:
                     reason = await self._account_refusal(tx, opened.user_id)
+                allowed = await self._allowed(tx)
+                if reason is None and SecondFactorKind.TOTP not in allowed:
+                    reason = "factor_not_allowed"
                 if reason is None and opened is not None:
                     codes = await self.mfa.confirm_enrolment(
                         opened.user_id, code, source_ip=source_ip, conn=tx
@@ -1339,6 +1449,7 @@ class Identity:
                         reason = "challenge_used"
                         raise _Rollback
                     else:
+                        await self._remove_disallowed(tx, opened.user_id, allowed, source_ip)
                         new, change = await self._session_or_change(
                             tx, opened.user_id, ["pwd", "otp"], policy, source_ip
                         )
@@ -1384,6 +1495,8 @@ class Identity:
                 reason = "unknown_challenge"
             else:
                 reason = await self._account_refusal(tx, opened.user_id)
+            if reason is None and SecondFactorKind.PASSKEY not in await self._allowed(tx):
+                reason = "factor_not_allowed"
             if reason is None and opened is not None:
                 try:
                     options = await self._relying_party().begin_authentication(
@@ -1434,6 +1547,8 @@ class Identity:
             else:
                 async with self.db.transaction() as tx:
                     reason = await self._account_refusal(tx, opened.user_id)
+                    if reason is None and SecondFactorKind.PASSKEY not in await self._allowed(tx):
+                        reason = "factor_not_allowed"
                     if reason is None and not await self.mfa.consume_challenge(tx, opened):
                         reason = "challenge_used"
                     if reason is None:
@@ -1466,10 +1581,17 @@ class Identity:
 
         Resident key and user verification are preferred. Signed in, a
         refusal is raised as ``WebAuthnError`` or ``WebAuthnUnavailable``;
-        under a challenge it is ``AuthenticationRefused``.
+        under a challenge it is ``AuthenticationRefused``. Refused
+        (``factor_not_allowed``) while the administrator does not allow
+        security keys and passkeys, except for a ``passkey_only`` user, whose
+        passkeys are how they sign in (ruling CS14).
         """
         user_id = await self._enrolling_user(challenge, principal, source_ip)
         try:
+            async with self.db.connection() as conn:
+                permitted = await self._keys_allowed(conn, user_id, await self._allowed(conn))
+            if not permitted:
+                raise WebAuthnError(WebAuthnRefusal.FACTOR_NOT_ALLOWED, user_id=user_id)
             return await self._relying_party().begin_registration(
                 user_id, WebAuthnPurpose.SECOND_FACTOR
             )
@@ -1566,8 +1688,16 @@ class Identity:
             registration = await self._relying_party().finish_registration(
                 principal.user_id, credential, nickname=nickname
             )
-            async with self.db.transaction() as tx:
-                enrolled = await self._registered(tx, registration.credential, source_ip)
+            try:
+                async with self.db.transaction() as tx:
+                    enrolled = await self._registered(tx, registration.credential, source_ip)
+            except WebAuthnError as exc:
+                if exc.reason is WebAuthnRefusal.FACTOR_NOT_ALLOWED:
+                    # Stored by the ceremony; not kept once refused.
+                    await self.webauthn_credentials.remove(
+                        principal.user_id, registration.credential.id
+                    )
+                raise
         except WebAuthnError as exc:
             await self._audit_failure(
                 "warden.identity.mfa.webauthn.registered",
@@ -1586,7 +1716,9 @@ class Identity:
         """Issue codes to a user holding none, and audit the key, in ``tx``.
 
         The user's row is locked first, so of two second factors added at
-        once exactly one brings the codes.
+        once exactly one brings the codes. A key the administrator does not
+        allow is refused (``factor_not_allowed``; the caller removes it); an
+        allowed one takes away a TOTP enrolment that is no longer allowed.
         """
         await self.mfa.lock_user(tx, key.user_id)
         if await self.webauthn_credentials.get(key.user_id, key.id, conn=tx) is None:
@@ -1594,7 +1726,14 @@ class Identity:
             raise WebAuthnError(
                 WebAuthnRefusal.UNKNOWN_CREDENTIAL, user_id=key.user_id, credential_id=key.id
             )
+        allowed = await self._allowed(tx)
+        if not await self._keys_allowed(tx, key.user_id, allowed):
+            raise WebAuthnError(
+                WebAuthnRefusal.FACTOR_NOT_ALLOWED, user_id=key.user_id, credential_id=key.id
+            )
         codes = await self.mfa.issue_codes_if_none(tx, key.user_id)
+        if SecondFactorKind.PASSKEY in allowed:
+            await self._remove_disallowed(tx, key.user_id, allowed, source_ip)
         await self._audit(
             tx,
             "warden.identity.mfa.webauthn.registered",
@@ -1605,6 +1744,11 @@ class Identity:
             user_verified=key.user_verified,
             first_factor=bool(codes),
         )
+        if key.discoverable and key.user_verified:
+            # A passkey completes a pending move to passkey_only (ruling CS18).
+            await self.sign_in_methods.credential_added(
+                tx, key.user_id, actor=str(key.user_id), source_ip=source_ip
+            )
         return WebAuthnEnrolled(key, codes)
 
     async def _open_challenge(
@@ -1656,28 +1800,24 @@ class Identity:
         """Remove one of the signed-in user's keys; False if they hold no such key.
 
         Refused with ``LastSecondFactorError`` when it is the user's last
-        second factor and the session policy requires one (ruling P4). Where
-        none is required, the last factor takes the recovery codes with it.
-        The user's row is locked first, so concurrent removals are decided
-        one at a time and never leave a required factor missing.
+        second factor, since a second factor is always required (rulings P4
+        and CS14). The user's row is locked first, so concurrent removals are
+        decided one at a time and never leave a user without a factor.
         """
         user_id = principal.user_id
-        policy = await self.policy.current()
         async with self.db.transaction() as tx:
             await self.mfa.lock_user(tx, user_id)
             if await self.webauthn_credentials.get(user_id, credential_id, conn=tx) is None:
                 return False
-            last = await self.mfa.count_factors(tx, user_id) <= 1
-            if not (last and policy.require_mfa):
+            if await self.mfa.count_factors(tx, user_id) > 1:
                 await self.webauthn_credentials.remove(user_id, credential_id, conn=tx)
-                codes = await self.mfa.remove_recovery_codes(tx, user_id) if last else 0
                 await self._audit(
                     tx,
                     "warden.identity.mfa.webauthn.removed",
                     user_id,
                     source_ip,
                     credential_id=str(credential_id),
-                    recovery_codes_removed=codes,
+                    recovery_codes_removed=0,
                 )
                 return True
         await self._audit_failure(
@@ -1719,8 +1859,8 @@ class Identity:
         """Remove a user's TOTP enrolment and recovery codes, and end their sessions.
 
         For an administrator helping a user who has lost both factors: the
-        next password sign-in enrols again where the policy requires a second
-        factor. One transaction deletes the credential and every recovery
+        next password sign-in enrols again, since a second factor is always
+        required (ruling CS14). One transaction deletes the credential and every recovery
         code, ends every session of the user (as a password reset does) and
         records ``warden.identity.mfa.reset``. A user with nothing enrolled is
         not an error; the reset is still audited. Returns whether a credential
@@ -1812,6 +1952,202 @@ class Identity:
             )
         return opened.user_id
 
+    # Allowed second factors (ruling CS14) and recovery codes (ruling CS22)
+
+    async def _allowed(self, conn: AsyncConnection[Any]) -> frozenset[SecondFactorKind]:
+        """The second factors the administrator allows, read now on ``conn``."""
+        return (await self.sign_in_methods.read(conn)).allowed_second_factors
+
+    def _enrolment_methods(self, allowed: frozenset[SecondFactorKind]) -> tuple[SecondFactor, ...]:
+        """The kinds a forced enrolment may use: allowed, and keys only where WebAuthn works."""
+        return tuple(
+            method
+            for method, kind in _KIND.items()
+            if kind in allowed and (method != "webauthn" or self.webauthn is not None)
+        )
+
+    async def _method_in_force(self, conn: AsyncConnection[Any], user_id: uuid.UUID) -> str | None:
+        cur = await conn.execute(
+            sql.SQL("SELECT {} FROM {} WHERE id = %s").format(_METHOD, _USERS), (user_id,)
+        )
+        row = await cur.fetchone()
+        return None if row is None else str(row[0])
+
+    async def _keys_allowed(
+        self, conn: AsyncConnection[Any], user_id: uuid.UUID, allowed: frozenset[SecondFactorKind]
+    ) -> bool:
+        """Whether the user may add a key: keys are allowed, or the user is ``passkey_only``.
+
+        A ``passkey_only`` user's passkeys are how they sign in, not a second
+        factor, so the allowed second factors do not govern them.
+        """
+        if SecondFactorKind.PASSKEY in allowed:
+            return True
+        return await self._method_in_force(conn, user_id) == SignInMethod.PASSKEY_ONLY
+
+    async def _remove_disallowed(
+        self,
+        tx: AsyncConnection[Any],
+        user_id: uuid.UUID,
+        allowed: frozenset[SecondFactorKind],
+        source_ip: SourceIp,
+    ) -> None:
+        """Once the user holds an allowed factor, remove the kinds no longer allowed.
+
+        Called, with the user's row locked, in the transaction that added
+        the allowed factor (ruling CS14). A ``passkey_only`` user's keys stay.
+        Audited as ``warden.identity.mfa.disallowed_removed`` when anything
+        was removed; recovery codes stay, covering the factors left.
+        """
+        keep_keys = await self._method_in_force(tx, user_id) == SignInMethod.PASSKEY_ONLY
+        totp_removed, keys_removed = await self.mfa.remove_disallowed(
+            tx,
+            user_id,
+            totp=SecondFactorKind.TOTP not in allowed,
+            keys=SecondFactorKind.PASSKEY not in allowed and not keep_keys,
+        )
+        if totp_removed or keys_removed:
+            await self._audit(
+                tx,
+                "warden.identity.mfa.disallowed_removed",
+                user_id,
+                source_ip,
+                totp_removed=totp_removed,
+                webauthn_removed=keys_removed,
+                allowed=[kind.value for kind in SecondFactorKind if kind in allowed],
+            )
+
+    async def regenerate_recovery_codes(
+        self, principal: Principal, *, source_ip: SourceIp = None
+    ) -> list[str]:
+        """Replace the signed-in user's recovery codes; the new codes, shown once.
+
+        Every code the user holds, used or not, is replaced by
+        ``identity.recovery_code_count`` fresh ones, in one transaction with
+        the user's row locked, and audited as
+        ``warden.identity.mfa.recovery_codes_regenerated`` (counts only).
+        The session must have been signed in with a second factor (TOTP, a
+        security key or a passkey; not a recovery code, a password alone,
+        single sign-on or an API key) within
+        ``identity.mfa_challenge_ttl_seconds``; otherwise
+        ``FreshSecondFactorRequired``, audited, and nothing changes. With a
+        mail sender, the user is sent a notice (never the codes); a failed
+        delivery is logged and does not undo the change.
+        """
+        user_id = principal.user_id
+        reason: str | None = None
+        if principal.api_key_id is not None or not _FRESH_AMR & set(principal.amr):
+            reason = "no_second_factor"
+        codes: list[str] = []
+        async with self.db.transaction() as tx:
+            if reason is None:
+                await self.mfa.lock_user(tx, user_id)
+                cur = await tx.execute(
+                    sql.SQL(
+                        "SELECT now() - created_at <= %s * interval '1 second' FROM {}"
+                        " WHERE id = %s AND user_id = %s AND revoked_at IS NULL"
+                    ).format(table(schema.SESSIONS)),
+                    (self.mfa.challenge_ttl_seconds, principal.session_id, user_id),
+                )
+                row = await cur.fetchone()
+                if row is None or row[0] is not True:
+                    reason = "stale_second_factor"
+            if reason is None:
+                removed, codes = await self.mfa.regenerate_recovery_codes(tx, user_id)
+                await self._audit(
+                    tx,
+                    "warden.identity.mfa.recovery_codes_regenerated",
+                    user_id,
+                    source_ip,
+                    codes_removed=removed,
+                    codes_issued=len(codes),
+                )
+        if reason is not None:
+            await self._audit_failure(
+                "warden.identity.mfa.recovery_codes_regenerated", user_id, source_ip, reason=reason
+            )
+            raise FreshSecondFactorRequired(reason)
+        await self._notify_regenerated(user_id)
+        return codes
+
+    async def _notify_regenerated(self, user_id: uuid.UUID) -> None:
+        """Mail the recovery-codes notice, best effort, after the change committed."""
+        if not self.mailer.configured:
+            return
+        user = await self.users.get(user_id)
+        if user is None:
+            return
+        try:
+            await self.mailer.send(
+                MailKind.RECOVERY_CODES_REGENERATED,
+                email=user.email,
+                display_name=user.display_name,
+                regenerated_at=datetime.now(UTC),
+            )
+        except MailError as exc:
+            logger.warning(
+                "recovery-codes notice for user %s not sent (%s)", user_id, type(exc).__name__
+            )
+
+    # Sign-in settings and methods (rulings CS13 to CS18)
+
+    async def sign_in_settings(self) -> SignInSettings:
+        """The default sign-in method and the allowed second factors (cached briefly)."""
+        return await self.sign_in_methods.current()
+
+    async def update_sign_in_settings(
+        self,
+        *,
+        actor: str | None,
+        source_ip: SourceIp = None,
+        default_sign_in_method: object = UNSET,
+        allowed_second_factors: object = UNSET,
+    ) -> SignInSettingsChange:
+        """Change the default sign-in method, the allowed second factors, or both.
+
+        See ``SignInMethods.update_settings``: a new default moves every user
+        who follows it, at once or as a pending change with a set-up link.
+        """
+        return await self.sign_in_methods.update_settings(
+            actor=actor,
+            source_ip=source_ip,
+            default_sign_in_method=default_sign_in_method,
+            allowed_second_factors=allowed_second_factors,
+        )
+
+    async def sign_in_method(self, user_id: uuid.UUID) -> SignInMethodState:
+        """A user's own setting, the method in force, and any pending change."""
+        return await self.sign_in_methods.state(user_id)
+
+    async def set_sign_in_method(
+        self,
+        user_id: uuid.UUID,
+        method: SignInMethod | None,
+        *,
+        actor: str | None,
+        source_ip: SourceIp = None,
+    ) -> SignInMethodState:
+        """Set a user's own method; None has them follow the default.
+
+        At once when the user holds the new method's credential, else
+        pending with a set-up link (``SignInMethods.set_user_method``).
+        """
+        return await self.sign_in_methods.set_user_method(
+            user_id, method, actor=actor, source_ip=source_ip
+        )
+
+    async def resend_sign_in_method_link(
+        self, user_id: uuid.UUID, *, actor: str | None, source_ip: SourceIp = None
+    ) -> datetime:
+        """Mail a pending change's set-up link again; when the new link expires."""
+        return await self.sign_in_methods.resend(user_id, actor=actor, source_ip=source_ip)
+
+    async def cancel_sign_in_method_change(
+        self, user_id: uuid.UUID, *, actor: str | None, source_ip: SourceIp = None
+    ) -> SignInMethodState:
+        """Cancel a pending change; the user stays on the method in force."""
+        return await self.sign_in_methods.cancel(user_id, actor=actor, source_ip=source_ip)
+
     # Sessions
 
     async def refresh(self, refresh_token: object, *, source_ip: SourceIp = None) -> TokenPair:
@@ -1872,7 +2208,7 @@ class Identity:
             account is None
             or not isinstance(current, str)
             or not isinstance(new_password, str)
-            or account.sign_in_method != SignInMethod.PASSWORD_AND_SSO
+            or not allows_password(account.sign_in_method)
             or account.password_hash is None
         ):
             if isinstance(current, str):
@@ -2102,7 +2438,7 @@ class Identity:
             account = await self._account_by_id(principal.user_id)
             if (
                 account is not None
-                and account.sign_in_method == SignInMethod.PASSWORD_AND_SSO
+                and allows_password(account.sign_in_method)
                 and account.password_hash is not None
             ):
                 context = UserContext(account.email, account.display_name)
@@ -2138,9 +2474,9 @@ class Identity:
         async with self.db.connection() as conn:
             cur = await conn.execute(
                 sql.SQL(
-                    "SELECT id, email, status, sign_in_method, password_hash, display_name FROM {}"
+                    "SELECT id, email, status, {}, password_hash, display_name FROM {}"
                     " WHERE lower(email) = lower(%s)"
-                ).format(_USERS),
+                ).format(_METHOD, _USERS),
                 (email,),
             )
             row = await cur.fetchone()
@@ -2150,9 +2486,9 @@ class Identity:
         async with self.db.connection() as conn:
             cur = await conn.execute(
                 sql.SQL(
-                    "SELECT id, email, status, sign_in_method, password_hash, display_name"
+                    "SELECT id, email, status, {}, password_hash, display_name"
                     " FROM {} WHERE id = %s"
-                ).format(_USERS),
+                ).format(_METHOD, _USERS),
                 (user_id,),
             )
             row = await cur.fetchone()
@@ -2162,14 +2498,14 @@ class Identity:
         self, conn: AsyncConnection[Any], user_id: uuid.UUID, *, lock: bool = False
     ) -> str | None:
         """Why this user may not complete a password sign-in now, or None."""
-        query = "SELECT status, sign_in_method FROM {} WHERE id = %s"
+        query = "SELECT status, {} FROM {} WHERE id = %s"
         if lock:
             query += " FOR UPDATE"
-        cur = await conn.execute(sql.SQL(query).format(_USERS), (user_id,))
+        cur = await conn.execute(sql.SQL(query).format(_METHOD, _USERS), (user_id,))
         row = await cur.fetchone()
         if row is None or row[0] != UserStatus.ACTIVE:
             return "user_inactive"
-        if row[1] != SignInMethod.PASSWORD_AND_SSO:
+        if not allows_password(row[1]):
             return "sso_only"
         return None
 
@@ -2258,11 +2594,15 @@ class Identity:
             await self.throttle.clear(conn, row[0], source_ip)
 
 
-def _link_refusal(status: str, method: str) -> str | None:
-    """Why a user may not have a passkey registration link, or None (ruling P8)."""
+def _link_refusal(status: str, method: str, pending: str | None = None) -> str | None:
+    """Why a user may not have a passkey registration link, or None (ruling P8).
+
+    ``method`` is the method in force; a pending move to ``passkey_only``
+    (ruling CS18) admits the link even from ``sso_only``.
+    """
     if status != UserStatus.ACTIVE:
         return f"user_{status}"
-    if method == SignInMethod.SSO_ONLY:
+    if method == SignInMethod.SSO_ONLY and pending != SignInMethod.PASSKEY_ONLY:
         return "sso_only"
     return None
 

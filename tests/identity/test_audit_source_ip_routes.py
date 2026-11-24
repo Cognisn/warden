@@ -18,7 +18,14 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI
-from identity_support import PASSWORD, RecordingSender, UserFactory, current_code
+from identity_support import (
+    PASSWORD,
+    RecordingSender,
+    UserFactory,
+    complete_sign_in,
+    current_code,
+    direct_session,
+)
 
 from warden.db import Database
 from warden.identity import Identity, User
@@ -53,7 +60,7 @@ async def client(app: FastAPI, address: str) -> AsyncIterator[httpx.AsyncClient]
 
 
 async def _bearer(identity: Identity, user: User) -> dict[str, str]:
-    result = await identity.sign_in(user.email, PASSWORD)
+    result = await complete_sign_in(identity, user.email, PASSWORD)
     assert result.tokens is not None
     return {"authorization": f"Bearer {result.tokens.access_token}"}
 
@@ -153,7 +160,7 @@ async def test_a_sign_in_method_change_records_the_address(
         db,
         client.post(
             f"/admin/users/{user.id}/sign-in-method",
-            json={"sign_in_method": "sso_only"},
+            json={"sign_in_method": "password"},
             headers=headers,
         ),
         address,
@@ -246,7 +253,9 @@ async def test_enrolling_totp_while_signed_in_records_the_address(
     address: str,
 ) -> None:
     user = await make_user()
-    headers = await _bearer(identity, user)
+    # Signed in with a security key, holding no TOTP yet.
+    pair = await direct_session(identity, user.id, ("pwd", "hwk"))
+    headers = {"authorization": f"Bearer {pair.access_token}"}
     began = await recorded(
         db,
         client.post("/auth/totp/enrolment", headers=headers),

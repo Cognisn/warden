@@ -458,6 +458,50 @@ function keysCard(auth) {
   );
 }
 
+// Replacing the signed-in user's recovery codes (warden's POST <auth>/recovery-codes/regenerate):
+// it needs a session signed in with a second factor a little while ago.
+function recoveryCodesCard(auth) {
+  const out = h("div", {});
+  return card(
+    "Recovery codes",
+    h("p", { class: "muted" }, "Replace your recovery codes. Every earlier code stops working, and the new ones are shown once. warden needs a sign-in with an authenticator, a security key or a passkey within the last few minutes: otherwise it answers 403 and you sign in again."),
+    action("Replace my recovery codes", async () => {
+      const answer = await call("POST", `${auth}/recovery-codes/regenerate`);
+      if (answer.ok) return recoveryCodes(answer.data.recovery_codes, "New recovery codes. The earlier ones no longer work. Keep these somewhere safe: they are not shown again.");
+      if (answer.status === 403) return status("error", "Sign in again with a second factor, then try again.");
+      return outcome(answer);
+    }, out, "quiet"),
+    out,
+  );
+}
+
+// The signed-in user's own sign-in method, any pending change and the allowed
+// second factors (warden's GET <auth>/sign-in-method).
+function methodCard(auth) {
+  const area = h("div", {});
+  call("GET", `${auth}/sign-in-method`).then((answer) => {
+    if (!answer.ok) {
+      area.replaceChildren(outcome(answer));
+      return;
+    }
+    const { sign_in_method: method, allowed_second_factors: allowed } = answer.data;
+    const pending = method.pending;
+    area.replaceChildren(
+      h("p", {}, `You sign in with: ${method.effective}${method.setting ? "" : " (the instance default)"}.`),
+      pending
+        ? status(
+            "info",
+            pending.link === null
+              ? `Your administrator is moving you from ${pending.from} to ${pending.to}; it completes the next time you sign in through single sign-on.`
+              : `Your administrator is moving you from ${pending.from} to ${pending.to}. Follow the link mailed to you to finish; until then you keep signing in as before.`,
+          )
+        : null,
+      h("p", { class: "muted" }, `Second factors your administrator allows: ${allowed.join(", ")}.`),
+    );
+  });
+  return card("How you sign in", area);
+}
+
 export async function accountScreen(main) {
   const { auth } = await prefixes();
   const who = await me();
@@ -521,8 +565,10 @@ export async function accountScreen(main) {
       action("Set up an authenticator", async () => enrolStep({}, enrolArea), enrolNote, "quiet"),
       enrolNote,
       enrolArea,
-      h("p", { class: "muted" }, "Lost every second factor and your recovery codes? An administrator can reset them (Users, Manage, Reset second factors), and you set one up again at your next sign-in; a passkey-only account gets a registration link instead. Replacing your own recovery codes is planned for warden 0.2.0."),
+      h("p", { class: "muted" }, "Lost every second factor and your recovery codes? An administrator can reset them (Users, Manage, Reset second factors), and you set one up again at your next sign-in; a passkey-only account gets a registration link instead."),
     ),
+    recoveryCodesCard(auth),
+    methodCard(auth),
     card("Change password", h("p", { class: "muted" }, "The checklist follows the password policy that applies to you; the administration screens show why."), passwordForm),
   );
 }

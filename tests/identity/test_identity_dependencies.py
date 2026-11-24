@@ -8,7 +8,7 @@ from typing import Annotated
 import httpx
 import pytest
 from fastapi import Depends, FastAPI, Request
-from identity_support import FAST_HASHER, PASSWORD, MemorySecrets, UserFactory
+from identity_support import FAST_HASHER, PASSWORD, MemorySecrets, UserFactory, complete_sign_in
 
 from warden.config import WardenConfig
 from warden.db import Database
@@ -92,7 +92,7 @@ async def scoped_client(
 
 
 async def _bearer(identity: Identity, email: str) -> dict[str, str]:
-    result = await identity.sign_in(email, PASSWORD)
+    result = await complete_sign_in(identity, email, PASSWORD)
     assert result.tokens is not None
     return {"authorization": f"Bearer {result.tokens.access_token}"}
 

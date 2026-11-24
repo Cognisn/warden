@@ -6,6 +6,142 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-24
+
+Sign-in methods, the instance sign-in settings and the allowed second factors, with routes over all of them: 0.2.0a8 as it stands, after the release gate. One migration (`f1c7d24e8b93`), no new runtime dependency. Some behaviour changes break 0.1.x expectations; each is named under "Upgrade notes" below, and chapter 20 of the client guide (`docs/guide/clients.md`) gives the upgrade steps. The alpha sections below give the detail.
+
+### Added
+
+- Sign-in methods: a fourth method, `password` (Password + MFA, never single sign-on), beside `password_and_sso`, `sso_only` and `passkey_only`; an instance default sign-in method that every user follows unless they have one of their own; and the allowed second factors (`totp`, `passkey`), changed at run time and audited.
+- Pending sign-in method changes: a change needing a credential the user lacks keeps the method in force working and mails a set-up link; the change completes when the user sets the credential up, and can be resent or cancelled.
+- The allowed second factors are enforced at sign-in and at enrolment; a user holding no allowed factor is sent to forced enrolment of one.
+- Self-service replacement of recovery codes, `POST <auth>/recovery-codes/regenerate`, after a recent second factor.
+- Single sign-on setup guides for each provider preset (Microsoft Entra ID, Google, Okta, other OpenID Connect), filled in from the instance's settings, in the settings answer and at `GET <admin>/sso/setup-guide`.
+- Administration routes for the instance sign-in settings, each user's sign-in method (with resend and cancel), the signed-in user's own method, and the session policy.
+- The browser password rules published in the package, `warden/static/passwordrules.js`, for a product to serve from its own route.
+- Client guide chapters 19 (sign-in methods and settings) and 20 (upgrading from 0.1.x); sample console screens for all of the above.
+
+### Changed
+
+- MFA is always required for password sign-in; `identity.require_mfa` is deprecated and false is refused at start-up.
+- Passkey sign-in follows the allowed second factors, and every refusal after its challenge does the same work whichever check failed.
+- Single sign-on with Microsoft Entra ID accepts `xms_edov` with a non-empty `email` as a verified email, from Entra ID's v2.0 issuer only.
+- The single sign-on settings guard answers 409 with the users to move first, where it answered 400.
+- The HTTP contract's version reads 0.2.
+
+### Upgrade notes
+
+- Remove `identity.require_mfa: false` from configuration before upgrading, or start-up fails. Users who signed in with a password alone are sent to enrol a second factor at their next sign-in.
+- Setting `sso_only` or `passkey_only` on a user who lacks the credential now leaves the change pending until the user sets it up.
+- A client of `PUT` or `POST /sso/settings/reset` that checked for 400 on the single sign-on guard checks for 409.
+- With passkey removed from the allowed second factors, users other than `passkey_only` are refused at passkey sign-in and sign in with a password and an allowed second factor.
+
+## [0.2.0a8] - 2026-11-24
+
+Wave 4: release gate findings, the live break-glass and console browser checks re-pointed to the 0.2.0 sign-in rules (fix/0.2.0-release-gate-checks).
+
+### Changed
+
+- The client guide and the sample console say that a who-am-I route (GET <auth>/me) is not part of 0.2.0 and stays on the backlog (0.3.0); both said it was planned for 0.2.0.
+
+## [0.2.0a7] - 2026-11-24
+
+Wave 3: routes over everything in 0.2.0, the client guide and the sample console (feat/0.2.0-settings-routes).
+
+### Added
+
+- Administration routes for the instance sign-in settings (ruling CS22): `GET` and `PUT <admin>/sign-in-settings` read and change the default sign-in method and the allowed second factors, and answer who the change moved at once (`changed`), who waits for a credential (`pending`) and whose set-up link was not delivered (`links_failed`). Each refusal answers `{"detail", "reason"}`: `sso_not_configured`, `webauthn`, `mail_sender` and the others.
+- `GET <admin>/users/{user_id}/sign-in-method` (a user's own setting, the method in force and any pending change), `POST <admin>/users/{user_id}/sign-in-method/resend` (a fresh set-up link) and `POST <admin>/users/{user_id}/sign-in-method/cancel` (drop a pending change). The existing `POST <admin>/users/{user_id}/sign-in-method` now names its refusal `reason` too.
+- `GET <auth>/sign-in-method`: the signed-in user's own method, pending change and the allowed second factors, never anyone else's.
+- A router for the session policy (0.2.0 backlog item 2): `GET` and `PUT <admin>/session-policy` and `POST <admin>/session-policy/reset`, audited with the client address. `require_mfa` is read-only and always true.
+- `Identity.admin_router(settings=...)` names the permission that guards the instance sign-in settings and the session policy; it defaults to the users permission, so existing products see no change.
+- `GET <admin>/capabilities` adds `allowed_second_factors` and `default_sign_in_method`. The anonymous `GET <auth>/capabilities` is unchanged and answers every caller identically.
+- Client guide: passkey sign-in refused while passkey is not allowed, `factor_not_allowed` among the audited reasons, `WebAuthn.finish_authentication`'s `decide` callback, and the Entra `xms_edov` rule (also in the 0.1.x upgrade steps).
+- Client guide chapters 19 (sign-in methods, the instance settings, pending changes and set-up links, the single sign-on guard, allowed factors and the always-on second factor, recovery codes, set-up steps, the session policy) and 20 (upgrading from 0.1.x).
+- Sample console: screens for the instance sign-in settings and the allowed factors, each user's method with its pending state (resend, cancel), recovery-code replacement, the single sign-on setup steps and the session policy.
+
+### Changed
+
+- `PUT` and `POST /sso/settings/reset` under the single sign-on administration routes answer 409 `{"detail", "reason": "sso_still_required", "default_sso_only", "users"}` (the users to move first) where they answered 400 for the single sign-on guard.
+- The client guide's stale statements are corrected: the password rules vectors file holds 63 cases, a password is always part of multi-factor authentication, `require_mfa` is deprecated, and the session policy has routes.
+- The sample console no longer offers to switch `require_mfa` off (README walk and policy screen), and its browser check completes the second factor at sign-in.
+- The HTTP contract is regenerated.
+
+## [0.2.0a6] - 2026-11-24
+
+Wave 3: passkey sign-in follows the allowed second factors with equal work on every refusal, and Entra's xms_edov accepted as a verified email (fix/0.2.0-sign-in-follow-ups).
+
+### Changed
+
+- Passkey sign-in follows the allowed second factors (Skuld release 0.2.0, question 1): while the administrator does not allow passkeys as a second factor, signing in with a passkey alone (`Identity.passkey_sign_in`, `POST <auth>/passkey/sign-in`) is refused for every user whose method in force is not `passkey_only`, with the uniform refusal, and audited as a failed `warden.identity.sign_in` with reason `factor_not_allowed`. The refused attempt leaves the credential's counter untouched. `passkey_only` users, whose passkey is how they sign in, sign in as before. The allowed set is read in the transaction that decides, so a change applies to the next sign-in.
+- Every refusal of a passkey sign-in after its challenge now does the same work, whichever check failed: `WebAuthn.finish_authentication` runs the ceremony to its end before refusing (an unknown credential is checked against a stand-in key), and reads the owner's handle and status on every path; the counter is written only when every check passed. The reason is still the first check that failed. It takes a new keyword-only `decide`, a callback run in the ceremony's transaction on every path, which passkey sign-in uses to read the user's status, method in force and the allowed second factors.
+- Single sign-on with Microsoft Entra ID (Skuld release 0.2.0, question 2): Entra publishes no `email_verified` claim in its ID tokens, so when the configured issuer is Entra ID's v2.0 issuer for a tenant (`https://login.microsoftonline.com/<tenant id>/v2.0`, matched in full on the issuer URL, never by the chosen preset), an `xms_edov` claim that is exactly `true` together with a non-empty `email` claim now counts as a verified email, on sign-in and on accepting an invitation. From every other issuer `email_verified` must still be exactly `true` and `xms_edov` is ignored. The allowed email domains apply as before. The Entra setup guide (`warden.identity.sso.presets` and `docs/guide/sso-providers.md`) now tells the administrator to add the optional claims `email` and `xms_edov`, and cites Microsoft's optional claims reference, checked on 2026-11-24.
+- Upgrade note: a deployment that has removed passkey from the allowed second factors will find its users other than `passkey_only` refused at passkey sign-in; they sign in with a password and an allowed second factor instead.
+
+## [0.2.0a5] - 2026-11-23
+
+Wave 2: MFA always required for password sign-in, the allowed second factors enforced, and self-service recovery-code replacement (feat/0.2.0-mfa-factors).
+
+### Added
+
+- The allowed second factors are enforced (ruling CS14): the `mfa_required` challenge names and accepts only the allowed kinds a user holds (a recovery code is always accepted); a user holding no allowed factor, never enrolled or holding only a kind since removed, is sent to forced enrolment of an allowed one after the password, by TOTP or by a security key or passkey; enrolling a kind that is not allowed is refused, signed in (409 `TOTP is not allowed as a second factor`, or `security keys and passkeys are not allowed as a second factor`, with the new `WebAuthnRefusal.FACTOR_NOT_ALLOWED`) or under a challenge (the uniform refusal). Removing a kind deletes nobody's enrolment; once a user enrols an allowed factor, the enrolments no longer allowed are removed and audited as the new action `warden.identity.mfa.disallowed_removed`. A `passkey_only` user's passkeys are their sign-in credential and are not affected.
+- `mfa_enrolment_required` now carries `methods` too: the kinds the user may enrol (`webauthn` only where WebAuthn is configured).
+- Self-service replacement of recovery codes (ruling CS22): `Identity.regenerate_recovery_codes(principal, *, source_ip)` and `POST <auth>/recovery-codes/regenerate` replace every code the signed-in user holds and answer with the new ones, shown once. The session must have been signed in with TOTP, a security key or a passkey within `identity.mfa_challenge_ttl_seconds`; otherwise `FreshSecondFactorRequired` (a 403 asking the user to sign in again). Audited as the new action `warden.identity.mfa.recovery_codes_regenerated`, with counts only; with a mail sender the user is sent the new `recovery_codes_regenerated` notice (template attribute `RECOVERY_CODES_REGENERATED`), never the codes.
+- Exported from `warden.identity`: `SecondFactorNotAllowed` and `FreshSecondFactorRequired` (both `MfaError`).
+
+### Changed
+
+- MFA is always required for password sign-in (ruling CS14): every password sign-in answers with a challenge, whatever the user's method. `identity.require_mfa` is deprecated: true is still accepted, false is refused at start-up (`ConfigError`: "MFA is always required for password sign-in in warden 0.2.0 and later"). `SessionPolicy.require_mfa` stays readable and is always true; `Identity.policy.update(require_mfa=False)` raises `PolicyError`, and an override stored by 0.1.x is ignored while the other stored overrides still apply. Removing a user's last security key is refused for every user, as it was under `require_mfa`.
+- Allowing passkeys alone as second factors is refused (`SignInMethodChangeRefused`, reason `webauthn`) where WebAuthn is not configured, since a user without a factor could not enrol one. An empty set stays refused.
+- The HTTP contract is regenerated for the new route and the `methods` field.
+- Upgrade note: remove `identity.require_mfa: false` from configuration before upgrading, or start-up fails. Users who signed in with a password alone are sent to enrol a second factor at their next sign-in; a product that switched MFA off at run time needs no change, since the stored override is ignored.
+
+## [0.2.0a4] - 2026-11-23
+
+Wave 2: single sign-on setup guides for each provider preset (feat/0.2.0-sso-setup-guides).
+
+### Added
+
+- Single sign-on setup guides (ruling CS15): each provider preset (Microsoft Entra ID, Google, Okta, other OpenID Connect) now carries numbered, ordered steps for that provider's admin console, with typed placeholders (`callback_uri`, `scopes`, `issuer`, `display_name`) and the settings to copy values back into (`issuer_url`, `client_id`, `client_secret`). `warden.identity.sso.presets.setup_guide` returns a preset's steps filled in from the instance's settings and the product's callback URI, and an unknown preset gets the generic guide. `GET <admin>/sso/settings` gains `setup_guide` for the current preset, and the new `GET <admin>/sso/setup-guide` (optional `?preset=`) answers for any preset, behind the same authorisation. `PresetGuide` keeps `label`, `issuer_hint` and `notes` and gains `steps`; the `presets` list in the settings answer is unchanged. The HTTP contract is regenerated. `docs/guide/sso-providers.md` gives the four guides in prose with the sources each was checked against, and records that Microsoft Entra ID publishes no `email_verified` claim, which warden requires on first sign-in.
+
+## [0.2.0a3] - 2026-11-23
+
+Wave 2: the browser password rules published in the package (feat/0.2.0-password-evaluator).
+
+### Added
+
+- The browser password rules are published in the package (ruling CS23): `warden/static/passwordrules.js`, one classic script with no DOM and no network that evaluates the policy description the policy routes return, defining the global `WardenPasswordRules` (it also loads as a side-effect import and under Node `require`). `warden.static.path("passwordrules.js")` returns its location so a product serves it from its own static route; warden serves no file itself. The script ships in the wheel and the sdist. The clients guide has a section on serving and calling it, and on the server staying authoritative (18.12).
+- A CI job, `browser-rules`, runs every case of `docs/contract/password-rule-vectors.json` through the packaged script under Node (pinned to an exact version, standard library only), alongside the Python test of the same cases.
+
+### Changed
+
+- The sample console loads the packaged script, served by its own route `/api/warden/passwordrules.js`, instead of a copy of its own; its checklist behaves as before. The console's `static/js/passwordrules.js` is removed, and the test that ran it under Node moved to `tests/static`.
+
+## [0.2.0a2] - 2026-11-23
+
+Wave 1: sign-in methods, the instance default and pending changes (feat/0.2.0-sign-in-methods). Adds migration `f1c7d24e8b93`.
+
+### Added
+
+- Sign-in methods (rulings CS13 to CS18): a fourth method, `password` (Password + MFA, never single sign-on, a second factor always asked for), beside `password_and_sso`, `sso_only` and `passkey_only`; an instance default sign-in method, initially `password_and_sso`, that every user follows unless they have one of their own; and the allowed second factors (`totp`, `passkey`, both by default), stored for wave 2 to enforce. Both live in the new `warden.sign_in_settings` table, changed at run time and audited.
+- Pending sign-in method changes: a change needing a credential the user lacks keeps the method in force working and mails a set-up link (the passkey registration link, or a new `password_setup` message with a set-password link through `http.reset_password_link`); a move to `sso_only` completes at the first single sign-on. On completion warden removes what the new method does not allow (the password hash, keys, sessions signed in another way). A change that needs a link and cannot send one is refused naming what is missing, such as `mail_sender`.
+- `Identity.sign_in_settings`, `update_sign_in_settings`, `sign_in_method`, `set_sign_in_method`, `resend_sign_in_method_link` and `cancel_sign_in_method_change`, with `Identity.sign_in_methods` (`warden.identity.sign_in_settings.SignInMethods`); `User.own_sign_in_method` and `User.pending_sign_in_method`.
+- Audit actions `warden.identity.sign_in_settings_changed`, `warden.identity.user.sign_in_method_pending`, `warden.identity.user.sign_in_method_pending_cancelled` and `warden.identity.user.sign_in_method_link_sent`, each with the client address.
+- Turning single sign-on off, or clearing its run-time settings so it no longer works, is refused with `SsoStillRequired` (a `SsoSettingsError`, so the existing route answers 400) while the default, or any active user's own, pending or in-force method, is `sso_only`. The refusal lists those users and is audited.
+
+### Changed
+
+- Migration `f1c7d24e8b93`: a user's own sign-in method is nullable, null meaning they follow the default. Every `password_and_sso` user follows the default, which starts as `password_and_sso`, so nobody signs in differently after upgrading. The downgrade restores the 0.1.x shape.
+- `User.sign_in_method` is the method in force: while a change is pending, the method it moves from. `Users.create`, `Users.set_sign_in_method` and `Invitations.create` take `None` (now their default) to follow the instance default; existing calls keep working.
+- `Users.set_sign_in_method` follows the pending-change rules above instead of switching at once, and refuses `sso_only` while single sign-on is not set up.
+- `POST <admin>/users/{user_id}/sign-in-method` accepts `password` and null (the default), answers `sign_in_method` with the user's own setting, the method in force and any pending change, and answers 409 when the change cannot be made (naming what is missing) and 502 when its set-up link was not delivered. The HTTP contract is regenerated for these fields.
+- Registering a security key or passkey is refused, as for an `sso_only` user, while a move to `sso_only` is pending; a pending move to `passkey_only` admits the registration that completes it, even from `sso_only`.
+- Upgrade note: a product that set `sso_only` or `passkey_only` on a user who lacks the credential now sees the change pending until the user sets it up; give the user the credential first (or let warden mail the link) where the switch must be immediate.
+
+## [0.2.0a1] - 2026-11-23
+
+First alpha of 0.2.0, opened from the 0.1.1 release. No library change yet; the HTTP contract's version now reads 0.2.
+
 ## [0.1.1] - 2026-11-18
 
 A fixes-only patch on 0.1.0: 0.1.1a4 as it stands, after the release gate. No migration, no new runtime dependency, and the public API changes only by additions. The alpha sections below give the detail.

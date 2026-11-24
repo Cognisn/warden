@@ -63,6 +63,7 @@ _NOT_ACCEPTED = "credential not accepted"
 _NICKNAME = "the nickname is not valid"
 _LIMIT = "the credential limit is reached"
 _SSO_ONLY = "security keys are not available to this user"
+_NOT_ALLOWED = "security keys and passkeys are not allowed as a second factor"
 _LAST_FACTOR = "the last second factor cannot be removed while a second factor is required"
 _NOT_FOUND = "not found"
 
@@ -95,6 +96,8 @@ def _registration_error(exc: WebAuthnError | WebAuthnUnavailable) -> Response:
         return json_response({"detail": _LIMIT}, 409)
     if exc.reason is R.SSO_ONLY:
         return json_response({"detail": _SSO_ONLY}, 409)
+    if exc.reason is R.FACTOR_NOT_ALLOWED:
+        return json_response({"detail": _NOT_ALLOWED}, 409)
     if exc.reason in (R.INACTIVE_USER, R.UNKNOWN_USER):
         return refusal()
     if exc.reason is R.NICKNAME:
@@ -139,8 +142,8 @@ def build_webauthn_router(identity: Identity) -> APIRouter:
         description=(
             "Sends the `mfa_required` challenge; answers with the options for "
             "`navigator.credentials.get()`, listing only the user's own credentials. User "
-            "verification is preferred, not required. A user without a key, like every other "
-            "failure, gets the uniform refusal."
+            "verification is preferred, not required. A user without a key, keys the "
+            "administrator does not allow, and every other failure get the uniform refusal."
         ),
         responses={
             200: {"model": WardenWebAuthnOptions, "description": "The browser's options."},
@@ -165,8 +168,9 @@ def build_webauthn_router(identity: Identity) -> APIRouter:
             "Sends the `mfa_required` challenge with the browser's answer to "
             '`navigator.credentials.get()`. The session\'s `amr` is `["pwd", "hwk"]`. Each '
             "options' challenge is accepted once; a refused answer counts as a wrong code "
-            "does, and too many end the challenge. When the password must change first, the "
-            "answer is `password_change_required` instead of a session (`POST /password-change`)."
+            "does, and too many end the challenge. Refused while the administrator does not "
+            "allow security keys and passkeys. When the password must change first, the answer "
+            "is `password_change_required` instead of a session (`POST /password-change`)."
         ),
         responses={
             200: {
@@ -196,16 +200,20 @@ def build_webauthn_router(identity: Identity) -> APIRouter:
             "Under an access token (bearer) for a signed-in user, or under an "
             "`mfa_enrolment_required` challenge during a forced enrolment. Answers with the "
             "options for `navigator.credentials.create()`: resident key and user verification "
-            "preferred, and the user's existing credentials excluded."
+            "preferred, and the user's existing credentials excluded. Refused while the "
+            "administrator does not allow security keys and passkeys as a second factor, "
+            "except for a `passkey_only` user."
         ),
         responses={
             200: {"model": WardenWebAuthnOptions, "description": "The browser's options."},
             409: detail(
-                "WebAuthn is not configured, the user has as many credentials as allowed, or "
-                "the user signs in only through single sign-on.",
+                "WebAuthn is not configured, the user has as many credentials as allowed, the "
+                "user signs in only through single sign-on, or the administrator does not allow "
+                "security keys and passkeys as a second factor.",
                 _UNAVAILABLE,
                 _LIMIT,
                 _SSO_ONLY,
+                _NOT_ALLOWED,
             ),
             **REFUSED,
         },
@@ -234,7 +242,8 @@ def build_webauthn_router(identity: Identity) -> APIRouter:
             "challenge (a forced enrolment) the answer is also the new session, with `amr` "
             '`["pwd", "hwk"]`, or `password_change_required` when the password must change '
             "first. A refused answer from a signed-in user is a 400, so a client does not take "
-            "it for a sign-out."
+            "it for a sign-out. Once registered, a TOTP enrolment the administrator no longer "
+            "allows is removed."
         ),
         responses={
             200: {
@@ -243,11 +252,13 @@ def build_webauthn_router(identity: Identity) -> APIRouter:
             },
             400: detail("The answer or the nickname was not accepted.", _NOT_ACCEPTED, _NICKNAME),
             409: detail(
-                "WebAuthn is not configured, the user has as many credentials as allowed, or "
-                "the user signs in only through single sign-on.",
+                "WebAuthn is not configured, the user has as many credentials as allowed, the "
+                "user signs in only through single sign-on, or the administrator does not allow "
+                "security keys and passkeys as a second factor.",
                 _UNAVAILABLE,
                 _LIMIT,
                 _SSO_ONLY,
+                _NOT_ALLOWED,
             ),
             **REFUSED,
         },
