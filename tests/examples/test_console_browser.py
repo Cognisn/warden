@@ -152,8 +152,14 @@ def code_for(secret: str) -> str:
     return code_at(key, step_for(time.time()))
 
 
-async def enrol_authenticator(browser: ConsoleBrowser, begin: str) -> None:
-    """From the button that starts it to the recovery codes, the screens a person sees."""
+async def enrol_authenticator(
+    browser: ConsoleBrowser, begin: str, *, first_factor: bool = True
+) -> None:
+    """From the button that starts it to the recovery codes, the screens a person sees.
+
+    Recovery codes come with a user's first second factor only. A user who already
+    holds one (a key registered at the forced enrolment) is told the codes they hold
+    cover the authenticator too, and is shown no new ones."""
     await browser.press(begin)
     await browser.see("Secret (base32)")
     await browser.see("Code from the app")
@@ -163,8 +169,13 @@ async def enrol_authenticator(browser: ConsoleBrowser, begin: str) -> None:
     await browser.see("Enrolled.")
     shown = await browser.screen()
     assert shown.count("Enrolled.") == 1
-    assert shown.count("Keep these recovery codes somewhere safe") == 1
-    assert len(await browser.texts(".codes div")) > 0
+    if first_factor:
+        assert shown.count("Keep these recovery codes somewhere safe") == 1
+        assert len(await browser.texts(".codes div")) > 0
+    else:
+        assert "Keep these recovery codes somewhere safe" not in shown
+        assert "The recovery codes you already hold cover the authenticator too." in shown
+        assert await browser.texts(".codes div") == []
 
 
 async def sign_in_to_account(browser: ConsoleBrowser, email: str) -> None:
@@ -201,7 +212,9 @@ async def test_forced_enrolment_with_a_security_key(forced: ConsoleBrowser) -> N
 
 async def test_the_account_screen_sets_up_an_authenticator(plain: ConsoleBrowser) -> None:
     await sign_in_to_account(plain, "erin@example.com")
-    await enrol_authenticator(plain, "Set up an authenticator")
+    # Erin registered a key at the forced enrolment, which issued her recovery codes
+    # (0.2.0 issues them with the first factor only), so none are shown again here.
+    await enrol_authenticator(plain, "Set up an authenticator", first_factor=False)
 
 
 async def test_the_account_screen_shows_no_stray_null(plain: ConsoleBrowser) -> None:
