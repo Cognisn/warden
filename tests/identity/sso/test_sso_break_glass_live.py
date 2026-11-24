@@ -20,7 +20,7 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI
-from identity_support import PASSWORD, RecordingSender, UserFactory, audit_rows
+from identity_support import RecordingSender, UserFactory, audit_rows, http_sign_in
 from sso_support import CLIENT_SECRET_NAME, COMPLETION, sso_config
 
 from warden.config import WardenConfig
@@ -80,10 +80,10 @@ async def test_password_sign_in_works_while_sso_fails(
     rows = await audit_rows(db, "warden.identity.sso.sign_in")
     assert rows[-1]["details"]["reason"] == "discovery_unavailable"
 
-    password = await client.post(
-        "/auth/sign-in", json={"email": "alice@example.com", "password": PASSWORD}
-    )
-    assert password.status_code == 200
+    # A right password answers with a second factor (ruling CS14); the helper
+    # completes it with TOTP, so the session is the break-glass path.
+    password = await http_sign_in(client, "alice@example.com")
+    assert password.status_code == 200, password.text
     assert password.json()["status"] == "signed_in"
 
 
@@ -112,10 +112,8 @@ async def test_an_invitation_completes_with_a_password_while_sso_fails(
         "/auth/invitations/accept", json={"token": token, "password": NEW_PASSWORD}
     )
     assert accepted.status_code == 200, accepted.text
-    password = await client.post(
-        "/auth/sign-in", json={"email": "frank@example.com", "password": NEW_PASSWORD}
-    )
-    assert password.status_code == 200
+    password = await http_sign_in(client, "frank@example.com", NEW_PASSWORD)
+    assert password.status_code == 200, password.text
     assert password.json()["status"] == "signed_in"
     user = await identity.users.get(invitation.user_id)
     assert user is not None and user.status == UserStatus.ACTIVE

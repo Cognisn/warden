@@ -28,8 +28,8 @@ export const GAPS = {
   whoAmI: {
     question: "Q11",
     text:
-      "warden's routes have no 'who am I' route; the sample answers it from require_user " +
-      "(GET /api/me).",
+      "warden's routes have no 'who am I' route, and GET <auth>/me is not part of 0.2.0 " +
+      "(it stays on the backlog for 0.3.0); the sample answers it from require_user (GET /api/me).",
   },
 };
 

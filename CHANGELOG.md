@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- The client guide and the sample console say that a who-am-I route (GET <auth>/me) is not part of 0.2.0 and stays on the backlog (0.3.0); both said it was planned for 0.2.0.
+
 ## [0.2.0a7] - 2026-11-24
 
 Wave 3: routes over everything in 0.2.0, the client guide and the sample console (feat/0.2.0-settings-routes).
