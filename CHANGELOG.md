@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0a8] - 2026-11-24
+
+Wave 4: release gate findings, the live break-glass and console browser checks re-pointed to the 0.2.0 sign-in rules (fix/0.2.0-release-gate-checks).
+
 ### Changed
 
 - The client guide and the sample console say that a who-am-I route (GET <auth>/me) is not part of 0.2.0 and stays on the backlog (0.3.0); both said it was planned for 0.2.0.
