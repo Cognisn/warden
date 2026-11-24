@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-24
+
+Sign-in methods, the instance sign-in settings and the allowed second factors, with routes over all of them: 0.2.0a8 as it stands, after the release gate. One migration (`f1c7d24e8b93`), no new runtime dependency. Some behaviour changes break 0.1.x expectations; each is named under "Upgrade notes" below, and chapter 20 of the client guide (`docs/guide/clients.md`) gives the upgrade steps. The alpha sections below give the detail.
+
+### Added
+
+- Sign-in methods: a fourth method, `password` (Password + MFA, never single sign-on), beside `password_and_sso`, `sso_only` and `passkey_only`; an instance default sign-in method that every user follows unless they have one of their own; and the allowed second factors (`totp`, `passkey`), changed at run time and audited.
+- Pending sign-in method changes: a change needing a credential the user lacks keeps the method in force working and mails a set-up link; the change completes when the user sets the credential up, and can be resent or cancelled.
+- The allowed second factors are enforced at sign-in and at enrolment; a user holding no allowed factor is sent to forced enrolment of one.
+- Self-service replacement of recovery codes, `POST <auth>/recovery-codes/regenerate`, after a recent second factor.
+- Single sign-on setup guides for each provider preset (Microsoft Entra ID, Google, Okta, other OpenID Connect), filled in from the instance's settings, in the settings answer and at `GET <admin>/sso/setup-guide`.
+- Administration routes for the instance sign-in settings, each user's sign-in method (with resend and cancel), the signed-in user's own method, and the session policy.
+- The browser password rules published in the package, `warden/static/passwordrules.js`, for a product to serve from its own route.
+- Client guide chapters 19 (sign-in methods and settings) and 20 (upgrading from 0.1.x); sample console screens for all of the above.
+
+### Changed
+
+- MFA is always required for password sign-in; `identity.require_mfa` is deprecated and false is refused at start-up.
+- Passkey sign-in follows the allowed second factors, and every refusal after its challenge does the same work whichever check failed.
+- Single sign-on with Microsoft Entra ID accepts `xms_edov` with a non-empty `email` as a verified email, from Entra ID's v2.0 issuer only.
+- The single sign-on settings guard answers 409 with the users to move first, where it answered 400.
+- The HTTP contract's version reads 0.2.
+
+### Upgrade notes
+
+- Remove `identity.require_mfa: false` from configuration before upgrading, or start-up fails. Users who signed in with a password alone are sent to enrol a second factor at their next sign-in.
+- Setting `sso_only` or `passkey_only` on a user who lacks the credential now leaves the change pending until the user sets it up.
+- A client of `PUT` or `POST /sso/settings/reset` that checked for 400 on the single sign-on guard checks for 409.
+- With passkey removed from the allowed second factors, users other than `passkey_only` are refused at passkey sign-in and sign in with a password and an allowed second factor.
+
 ## [0.2.0a8] - 2026-11-24
 
 Wave 4: release gate findings, the live break-glass and console browser checks re-pointed to the 0.2.0 sign-in rules (fix/0.2.0-release-gate-checks).
